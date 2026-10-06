@@ -8,6 +8,7 @@ mod fix_var;
 mod hub;
 mod import;
 mod internalize;
+mod library;
 mod models;
 mod naming;
 mod packages;
@@ -21,6 +22,11 @@ use tauri::Manager;
 
 use crate::{
     collect_deps::{start_collect_deps_copy_task, start_collect_deps_scan_task},
+    library::{
+        get_hub_package_meta, get_var_image, get_var_package_details, inspect_vam_dir,
+        list_missing_dependencies,
+        set_var_package_disabled,
+    },
     models::AppState,
     packages::{
         delete_var_package, move_var_to_creator_folder, start_apply_package_plan_task,
@@ -131,6 +137,12 @@ fn main() {
             delete_var_package,
             export_var_scene_image,
             start_export_scene_images_task,
+            get_var_package_details,
+            get_var_image,
+            list_missing_dependencies,
+            set_var_package_disabled,
+            inspect_vam_dir,
+            get_hub_package_meta,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

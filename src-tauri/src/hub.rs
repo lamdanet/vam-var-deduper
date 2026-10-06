@@ -349,3 +349,172 @@ pub(crate) fn is_valid_var(path: &Path) -> bool {
     }
     false
 }
+
+// ----------------------------------------------------------------------------
+// Package card data for dependency lists (title, author, thumbnail, size)
+// ----------------------------------------------------------------------------
+
+/// Hub resource-icon CDN; icons are sharded into folders by floor(id / 1000).
+/// Same source VaM Backstage uses for its Hub thumbnails.
+const RESOURCE_ICON_CDN: &str = "https://1424104733.rsc.cdn77.org/data/resource_icons";
+
+/// What a dependency row shows for a package that isn't on disk.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub(crate) struct HubPackageMeta {
+    /// The Hub has a resource for this package family.
+    pub(crate) found: bool,
+    pub(crate) resource_id: Option<String>,
+    pub(crate) title: Option<String>,
+    /// The Hub author (can differ from the id's creator segment).
+    pub(crate) username: Option<String>,
+    pub(crate) tag_line: Option<String>,
+    /// Hub resource type: "Scenes", "Looks", "Clothing", ...
+    pub(crate) resource_type: Option<String>,
+    /// "Free" | "Paid".
+    pub(crate) category: Option<String>,
+    pub(crate) license: Option<String>,
+    pub(crate) file_size: Option<u64>,
+    pub(crate) filename: Option<String>,
+    pub(crate) hub_url: Option<String>,
+    /// `data:image/...;base64,...` of the resource icon (or its latest image).
+    pub(crate) image_data: Option<String>,
+    /// Set when the Hub couldn't be reached; "not found" is `found: false`
+    /// with no error.
+    pub(crate) error: Option<String>,
+}
+
+fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
+    match v.get(key)? {
+        serde_json::Value::String(s) if !s.trim().is_empty() && s != "null" => Some(s.trim().to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+fn get_resource_detail(client: &reqwest::blocking::Client, package_name: &str) -> Result<serde_json::Value> {
+    // Same body shape as `find_packages` (VaM's spacing, for Cloudflare).
+    // Package ids never contain `"`/`\`, so direct interpolation is safe.
+    let body = format!(
+        "{{\"source\":\"VaM\", \"action\":\"getResourceDetail\", \"latest_image\":\"Y\", \"package_name\":\"{package_name}\"}}"
+    );
+    let resp = client
+        .post(API_URL)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::ACCEPT, "application/json")
+        .body(body)
+        .send()
+        .map_err(|e| anyhow!("hub request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("hub returned HTTP {}", resp.status()));
+    }
+    let text = resp.text().map_err(|e| anyhow!("reading hub response failed: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| anyhow!("hub response was not JSON ({e})"))
+}
+
+/// Backstage's guard: a name lookup can return a resource that merely lists the
+/// package as a dependency. Accept it only if one of its files (or a dependency
+/// key, for multi-var listings) is the requested family.
+pub(crate) fn detail_matches_family(detail: &serde_json::Value, family_lc: &str) -> bool {
+    let matches = |name: &str| {
+        let stem = name.trim().trim_end_matches(".var").trim_end_matches(".VAR");
+        crate::naming::package_base(stem).eq_ignore_ascii_case(family_lc)
+    };
+    let in_files = detail
+        .get("hubFiles")
+        .and_then(|f| f.as_array())
+        .is_some_and(|files| {
+            files
+                .iter()
+                .filter_map(|f| f.get("filename").and_then(|n| n.as_str()))
+                .any(matches)
+        });
+    in_files
+        || detail
+            .get("dependencies")
+            .and_then(|d| d.as_object())
+            .is_some_and(|deps| deps.keys().any(|k| matches(k)))
+}
+
+fn fetch_image_data(client: &reqwest::blocking::Client, url: &str) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    let resp = client.get(url).send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| v.starts_with("image/"))
+        .unwrap_or("image/jpeg")
+        .to_string();
+    let bytes = resp.bytes().ok()?;
+    // A thumbnail, not a download: refuse anything implausibly large.
+    if bytes.is_empty() || bytes.len() > 4 * 1024 * 1024 {
+        return None;
+    }
+    Some(format!("data:{mime};base64,{}", BASE64.encode(&bytes)))
+}
+
+/// Looks a package family up on the Hub (`getResourceDetail` by package name,
+/// as VaM Backstage does) and returns what a dependency row shows, including
+/// the resource icon as a data URL.
+pub(crate) fn fetch_package_meta(client: &reqwest::blocking::Client, package_id: &str) -> HubPackageMeta {
+    let family = crate::naming::package_base(package_id.trim()).to_string();
+    let family_lc = family.to_ascii_lowercase();
+    let detail = match get_resource_detail(client, &format!("{family}.latest")) {
+        Ok(d) => d,
+        Err(e) => {
+            return HubPackageMeta {
+                error: Some(e.to_string()),
+                ..HubPackageMeta::default()
+            }
+        }
+    };
+    if detail.get("status").and_then(|s| s.as_str()) == Some("error")
+        || str_field(&detail, "resource_id").is_none()
+        || !detail_matches_family(&detail, &family_lc)
+    {
+        return HubPackageMeta::default();
+    }
+
+    let resource_id = str_field(&detail, "resource_id");
+    let file = detail
+        .get("hubFiles")
+        .and_then(|f| f.as_array())
+        .and_then(|files| {
+            files.iter().find(|f| {
+                f.get("filename")
+                    .and_then(|n| n.as_str())
+                    .is_some_and(|n| n.to_ascii_lowercase().starts_with(&format!("{family_lc}.")))
+            })
+        });
+    let icon_url = resource_id
+        .as_deref()
+        .and_then(|id| id.parse::<u64>().ok())
+        .map(|n| format!("{RESOURCE_ICON_CDN}/{}/{n}.jpg", n / 1000));
+    let image_data = icon_url
+        .as_deref()
+        .and_then(|u| fetch_image_data(client, u))
+        .or_else(|| str_field(&detail, "image_url").and_then(|u| fetch_image_data(client, &u)));
+
+    HubPackageMeta {
+        found: true,
+        hub_url: resource_id
+            .as_deref()
+            .map(|id| format!("https://hub.virtamate.com/resources/{id}/")),
+        resource_id,
+        title: str_field(&detail, "title"),
+        username: str_field(&detail, "username"),
+        tag_line: str_field(&detail, "tag_line"),
+        resource_type: str_field(&detail, "type"),
+        category: str_field(&detail, "category"),
+        license: file
+            .and_then(|f| str_field(f, "licenseType"))
+            .or_else(|| str_field(&detail, "licenseType")),
+        file_size: file.and_then(|f| f.get("file_size")).and_then(parse_size),
+        filename: file.and_then(|f| str_field(f, "filename")),
+        image_data,
+        error: None,
+    }
+}

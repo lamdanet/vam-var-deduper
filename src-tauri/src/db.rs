@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 12;
+pub(crate) const SCHEMA_VERSION: i32 = 13;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -563,6 +563,25 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.commit().context("failed to commit v12 migration")?;
     }
 
+    if current < 13 {
+        // VAR Packages library info, one JSON blob per archive path. A cache,
+        // not data: rows are validated against the file's size + mtime (and the
+        // classifier version inside the blob) on every read, so a stale row
+        // only costs a re-read of that one archive. Keyed by path rather than
+        // package_id because the same package can sit in several folders.
+        let tx = conn.transaction().context("failed to start v13 tx")?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS var_info_cache (
+                file_path   TEXT PRIMARY KEY,
+                size        INTEGER NOT NULL,
+                modified_ns TEXT NOT NULL,
+                info        TEXT NOT NULL
+            );",
+        )
+        .context("failed to create v13 var_info_cache table")?;
+        tx.commit().context("failed to commit v13 migration")?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
@@ -852,6 +871,11 @@ pub(crate) const SCENE_IMAGE_PREDICATE_SQL: &str = "lower(internal_path) LIKE 's
 /// and then a package could export an image the filter says it doesn't have.
 /// `internal_path` is stored forward-slashed and untrimmed of case by
 /// `normalize_zip_path`, so no slash handling is needed here.
+///
+/// Folder mode now reads the scene-image flag from the archive during the scan
+/// (`library::read_var_pkg_info`), so only the tests pin this id set against
+/// the database-mode SQL predicate.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn get_scene_image_package_ids(conn: &Connection) -> Result<HashSet<String>> {
     let sql =
         format!("SELECT DISTINCT package_id FROM resources WHERE {SCENE_IMAGE_PREDICATE_SQL}");

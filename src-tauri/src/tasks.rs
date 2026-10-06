@@ -1508,7 +1508,7 @@ pub(crate) fn list_var_packages(
 
     // Set only when the walk raced an apply: serve these for this call, but
     // leave the cache empty so the next call re-walks.
-    let mut fresh_items: Option<Vec<VarPackageListItem>> = None;
+    let mut fresh_items: Option<(Vec<VarPackageListItem>, u64)> = None;
 
     if need_rescan {
         let dir = Path::new(&input_dir);
@@ -1524,8 +1524,12 @@ pub(crate) fn list_var_packages(
             load_known_package_ids(&conn).map_err(|err| err.to_string())?
         };
 
+        // Opens only archives that are new or changed since they were last
+        // read; everything else comes from the info cache.
+        let infos = crate::library::infos_for_entries(&entries, &state, &db);
+
         let mut scanned: Vec<VarPackageListItem> = Vec::with_capacity(entries.len());
-        for entry in entries {
+        for (entry, info) in entries.into_iter().zip(infos) {
             let path = &entry.path;
             let file_name = path
                 .file_name()
@@ -1549,8 +1553,18 @@ pub(crate) fn list_var_packages(
                 size_bytes: entry.fingerprint.size,
                 modified_ms,
                 indexed,
+                pkg_type: info.pkg_type,
+                item_count: info.item_count,
+                dep_count: info.deps.len() as u32,
+                disabled: crate::packages::disabled_sidecar(path).exists(),
+                has_scene_image: info.has_scene_image,
+                license: info.license,
+                readable: info.readable,
+                deps: info.deps,
+                ..VarPackageListItem::default()
             });
         }
+        let missing_unique = crate::library::apply_graph(&mut scanned);
 
         let mut cache = state
             .var_packages_folder_cache
@@ -1560,73 +1574,69 @@ pub(crate) fn list_var_packages(
             *cache = Some(VarPackagesFolderCache {
                 cache_key: cache_key.clone(),
                 items: scanned,
+                missing_unique,
             });
         } else {
             // An apply mutated the library mid-walk. Drop the cache so the next
             // call rescans, and serve this (possibly torn) snapshot only to the
             // caller who asked for it.
             *cache = None;
-            fresh_items = Some(scanned);
+            fresh_items = Some((scanned, missing_unique));
         }
     }
 
     // Loaded before taking the cache lock so the DB read never runs while
-    // holding the folder-cache mutex.
-    let favorite_ids: Option<HashSet<String>> = if filters.favorite.unwrap_or(false) {
+    // holding the folder-cache mutex. Always loaded (the table is tiny): the
+    // Favorites row of the status facet needs it even when not filtering.
+    let favorite_ids: HashSet<String> = {
         let conn = db.read().map_err(|err| err.to_string())?;
-        Some(db::get_favorite_package_ids(&conn).map_err(|err| err.to_string())?)
-    } else {
-        None
-    };
-    let scene_image_ids: Option<HashSet<String>> = if filters
-        .scene_image
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|s| !s.is_empty())
-    {
-        let conn = db.read().map_err(|err| err.to_string())?;
-        Some(db::get_scene_image_package_ids(&conn).map_err(|err| err.to_string())?)
-    } else {
-        None
+        db::get_favorite_package_ids(&conn).map_err(|err| err.to_string())?
     };
 
     let cache = state
         .var_packages_folder_cache
         .lock()
         .map_err(|_| "var packages folder cache poisoned".to_string())?;
-    let items: &[VarPackageListItem] = match (fresh_items.as_ref(), cache.as_ref()) {
-        (Some(fresh), _) => fresh.as_slice(),
-        (None, Some(c)) if c.cache_key == cache_key => &c.items,
-        _ => return Ok(VarPackagePage { items: Vec::new(), total: 0 }),
+    let (items, missing_unique): (&[VarPackageListItem], u64) = match (fresh_items.as_ref(), cache.as_ref()) {
+        (Some((fresh, missing)), _) => (fresh.as_slice(), *missing),
+        (None, Some(c)) if c.cache_key == cache_key => (&c.items, c.missing_unique),
+        _ => {
+            return Ok(VarPackagePage {
+                items: Vec::new(),
+                total: 0,
+                facets: None,
+            })
+        }
     };
 
-    let needle = search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_lowercase);
+    let query = crate::library::SearchQuery::parse(search.as_deref());
 
-    let mut filtered: Vec<&VarPackageListItem> = items
+    // `base` passes every filter except the two facets (status, type), so the
+    // facet counts can each ignore their own selection.
+    let base: Vec<&VarPackageListItem> = items
         .iter()
         .filter(|item| {
-            if let Some(n) = needle.as_deref() {
-                let hits = [
-                    item.file_name.to_lowercase(),
-                    item.creator.clone().unwrap_or_default().to_lowercase(),
-                    item.package_id.to_lowercase(),
-                ];
-                if !hits.iter().any(|h| h.contains(n)) {
+            if let Some(q) = query.as_ref() {
+                if !q.matches(item) {
                     return false;
                 }
             }
-            matches_var_package_filters(
-                item,
-                &filters,
-                favorite_ids.as_ref(),
-                scene_image_ids.as_ref(),
-            )
+            matches_var_package_filters(item, &filters, &favorite_ids)
+                && crate::library::enabled_matches(item, &filters)
         })
         .collect();
+    let mut facets = crate::library::compute_facets(items, &base, &filters, &favorite_ids, missing_unique);
+
+    let mut filtered: Vec<&VarPackageListItem> = base
+        .into_iter()
+        .filter(|item| {
+            crate::library::library_status_matches(item, &filters, &favorite_ids)
+                && crate::library::type_matches(item, &filters)
+        })
+        .collect();
+    facets.total_bytes = filtered.iter().map(|i| i.size_bytes).sum();
+    facets.total_items = filtered.iter().map(|i| u64::from(i.item_count)).sum();
+    facets.total_deps = filtered.iter().filter(|i| i.used_by_count > 0).count() as u64;
 
     // Sort before slicing so the page reflects the whole matching set, not just
     // its arrival order. compare_var_packages carries the package_id tiebreaker
@@ -1640,34 +1650,30 @@ pub(crate) fn list_var_packages(
     let end = start.saturating_add(limit.max(1).min(1000) as usize).min(filtered.len());
     let page = filtered[start..end].iter().map(|i| (*i).clone()).collect();
 
-    Ok(VarPackagePage { items: page, total })
+    Ok(VarPackagePage {
+        items: page,
+        total,
+        facets: Some(facets),
+    })
 }
 
-/// Mirrors the frontend's `matchesVarPackageFilters` so folder-mode pagination
-/// can be served from the in-memory cache without round-tripping the DB.
+/// The folder-mode filters that are not facets, served from the in-memory
+/// cache without round-tripping the DB. Status and content type are facets and
+/// live in `library` so their counts can ignore their own selection.
 fn matches_var_package_filters(
     item: &VarPackageListItem,
     filters: &VarPackageFilters,
-    favorite_ids: Option<&HashSet<String>>,
-    scene_image_ids: Option<&HashSet<String>>,
+    favorite_ids: &HashSet<String>,
 ) -> bool {
-    if let Some(status) = filters.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        match status {
-            "indexed" if !item.indexed => return false,
-            "unindexed" if item.indexed => return false,
-            _ => {}
-        }
-    }
     if let Some(scene) = filters
         .scene_image
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        // A package the DB has never seen has no resource rows, so it lands in
-        // "without". Deliberate: the folder scan never opens archives, and doing
-        // so here would mean unzipping the whole library on every page.
-        let has = scene_image_ids.is_some_and(|ids| ids.contains(&item.package_id));
+        // Read from the archive itself during the scan, so a package the
+        // database has never indexed still answers correctly.
+        let has = item.has_scene_image;
         match scene {
             "with" if !has => return false,
             "without" if has => return false,
@@ -1695,11 +1701,8 @@ fn matches_var_package_filters(
             return false;
         }
     }
-    if filters.favorite.unwrap_or(false) {
-        match favorite_ids {
-            Some(ids) if ids.contains(&item.package_id) => {}
-            _ => return false,
-        }
+    if filters.favorite.unwrap_or(false) && !favorite_ids.contains(&item.package_id) {
+        return false;
     }
     true
 }
@@ -1734,6 +1737,11 @@ pub(crate) enum VarPackageSort {
     Name,
     Size,
     Modified,
+    /// Folder mode only (database mode orders these by name): content type in
+    /// filter-panel order, item count, and dependency count.
+    Type,
+    Items,
+    Deps,
 }
 
 impl VarPackageSort {
@@ -1744,6 +1752,9 @@ impl VarPackageSort {
         match raw.map(str::trim) {
             Some("size") => Self::Size,
             Some("modified") => Self::Modified,
+            Some("type") => Self::Type,
+            Some("items") => Self::Items,
+            Some("deps") => Self::Deps,
             _ => Self::Name,
         }
     }
@@ -1777,8 +1788,11 @@ pub(crate) fn parse_sort_desc(raw: Option<&str>) -> bool {
 pub(crate) fn var_package_order_by_sql(sort: VarPackageSort, desc: bool) -> String {
     let dir = if desc { "DESC" } else { "ASC" };
     match sort {
-        // package_id is already unique, so it needs no tiebreaker.
-        VarPackageSort::Name => format!("p.package_id COLLATE NOCASE {dir}"),
+        // package_id is already unique, so it needs no tiebreaker. The library
+        // keys have no database column, so they order by name there.
+        VarPackageSort::Name | VarPackageSort::Type | VarPackageSort::Items | VarPackageSort::Deps => {
+            format!("p.package_id COLLATE NOCASE {dir}")
+        }
         VarPackageSort::Size => {
             format!("p.size_bytes {dir}, p.package_id COLLATE NOCASE ASC")
         }
@@ -1807,6 +1821,11 @@ pub(crate) fn compare_var_packages(
         // arbitrary position; SQL sees the same thing, since those rows carry
         // modified_ns '0'.
         VarPackageSort::Modified => a.modified_ms.unwrap_or(0).cmp(&b.modified_ms.unwrap_or(0)),
+        VarPackageSort::Type => {
+            crate::library::type_order(&a.pkg_type).cmp(&crate::library::type_order(&b.pkg_type))
+        }
+        VarPackageSort::Items => a.item_count.cmp(&b.item_count),
+        VarPackageSort::Deps => a.dep_count.cmp(&b.dep_count),
     };
     let primary = if desc { primary.reverse() } else { primary };
     // Tiebreaker stays ASCENDING in both directions, matching the SQL — this is
@@ -2011,7 +2030,11 @@ pub(crate) fn list_var_packages_from_db(
                 (pid.clone(), fp.clone(), *size, mns.clone(), Some(*indexed))
             },
         ));
-        return Ok(VarPackagePage { items, total });
+        return Ok(VarPackagePage {
+            items,
+            total,
+            facets: None,
+        });
     }
 
     let total: u64 = {
@@ -2055,7 +2078,11 @@ pub(crate) fn list_var_packages_from_db(
             .map(|(pid, fp, size, mns)| (pid, fp, size, mns, None)),
     );
 
-    Ok(VarPackagePage { items, total })
+    Ok(VarPackagePage {
+        items,
+        total,
+        facets: None,
+    })
 }
 
 /// Shared row-to-item shaping for `list_var_packages_from_db`. The
@@ -2088,6 +2115,7 @@ where
                 size_bytes: size_bytes.max(0) as u64,
                 modified_ms,
                 indexed,
+                ..VarPackageListItem::default()
             }
         })
         .collect()

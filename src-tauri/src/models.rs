@@ -20,6 +20,10 @@ pub(crate) const DEFAULT_LANGUAGE: &str = "en_US";
 pub(crate) struct AppConfig {
     pub(crate) language: String,
     pub(crate) theme: String,
+    /// The VaM install directory, as in VaM Backstage. `<vam_dir>/AddonPackages`
+    /// is the VAR folder every page scans; the per-page folder fields mirror it.
+    #[serde(default)]
+    pub(crate) vam_dir: Option<String>,
     #[serde(default)]
     pub(crate) input_dir: Option<String>,
     /// Overview scan: extra VAR folders unioned with `input_dir` when scanning.
@@ -126,6 +130,7 @@ impl Default for AppConfig {
         Self {
             language: DEFAULT_LANGUAGE.to_string(),
             theme: "light".to_string(),
+            vam_dir: None,
             input_dir: None,
             scan_additional_dirs: None,
             var_details_additional_dirs: None,
@@ -936,6 +941,10 @@ pub(crate) struct AppState {
     /// The plan awaiting the user's Apply, kept server-side so the frontend
     /// sends indices instead of paths. Cleared on every apply exit path.
     pub(crate) package_plan: Arc<Mutex<Option<PackagePlan>>>,
+    /// Per-archive library info (content type, deps, ...) keyed by file path
+    /// and validated by size + mtime. `None` until first loaded from the
+    /// `var_info_cache` table, so a restart doesn't re-open every archive.
+    pub(crate) var_info_cache: Arc<Mutex<Option<HashMap<String, crate::library::CachedVarInfo>>>>,
     /// Per-volume Recycle Bin probe results, cached for the session. The probe
     /// writes a file and enumerates the bin, so re-running it on every
     /// single-package delete would be needless work — and Recycle Bin
@@ -962,6 +971,7 @@ impl AppState {
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             var_packages_folder_cache: Arc::new(Mutex::new(None)),
             package_plan: Arc::new(Mutex::new(None)),
+            var_info_cache: Arc::new(Mutex::new(None)),
             recycle_support: Arc::new(Mutex::new(HashMap::new())),
             var_packages_cache_generation: Arc::new(AtomicU64::new(0)),
         }
@@ -974,6 +984,8 @@ pub(crate) struct VarPackagesFolderCache {
     /// the cache invalidates when the set of folders changes.
     pub(crate) cache_key: String,
     pub(crate) items: Vec<VarPackageListItem>,
+    /// Distinct dependency keys that don't resolve exactly in `items`.
+    pub(crate) missing_unique: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1022,7 +1034,7 @@ pub(crate) struct ExportScenesResponse {
     pub(crate) notes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct VarPackageListItem {
     pub(crate) file_path: String,
     pub(crate) file_name: String,
@@ -1031,12 +1043,57 @@ pub(crate) struct VarPackageListItem {
     pub(crate) size_bytes: u64,
     pub(crate) modified_ms: Option<u64>,
     pub(crate) indexed: bool,
+    // ---- Library fields. Folder mode only: they come from opening the archive
+    // (see `library::read_var_pkg_info`) and from the dependency graph across
+    // the scanned set. Database-mode rows leave them at their defaults.
+    /// Primary content type key (`library::TYPE_KEYS`); empty when unknown.
+    pub(crate) pkg_type: String,
+    /// User-facing content items (scenes, presets, clothing, hair, ...).
+    pub(crate) item_count: u32,
+    /// Top-level `meta.json` dependency count.
+    pub(crate) dep_count: u32,
+    /// Dependencies that no version of resolves inside the scanned folders.
+    pub(crate) missing_dep_count: u32,
+    /// How many scanned packages declare this one as a dependency.
+    pub(crate) used_by_count: u32,
+    /// A higher numbered version of the same package sits in the scanned set.
+    pub(crate) newer_version: bool,
+    /// `<file>.var.disabled` exists beside it — VaM will not load it.
+    pub(crate) disabled: bool,
+    pub(crate) has_scene_image: bool,
+    pub(crate) license: Option<String>,
+    /// The archive and its meta.json could be read.
+    pub(crate) readable: bool,
+    /// Top-level dependency keys, kept server-side for the dependency graph
+    /// and the details panel; never sent with a page.
+    #[serde(skip)]
+    pub(crate) deps: Vec<String>,
+}
+
+/// Facet counts and totals for the VAR Packages filter panel and status bar.
+/// Each facet's counts ignore that facet's own selection (the usual faceted
+/// search rule), so picking a type never zeroes the other type rows.
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct VarPackageFacets {
+    pub(crate) types: BTreeMap<String, u64>,
+    pub(crate) statuses: BTreeMap<String, u64>,
+    pub(crate) enabled: u64,
+    pub(crate) disabled: u64,
+    /// Totals over the fully filtered set.
+    pub(crate) total_bytes: u64,
+    pub(crate) total_items: u64,
+    pub(crate) total_deps: u64,
+    /// Totals over the whole scanned library, ignoring every filter.
+    pub(crate) library_count: u64,
+    pub(crate) library_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct VarPackagePage {
     pub(crate) items: Vec<VarPackageListItem>,
     pub(crate) total: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) facets: Option<VarPackageFacets>,
 }
 
 // ----------------------------------------------------------------------------
@@ -1183,6 +1240,8 @@ pub(crate) struct VarPackageFilterOptions {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VarPackageFilters {
     /// `"indexed"` (file exists on disk) or `"unindexed"` (missing on disk).
+    /// Folder mode also accepts the library statuses `"dependency"`,
+    /// `"standalone"`, `"broken"` and `"outdated"` (see `library::status_matches`).
     #[serde(default)]
     pub(crate) status: Option<String>,
     /// `"sm"` (< 100 MB), `"md"` (100 MB–1 GB), or `"lg"` (> 1 GB).
@@ -1200,6 +1259,12 @@ pub(crate) struct VarPackageFilters {
     /// "without", since nothing else can tell us cheaply.
     #[serde(default)]
     pub(crate) scene_image: Option<String>,
+    /// Folder mode only: a `library::TYPE_KEYS` content type.
+    #[serde(default)]
+    pub(crate) pkg_type: Option<String>,
+    /// Folder mode only: `"enabled"` or `"disabled"` (the `.var.disabled` marker).
+    #[serde(default)]
+    pub(crate) enabled: Option<String>,
 }
 
 /// Single row in the global Resource List page. Joins `resources` with

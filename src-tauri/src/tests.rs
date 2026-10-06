@@ -5247,6 +5247,7 @@ fn sort_item(package_id: &str, size_bytes: u64, modified_ms: Option<u64>) -> Var
         size_bytes,
         modified_ms,
         indexed: true,
+        ..VarPackageListItem::default()
     }
 }
 
@@ -5827,4 +5828,195 @@ fn collect_deps_cancelled_copy_leaves_nothing_behind() {
     assert_eq!(resp.results[0].status, "cancelled");
 
     fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+// ----------------------------------------------------------------------------
+// VAR Packages library: classifier, dependency graph, search
+// ----------------------------------------------------------------------------
+
+fn lib_names(paths: &[&str]) -> Vec<String> {
+    paths.iter().map(|p| p.to_string()).collect()
+}
+
+#[test]
+fn library_classifier_types_and_dedup() {
+    use crate::library::classify_entries;
+    let items = classify_entries(&lib_names(&[
+        "Saves/scene/My Scene.json",
+        "Saves/scene/My Scene.jpg",
+        "Custom/Clothing/Female/Me/Dress/Dress.vam",
+        "Custom/Clothing/Female/Me/Dress/Dress.vaj",
+        "Custom/Clothing/Female/Me/Dress/Dress.vab",
+        "Custom/Atom/Person/Clothing/Preset_Dress.vap",
+        "Custom/Atom/Person/Clothing/Preset_Dress.jpg",
+        "Custom/Hair/Female/Me/Bob/Bob.vam",
+        "Custom/Atom/Person/Morphs/female/Me/Smile.vmi",
+        "Custom/Atom/Person/Morphs/female/Me/Smile.vmb",
+        "Custom/Atom/Person/Textures/FullBody/skin.png",
+        "Custom/Scripts/Me/Plugin.cs",
+        "Custom/Atom/Person/Appearance/Preset_Look.vap.disabled",
+    ]));
+    let count = |fine: &str| items.iter().filter(|i| i.fine == fine).count();
+    assert_eq!(count("scene"), 1);
+    // .vam/.vaj/.vab collapse to one item, and the item/preset pair named
+    // "Dress" collapses to the preset, which has the thumbnail.
+    assert_eq!(count("clothingItem"), 0);
+    assert_eq!(count("clothingPreset"), 1);
+    assert_eq!(count("hairItem"), 1);
+    assert_eq!(count("morphBinary"), 1, "vmi/vmb pair is one morph");
+    assert_eq!(count("texture"), 1);
+    assert_eq!(count("pluginScript"), 1);
+    assert_eq!(count("look"), 1, ".disabled suffix is still content");
+    let scene = items.iter().find(|i| i.fine == "scene").unwrap();
+    assert_eq!(scene.thumb.as_deref(), Some("Saves/scene/My Scene.jpg"));
+    let preset = items.iter().find(|i| i.fine == "clothingPreset").unwrap();
+    assert_eq!(preset.name, "Dress");
+    assert_eq!(preset.category, Some("clothing"));
+}
+
+#[test]
+fn library_primary_type_precedence() {
+    use crate::library::primary_type;
+    let mut counts = std::collections::BTreeMap::new();
+    counts.insert("clothing".to_string(), 30);
+    counts.insert("scene".to_string(), 1);
+    assert_eq!(primary_type(&counts), "scene");
+    counts.clear();
+    counts.insert("subscene".to_string(), 2);
+    assert_eq!(primary_type(&counts), "other", "subscenes alone are Other");
+}
+
+#[test]
+fn library_read_info_from_archive() {
+    let dir = std::env::temp_dir().join(format!("vam_lib_info_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let var = dir.join("Me.Look.3.var");
+    write_test_var_with_deps(
+        &var,
+        &["Other.Base.2", "Other.Tex.latest"],
+        &[
+            ("Custom/Atom/Person/Appearance/Preset_Me.vap", b"{}"),
+            ("Custom/Atom/Person/Appearance/Preset_Me.jpg", b"jpg"),
+            ("Saves/scene/Demo.json", b"{}"),
+        ],
+    );
+    let info = crate::library::read_var_pkg_info(&var);
+    assert!(info.readable);
+    assert_eq!(info.pkg_type, "scene");
+    assert_eq!(info.item_count, 2);
+    assert_eq!(info.license.as_deref(), Some("FC"));
+    assert_eq!(info.deps.len(), 2);
+    assert_eq!(
+        info.thumb_entry.as_deref(),
+        Some("Custom/Atom/Person/Appearance/Preset_Me.jpg"),
+        "scene has no image, so the look's thumbnail is used"
+    );
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+fn lib_item(package_id: &str, deps: &[&str]) -> VarPackageListItem {
+    VarPackageListItem {
+        file_path: format!("C:\\vars\\{package_id}.var"),
+        file_name: format!("{package_id}.var"),
+        package_id: package_id.to_string(),
+        creator: crate::naming::creator_from_package_id(package_id).map(str::to_string),
+        deps: deps.iter().map(|d| d.to_string()).collect(),
+        ..VarPackageListItem::default()
+    }
+}
+
+#[test]
+fn library_dependency_graph() {
+    let mut items = vec![
+        lib_item("A.Scene.1", &["B.Look.2", "C.Hair.latest", "D.Gone.1", "E.Old.min5"]),
+        lib_item("B.Look.1", &[]),
+        lib_item("B.Look.2", &[]),
+        lib_item("C.Hair.4", &[]),
+        lib_item("E.Old.3", &[]),
+    ];
+    crate::library::apply_graph(&mut items);
+    let get = |id: &str| items.iter().find(|i| i.package_id == id).unwrap();
+    // D.Gone is absent entirely; E.Old.min5 only has v3 (a fallback, not missing).
+    assert_eq!(get("A.Scene.1").missing_dep_count, 1);
+    assert_eq!(get("B.Look.2").used_by_count, 1);
+    assert_eq!(get("B.Look.1").used_by_count, 0);
+    assert_eq!(get("C.Hair.4").used_by_count, 1);
+    assert_eq!(get("E.Old.3").used_by_count, 1);
+    assert!(get("B.Look.1").newer_version);
+    assert!(!get("B.Look.2").newer_version);
+}
+
+#[test]
+fn library_dependency_resolution_specs() {
+    use crate::library::{DepResolution, LibIndex};
+    let items = vec![lib_item("X.Pkg.2", &[]), lib_item("X.Pkg.7", &[])];
+    let index = LibIndex::build(&items);
+    assert_eq!(index.resolve("X.Pkg.2"), DepResolution::Found(0));
+    assert_eq!(index.resolve("x.pkg.LATEST"), DepResolution::Found(1));
+    assert_eq!(index.resolve("X.Pkg.min3"), DepResolution::Found(1));
+    assert_eq!(index.resolve("X.Pkg.min9"), DepResolution::OtherVersion(1));
+    assert_eq!(index.resolve("X.Pkg.5"), DepResolution::OtherVersion(1));
+    assert_eq!(index.resolve("Y.Pkg.1"), DepResolution::Missing);
+}
+
+#[test]
+fn library_search_query_terms() {
+    use crate::library::SearchQuery;
+    let mut item = lib_item("MacGruber.LongHair.3", &[]);
+    item.pkg_type = "hair".to_string();
+    let q = |s: &str| SearchQuery::parse(Some(s)).unwrap();
+    assert!(q("@macgruber hair").matches(&item));
+    assert!(!q("@macgruber -hair").matches(&item));
+    assert!(q("long type:hair").matches(&item));
+    assert!(!q("@someone").matches(&item));
+    assert!(SearchQuery::parse(Some("   ")).is_none());
+}
+
+#[test]
+fn inspect_vam_dir_accepts_vam_root_or_addonpackages() {
+    let root = std::env::temp_dir().join(format!("vam_dir_check_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let addon = root.join("AddonPackages");
+    fs::create_dir_all(addon.join("Creator")).unwrap();
+    fs::write(addon.join("A.B.1.var"), b"x").unwrap();
+    fs::write(addon.join("Creator").join("C.D.2.var"), b"x").unwrap();
+    fs::write(addon.join("notes.txt"), b"x").unwrap();
+
+    let info = crate::library::inspect_vam_dir(root.display().to_string());
+    assert!(info.valid);
+    assert_eq!(info.var_count, 2);
+    assert_eq!(info.vam_dir, root.display().to_string());
+
+    // Picking AddonPackages itself resolves to the VaM directory.
+    let picked = crate::library::inspect_vam_dir(addon.display().to_string());
+    assert!(picked.valid);
+    assert_eq!(picked.vam_dir, root.display().to_string());
+
+    let bad = crate::library::inspect_vam_dir(root.join("Creator").display().to_string());
+    assert!(!bad.valid);
+    assert_eq!(bad.var_count, 0);
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn hub_detail_must_be_the_requested_family() {
+    use crate::hub::detail_matches_family;
+    let own = json!({
+        "resource_id": "123",
+        "hubFiles": [{ "filename": "MacGruber.Life.13.var", "file_size": "100" }],
+    });
+    assert!(detail_matches_family(&own, "macgruber.life"));
+    // A resource that merely depends on the package is not the package.
+    let user = json!({
+        "resource_id": "999",
+        "hubFiles": [{ "filename": "Someone.Scene.2.var" }],
+    });
+    assert!(!detail_matches_family(&user, "macgruber.life"));
+    // Paid multi-var listings put the family under `dependencies`.
+    let paid = json!({
+        "resource_id": "555",
+        "hubFiles": [],
+        "dependencies": { "Creator.Pack.4": {} },
+    });
+    assert!(detail_matches_family(&paid, "creator.pack"));
 }
