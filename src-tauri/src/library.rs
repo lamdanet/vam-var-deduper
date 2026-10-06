@@ -1442,3 +1442,231 @@ pub(crate) async fn get_hub_package_meta(
     }
     Ok(meta)
 }
+
+// ----------------------------------------------------------------------------
+// Dependency graph page
+// ----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphNode {
+    /// Stable id: the package file path, or `missing:<dep key>` for a
+    /// dependency no scanned package satisfies.
+    pub(crate) id: String,
+    pub(crate) package_id: String,
+    pub(crate) creator: Option<String>,
+    pub(crate) pkg_type: String,
+    pub(crate) size_bytes: u64,
+    pub(crate) item_count: u32,
+    pub(crate) dep_count: u32,
+    pub(crate) missing_dep_count: u32,
+    pub(crate) used_by_count: u32,
+    pub(crate) disabled: bool,
+    pub(crate) newer_version: bool,
+    pub(crate) readable: bool,
+    /// Placeholder for a dependency that isn't installed.
+    pub(crate) missing: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphEdge {
+    /// Dependent (the package declaring the dependency).
+    pub(crate) source: String,
+    /// Dependency (a package node or a missing placeholder).
+    pub(crate) target: String,
+    /// The key as declared in meta.json.
+    pub(crate) dep: String,
+    /// `"found"` | `"other_version"` | `"missing"`.
+    pub(crate) status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct LibraryGraph {
+    pub(crate) nodes: Vec<GraphNode>,
+    pub(crate) edges: Vec<GraphEdge>,
+    /// False when no folder scan is cached yet (the page should scan first).
+    pub(crate) scanned: bool,
+}
+
+fn graph_node(item: &VarPackageListItem) -> GraphNode {
+    GraphNode {
+        id: item.file_path.clone(),
+        package_id: item.package_id.clone(),
+        creator: item.creator.clone(),
+        pkg_type: item.pkg_type.clone(),
+        size_bytes: item.size_bytes,
+        item_count: item.item_count,
+        dep_count: item.dep_count,
+        missing_dep_count: item.missing_dep_count,
+        used_by_count: item.used_by_count,
+        disabled: item.disabled,
+        newer_version: item.newer_version,
+        readable: item.readable,
+        missing: false,
+    }
+}
+
+/// The whole dependency graph of the scanned AddonPackages (the folder cache
+/// `list_var_packages` filled): every package, every declared dependency edge
+/// resolved like the library does, and a placeholder node per dependency
+/// nothing satisfies.
+#[tauri::command(async)]
+pub(crate) fn get_library_graph(state: State<'_, AppState>) -> Result<LibraryGraph, String> {
+    let cache = state
+        .var_packages_folder_cache
+        .lock()
+        .map_err(|_| "var packages folder cache poisoned".to_string())?;
+    Ok(match cache.as_ref() {
+        Some(cache) => build_library_graph(&cache.items),
+        None => LibraryGraph::default(),
+    })
+}
+
+pub(crate) fn build_library_graph(items: &[VarPackageListItem]) -> LibraryGraph {
+    let index = LibIndex::build(items);
+    let mut graph = LibraryGraph {
+        nodes: items.iter().map(graph_node).collect(),
+        edges: Vec::new(),
+        scanned: true,
+    };
+    let mut missing_nodes: BTreeMap<String, GraphNode> = BTreeMap::new();
+    for (i, item) in items.iter().enumerate() {
+        let mut seen: HashSet<String> = HashSet::new();
+        for dep in &item.deps {
+            let (target, status) = match index.resolve(dep) {
+                DepResolution::Found(t) => (items[t].file_path.clone(), "found"),
+                DepResolution::OtherVersion(t) => (items[t].file_path.clone(), "other_version"),
+                DepResolution::Missing => {
+                    let key = dep.to_ascii_lowercase();
+                    let id = format!("missing:{key}");
+                    missing_nodes.entry(key).or_insert_with(|| GraphNode {
+                        id: id.clone(),
+                        package_id: dep.clone(),
+                        creator: naming::creator_from_package_id(dep).map(str::to_string),
+                        pkg_type: String::new(),
+                        size_bytes: 0,
+                        item_count: 0,
+                        dep_count: 0,
+                        missing_dep_count: 0,
+                        used_by_count: 0,
+                        disabled: false,
+                        newer_version: false,
+                        readable: false,
+                        missing: true,
+                    });
+                    (id, "missing")
+                }
+            };
+            // A package depending on its own family, or listing one target
+            // twice (`Pkg.3` and `Pkg.latest`), adds no information.
+            if target == items[i].file_path || !seen.insert(target.clone()) {
+                continue;
+            }
+            graph.edges.push(GraphEdge {
+                source: item.file_path.clone(),
+                target,
+                dep: dep.clone(),
+                status: status.to_string(),
+            });
+        }
+    }
+    for edge in &graph.edges {
+        if edge.status == "missing" {
+            if let Some(node) = missing_nodes.get_mut(edge.target.trim_start_matches("missing:")) {
+                node.used_by_count += 1;
+            }
+        }
+    }
+    graph.nodes.extend(missing_nodes.into_values());
+    graph
+}
+
+// ----------------------------------------------------------------------------
+// Hub page commands
+// ----------------------------------------------------------------------------
+
+/// Session cache of Hub API answers: body -> (fetched at, response).
+static HUB_API_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<HashMap<String, (std::time::Instant, serde_json::Value)>>,
+> = std::sync::OnceLock::new();
+
+/// Runs blocking Hub I/O on a plain OS thread (never a tokio worker, see
+/// hub.rs), awaited from the blocking pool.
+async fn on_hub_thread<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::spawn(work)
+            .join()
+            .unwrap_or_else(|_| Err("Hub request failed".to_string()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One read-only Hub API call for the Hub page (getInfo, getResources,
+/// getResourceDetail, findPackages). Answers are cached for a few minutes;
+/// `refresh` skips the cache.
+#[tauri::command]
+pub(crate) async fn hub_api(
+    action: String,
+    params: Option<serde_json::Map<String, serde_json::Value>>,
+    refresh: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    if !crate::hub::BROWSE_ACTIONS.contains(&action.as_str()) {
+        return Err(format!("unsupported Hub action: {action}"));
+    }
+    let params = params.unwrap_or_default();
+    let key = crate::hub::vam_body(&action, &params);
+    let ttl = std::time::Duration::from_secs(if action == "getResources" { 120 } else { 600 });
+    let cache = HUB_API_CACHE.get_or_init(Default::default);
+    if !refresh.unwrap_or(false) {
+        if let Some((at, value)) = cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+            if at.elapsed() < ttl {
+                return Ok(value);
+            }
+        }
+    }
+    let value = on_hub_thread(move || {
+        let client = crate::hub::hub_client().map_err(|e| e.to_string())?;
+        crate::hub::api_request(&client, &action, &params).map_err(|e| e.to_string())
+    })
+    .await?;
+    if let Ok(mut c) = cache.lock() {
+        if c.len() > 400 {
+            c.clear();
+        }
+        c.insert(key, (std::time::Instant::now(), value.clone()));
+    }
+    Ok(value)
+}
+
+static HUB_IMAGE_CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Option<String>>>> =
+    std::sync::OnceLock::new();
+
+/// A Hub image as a data URL — the fallback when the webview can't load the
+/// CDN URL directly. Only Hub / CDN hosts are fetched.
+#[tauri::command]
+pub(crate) async fn hub_image(url: String) -> Result<Option<String>, String> {
+    let allowed = url.starts_with("https://hub.virtamate.com/")
+        || url.starts_with("https://1424104733.rsc.cdn77.org/");
+    if !allowed {
+        return Ok(None);
+    }
+    let cache = HUB_IMAGE_CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(&url).cloned()) {
+        return Ok(hit);
+    }
+    let fetch_url = url.clone();
+    let data = on_hub_thread(move || {
+        let client = crate::hub::hub_client().map_err(|e| e.to_string())?;
+        Ok(crate::hub::image_data_url(&client, &fetch_url))
+    })
+    .await?;
+    if let Ok(mut c) = cache.lock() {
+        if c.len() > 600 {
+            c.clear();
+        }
+        c.insert(url, data.clone());
+    }
+    Ok(data)
+}

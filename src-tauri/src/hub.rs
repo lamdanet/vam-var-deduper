@@ -518,3 +518,57 @@ pub(crate) fn fetch_package_meta(client: &reqwest::blocking::Client, package_id:
         error: None,
     }
 }
+
+// ----------------------------------------------------------------------------
+// Hub page (browse resources, as VaM Backstage does)
+// ----------------------------------------------------------------------------
+
+/// Read-only Hub API actions the Hub page may call.
+pub(crate) const BROWSE_ACTIONS: &[&str] = &["getInfo", "getResources", "getResourceDetail", "findPackages"];
+
+/// Builds a request body the way VaM writes it: compact JSON with ", " between
+/// fields (the Hub sits behind Cloudflare, which can filter bodies that don't
+/// look like VaM's). Keys and values are JSON-encoded, so any string is safe.
+pub(crate) fn vam_body(action: &str, params: &serde_json::Map<String, serde_json::Value>) -> String {
+    let mut parts = vec![
+        "\"source\":\"VaM\"".to_string(),
+        format!("\"action\":{}", serde_json::Value::String(action.to_string())),
+    ];
+    for (key, value) in params {
+        if key == "source" || key == "action" {
+            continue;
+        }
+        parts.push(format!("{}:{}", serde_json::Value::String(key.clone()), value));
+    }
+    format!("{{{}}}", parts.join(", "))
+}
+
+/// POSTs one Hub API action and returns the parsed JSON response.
+pub(crate) fn api_request(
+    client: &reqwest::blocking::Client,
+    action: &str,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let resp = client
+        .post(API_URL)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::ACCEPT, "application/json")
+        .body(vam_body(action, params))
+        .send()
+        .map_err(|e| anyhow!("hub request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("hub returned HTTP {}", resp.status()));
+    }
+    let text = resp.text().map_err(|e| anyhow!("reading hub response failed: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| {
+        anyhow!(
+            "hub response was not JSON ({e}); starts with: {}",
+            text.chars().take(120).collect::<String>()
+        )
+    })
+}
+
+/// Fetches an image (resource icon / screenshot) as a data URL.
+pub(crate) fn image_data_url(client: &reqwest::blocking::Client, url: &str) -> Option<String> {
+    fetch_image_data(client, url)
+}
