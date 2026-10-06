@@ -1,0 +1,137 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
+mod collect_deps;
+mod config;
+mod db;
+mod execute;
+mod fix_var;
+mod hub;
+mod import;
+mod internalize;
+mod models;
+mod naming;
+mod packages;
+mod scan;
+mod tasks;
+#[cfg(test)]
+mod tests;
+mod utils;
+
+use tauri::Manager;
+
+use crate::{
+    collect_deps::{start_collect_deps_copy_task, start_collect_deps_scan_task},
+    models::AppState,
+    packages::{
+        delete_var_package, move_var_to_creator_folder, start_apply_package_plan_task,
+        start_plan_clean_duplicates_task, start_plan_organize_by_creator_task,
+    },
+    tasks::{
+        start_analyze_text_dependencies_task, start_analyze_var_dependencies_task,
+        start_download_one_task, start_import_download_links_task, get_download_links_count,
+        clear_download_links, open_url, start_resolve_var_source_task,
+        start_apply_internalize_task, start_apply_missing_resources_fix_task, cancel_task,
+        clear_database, clear_task, export_vam_bundle, export_var_resource,
+        count_resources_from_db, find_db_candidates_for_broken_ref, find_resources_by_crc,
+        find_resources_by_crcs_bulk, format_bytes_command, get_creator_flag, get_database_stats,
+        get_package_flag, list_blocked_creators, list_favorite_creators, list_favorite_packages,
+        set_package_flag,
+        export_var_scene_image, start_export_scene_images_task,
+        get_task_progress, get_vam_preview, get_var_file_stats, list_resource_duplicates,
+        list_resource_filter_options, list_resources_from_db, list_var_package_filter_options,
+        list_target_var_text_refs, list_var_packages, list_var_packages_from_db, list_var_resources, load_config,
+        load_db_package_resources, load_preview_image_data, path_exists, pick_folder, pick_folders,
+        pick_manifest_file, pick_save_file, pick_var_file, save_config,
+        scan_internalize_candidates, scan_missing_resources, set_creator_flag, show_in_explorer,
+        start_scan_missing_resources_task,
+        start_backfill_sizes_task, start_bulk_import_task, start_db_find_task,
+        start_delete_dependency_scan_task, start_dependency_check_task, start_execute_task,
+        start_reclaim_scan_task, start_scan_task, start_unique_resources_task,
+    },
+};
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let db = db::open(&app.handle())?;
+            app.manage(AppState::new());
+            app.manage(db);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            load_config,
+            path_exists,
+            pick_folder,
+            pick_folders,
+            pick_save_file,
+            pick_var_file,
+            pick_manifest_file,
+            show_in_explorer,
+            save_config,
+            start_scan_task,
+            start_execute_task,
+            start_bulk_import_task,
+            start_db_find_task,
+            start_backfill_sizes_task,
+            get_task_progress,
+            clear_task,
+            cancel_task,
+            format_bytes_command,
+            get_vam_preview,
+            load_preview_image_data,
+            export_var_resource,
+            export_vam_bundle,
+            get_var_file_stats,
+            get_database_stats,
+            clear_database,
+            list_var_resources,
+            list_target_var_text_refs,
+            list_var_packages,
+            list_var_packages_from_db,
+            list_var_package_filter_options,
+            find_resources_by_crc,
+            find_resources_by_crcs_bulk,
+            load_db_package_resources,
+            list_resources_from_db,
+            count_resources_from_db,
+            list_resource_filter_options,
+            list_resource_duplicates,
+            start_reclaim_scan_task,
+            start_unique_resources_task,
+            start_dependency_check_task,
+            start_delete_dependency_scan_task,
+            start_analyze_var_dependencies_task,
+            start_analyze_text_dependencies_task,
+            start_download_one_task,
+            start_import_download_links_task,
+            get_download_links_count,
+            clear_download_links,
+            open_url,
+            start_resolve_var_source_task,
+            set_creator_flag,
+            get_creator_flag,
+            list_blocked_creators,
+            set_package_flag,
+            get_package_flag,
+            list_favorite_packages,
+            list_favorite_creators,
+            scan_missing_resources,
+            start_scan_missing_resources_task,
+            find_db_candidates_for_broken_ref,
+            start_apply_missing_resources_fix_task,
+            scan_internalize_candidates,
+            start_apply_internalize_task,
+            start_plan_clean_duplicates_task,
+            start_plan_organize_by_creator_task,
+            move_var_to_creator_folder,
+            start_collect_deps_scan_task,
+            start_collect_deps_copy_task,
+            start_apply_package_plan_task,
+            delete_var_package,
+            export_var_scene_image,
+            start_export_scene_images_task,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

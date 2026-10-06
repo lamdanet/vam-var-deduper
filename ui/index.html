@@ -1,0 +1,2890 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VAM VAR Deduper</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..24,300..600,0..1,-25..0&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <!-- Top Header -->
+      <header class="app-header">
+        <div class="app-header-inner">
+          <div class="header-left">
+            <div class="brand">
+              <div class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+                  <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+                  <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+                </svg>
+              </div>
+              <div class="brand-text">
+                <span class="brand-eyebrow" id="eyebrow">VAM VAR Desktop Tool</span>
+                <span class="brand-title" id="app-title">VAM VAR Deduper</span>
+              </div>
+            </div>
+          </div>
+          <div class="header-right">
+            <button id="downloads-toggle" class="icon-text-button" type="button" onclick="window.__toggleDownloads && window.__toggleDownloads()">
+              <span class="material-symbols-outlined">download</span>
+              <span>Downloads</span>
+              <span id="downloads-badge" class="downloads-badge hidden">0</span>
+            </button>
+            <button id="console-toggle" class="icon-text-button" type="button" onclick="window.__toggleConsole && window.__toggleConsole()">
+              <span class="material-symbols-outlined">terminal</span>
+              <span>Console</span>
+            </button>
+            <button id="theme-toggle" class="icon-button" type="button"></button>
+          </div>
+        </div>
+      </header>
+
+      <div class="app-body">
+        <!-- Left Sidebar -->
+        <aside class="app-sidebar" id="app-sidebar">
+          <div class="sidebar-top">
+            <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Toggle sidebar">
+              <span class="material-symbols-outlined" id="sidebar-toggle-icon">menu_open</span>
+            </button>
+            <nav class="sidebar-nav">
+              <a class="sidebar-link active" href="#" data-sidebar-link="db-find">
+                <span class="material-symbols-outlined">find_in_page</span>
+                <span class="sidebar-label">Clean VARs</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="build-db">
+                <span class="material-symbols-outlined">storage</span>
+                <span class="sidebar-label">Build Database</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="var-packages">
+                <span class="material-symbols-outlined">inventory_2</span>
+                <span class="sidebar-label" id="sidebar-var-packages-label">VAR Packages</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="var-details">
+                <span class="material-symbols-outlined">description</span>
+                <span class="sidebar-label" id="sidebar-var-details-label">VAR Details</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="resource-list">
+                <span class="material-symbols-outlined">data_object</span>
+                <span class="sidebar-label" id="sidebar-resource-list-label">Resource List</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="missing-resources">
+                <span class="material-symbols-outlined">link_off</span>
+                <span class="sidebar-label">Missing Resources</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="internalize-resources">
+                <span class="material-symbols-outlined">download_for_offline</span>
+                <span class="sidebar-label">Internalize Resources</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="reclaim-space">
+                <span class="material-symbols-outlined">savings</span>
+                <span class="sidebar-label">Reclaim Space</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="unique-resources">
+                <span class="material-symbols-outlined">category</span>
+                <span class="sidebar-label">Unique Resources</span>
+              </a>
+            </nav>
+            <div class="sidebar-divider"></div>
+            <nav class="sidebar-nav">
+              <a class="sidebar-link" href="#" data-sidebar-link="settings">
+                <span class="material-symbols-outlined">settings</span>
+                <span class="sidebar-label">Settings</span>
+              </a>
+            </nav>
+          </div>
+        </aside>
+
+      <!-- Clean VARs page — the primary workspace (default landing page). Every id is
+           prefixed `dbf-` (historically cloned from the removed Overview workspace) so render
+           code and CSS selectors can target this page without touching the other views. -->
+      <section id="dbf-page" class="app-main dbf-view">
+        <p class="hero-copy" id="dbf-hero-copy"></p>
+
+        <!-- Top Grid: Source Config + VAR Details -->
+        <section class="dashboard-grid">
+          <!-- Source Configuration -->
+          <article class="card source-card" data-purpose="path-settings">
+            <header class="card-eyebrow">Source Configuration</header>
+            <div class="source-body">
+              <div class="path-grid">
+                <div id="dbf-target-var-row" class="path-row">
+                  <span class="path-label" id="dbf-target-var-label"></span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">description</span>
+                      <input id="dbf-target-var-path" type="text" placeholder="D:\Somewhere\Target.var" />
+                    </div>
+                    <button id="dbf-pick-target-var-button" class="ghost-button" type="button"></button>
+                    <button id="dbf-open-var-details-button" class="ghost-button" type="button" title="Open the target VAR in VAR Details" disabled>
+                      <span class="material-symbols-outlined">open_in_new</span>
+                      <span id="dbf-open-var-details-label">VAR Details</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="path-row">
+                  <span class="path-label" id="dbf-input-label"></span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">folder</span>
+                      <input id="dbf-input-dir" type="text" placeholder="D:\Vars" />
+                    </div>
+                    <button id="dbf-pick-input-button" class="ghost-button" type="button"></button>
+                  </div>
+                </div>
+                <div class="path-row">
+                  <span class="path-label" id="dbf-additional-dirs-label"></span>
+                  <div class="additional-dirs">
+                    <div id="dbf-additional-dirs" class="additional-dirs-list"></div>
+                    <button id="dbf-add-folder-button" class="ghost-button" type="button"></button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="profile-row" id="dbf-mode-row">
+                <span class="profile-row-label" id="dbf-mode-label">Mode</span>
+                <div class="radio-group" role="radiogroup" aria-labelledby="dbf-mode-label">
+                  <label class="radio-pill">
+                    <input type="radio" name="dbf-mode" value="db" checked />
+                    <span>Database</span>
+                  </label>
+                  <label class="radio-pill">
+                    <input type="radio" name="dbf-mode" value="local" />
+                    <span>Local only</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="action-row">
+                <button id="dbf-scan-button" class="primary-button action-button" type="button"></button>
+              </div>
+            </div>
+          </article>
+
+          <!-- VAR Details + Run CTA -->
+          <article class="card details-card">
+            <header class="card-eyebrow">VAR Details</header>
+            <div id="dbf-var-info-panel" class="var-info-panel">
+              <p id="dbf-var-info-empty" class="var-info-empty"></p>
+              <div id="dbf-var-info-body" class="var-info-body hidden">
+                <div class="var-info-text">
+                  <h2 class="var-info-title">
+                    <span id="dbf-var-info-label"></span>
+                  </h2>
+                  <div class="var-info-grid">
+                    <div id="dbf-var-info-size-row" class="var-info-row">
+                      <span class="var-info-key" id="dbf-var-info-size-key"></span>
+                      <span id="dbf-var-info-size-val"></span>
+                    </div>
+                    <div id="dbf-var-info-time-row" class="var-info-row">
+                      <span class="var-info-key" id="dbf-var-info-time-key"></span>
+                      <span id="dbf-var-info-time-val"></span>
+                    </div>
+                    <div id="dbf-var-info-scene-row" class="var-info-row hidden">
+                      <span class="var-info-key" id="dbf-var-info-scene-key"></span>
+                      <span id="dbf-var-info-scene-val" class="var-info-val-mono"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="var-info-thumb hidden">
+                  <img id="dbf-var-info-scene-img" alt="scene preview" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Run-time settings: output/VAP folders + replace/backup/VAP
+                 toggles belong with the Run button, not the scan controls. -->
+            <div class="dbf-run-settings">
+              <div class="path-grid">
+                <div class="path-row">
+                  <span class="path-label" id="dbf-output-label"></span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">folder_open</span>
+                      <input id="dbf-output-dir" type="text" placeholder="D:\Vars_deduped" />
+                    </div>
+                    <button id="dbf-pick-output-button" class="ghost-button" type="button"></button>
+                    <button id="dbf-open-output-button" class="ghost-button" type="button"></button>
+                  </div>
+                </div>
+                <div class="path-row">
+                  <span class="path-label" id="dbf-vap-label"></span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">tune</span>
+                      <input id="dbf-vap-dir" type="text" placeholder="D:\VAM\Custom\Atom\Person\Appearance" />
+                    </div>
+                    <button id="dbf-pick-vap-button" class="ghost-button" type="button"></button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="toggle-row">
+                <label class="check-row">
+                  <input id="dbf-replace-in-place" type="checkbox" />
+                  <span id="dbf-replace-in-place-label"></span>
+                </label>
+                <label class="check-row">
+                  <input id="dbf-backup-changed" type="checkbox" checked disabled />
+                  <span id="dbf-backup-changed-label"></span>
+                </label>
+                <label class="check-row">
+                  <input id="dbf-process-vap" type="checkbox" />
+                  <span id="dbf-process-vap-label"></span>
+                </label>
+              </div>
+              <div id="dbf-replace-warning" class="replace-warning hidden"></div>
+            </div>
+
+            <div class="run-cta">
+              <div class="run-cta-text">
+                <span class="run-cta-eyebrow">Final Step</span>
+                <span class="run-cta-sub">Execute duplicate resolution</span>
+              </div>
+              <button id="dbf-run-button" class="accent-button action-button" type="button" disabled></button>
+            </div>
+          </article>
+        </section>
+
+        <!-- Progress -->
+        <section id="dbf-progress-card" class="progress-card card hidden">
+          <div class="progress-head">
+            <strong id="dbf-progress-title"></strong>
+            <span id="dbf-progress-percent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="dbf-progress-bar" class="progress-bar"></div>
+          </div>
+          <p id="dbf-progress-message" class="panel-subtitle"></p>
+        </section>
+
+        <!-- Groups + Detail -->
+        <section class="content-grid">
+          <!-- Left: Group Overview -->
+          <article class="panel card">
+            <div class="panel-head panel-head-groups">
+              <div class="panel-head-main">
+                <div class="groups-header-row">
+                  <h2 id="dbf-groups-title"></h2>
+                  <div class="group-filter-stack">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">search</span>
+                      <input id="dbf-group-filter" type="search" placeholder="Filter by path / package / hash" />
+                    </div>
+                  </div>
+                </div>
+                <p class="panel-subtitle" id="dbf-groups-subtitle"></p>
+                <div id="dbf-overview-stats" class="overview-stats">
+                  <span id="dbf-stat-packages-card" class="overview-stat">
+                    <span id="dbf-stat-packages-label"></span>
+                    <strong id="dbf-stat-packages">0</strong>
+                  </span>
+                  <span id="dbf-stat-groups-card" class="overview-stat">
+                    <span id="dbf-stat-groups-label"></span>
+                    <strong id="dbf-stat-groups">0</strong>
+                  </span>
+                  <span id="dbf-stat-space-card" class="overview-stat overview-stat-accent">
+                    <span id="dbf-stat-space-label"></span>
+                    <strong id="dbf-stat-space">0 B</strong>
+                  </span>
+                  <span id="dbf-stat-filtered-card" class="overview-stat">
+                    <span id="dbf-stat-filtered-label"></span>
+                    <strong id="dbf-stat-filtered">0</strong>
+                  </span>
+                  <span id="dbf-stat-modified-card" class="overview-stat">
+                    <span id="dbf-stat-modified-label"></span>
+                    <strong id="dbf-stat-modified">0</strong>
+                  </span>
+                  <span id="dbf-stat-current-size-card" class="overview-stat hidden">
+                    <span id="dbf-stat-current-size-label"></span>
+                    <strong id="dbf-stat-current-size">0 B</strong>
+                  </span>
+                  <span id="dbf-stat-estimated-size-card" class="overview-stat hidden">
+                    <span id="dbf-stat-estimated-size-label"></span>
+                    <strong id="dbf-stat-estimated-size">0 B</strong>
+                  </span>
+                  <span id="dbf-stat-reclaimed-size-card" class="overview-stat overview-stat-accent">
+                    <span id="dbf-stat-reclaimed-size-label"></span>
+                    <strong id="dbf-stat-reclaimed-size">0 B</strong>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <p class="selection-hint" id="dbf-selection-hint"></p>
+            <div id="dbf-group-list" class="group-list empty"></div>
+            <div id="dbf-group-pagination" class="group-pagination hidden"></div>
+          </article>
+
+          <!-- Right: Detail / Strategy -->
+          <article class="panel card">
+            <div class="panel-head">
+              <div>
+                <h2 id="dbf-detail-title"></h2>
+                <p class="panel-subtitle" id="dbf-detail-subtitle"></p>
+              </div>
+            </div>
+            <div id="dbf-detail-empty" class="detail-empty"></div>
+            <div id="dbf-detail-panel" class="detail-panel hidden">
+              <div class="detail-meta">
+                <div class="detail-block">
+                  <span id="dbf-detail-hash-label"></span>
+                  <code id="dbf-detail-hash"></code>
+                </div>
+                <div class="detail-chip-row">
+                  <span class="chip" id="dbf-detail-file-count"></span>
+                  <span class="chip chip-accent" id="dbf-detail-space"></span>
+                </div>
+              </div>
+
+              <section id="dbf-detail-preview" class="hidden"></section>
+
+              <section class="keep-actions">
+                <h3 id="dbf-keep-source-title"></h3>
+                <div id="dbf-source-info" class="dbf-source-info"></div>
+                <h4 class="dbf-section-title" id="dbf-local-section-title">Local candidates</h4>
+                <div id="dbf-local-candidates" class="keep-options dbf-keep-options"></div>
+                <div class="dbf-db-header">
+                  <h4 class="dbf-section-title" id="dbf-db-section-title">Database candidates</h4>
+                  <input
+                    id="dbf-source-filter"
+                    type="search"
+                    class="dbf-db-search"
+                    placeholder="Filter by package id…"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                </div>
+                <div id="dbf-db-candidates" class="keep-options dbf-keep-options"></div>
+              </section>
+
+              <section class="quick-actions">
+                <h3 id="dbf-quick-actions-title"></h3>
+                <div class="quick-button-row">
+                  <button id="dbf-reset-keep-button" class="ghost-button" type="button" disabled></button>
+                  <button id="dbf-export-resource-button" class="ghost-button" type="button" disabled></button>
+                </div>
+                <button id="dbf-auto-target-button" class="ghost-button apply-filtered-full" type="button" disabled></button>
+                <button id="dbf-fav-source-button" class="ghost-button apply-filtered-full" type="button" disabled></button>
+                <button id="dbf-apply-filtered-button" class="primary-button apply-filtered-full" type="button" disabled></button>
+                <p class="panel-subtitle" id="dbf-quick-actions-hint"></p>
+              </section>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <!-- Build Database View (hidden by default; revealed by sidebar Build Database link) -->
+      <section id="build-db-view" class="app-main build-db-view hidden">
+        <header class="settings-header">
+          <span class="settings-eyebrow">Indexing</span>
+          <h1 class="settings-title">Build Database</h1>
+          <p class="settings-subtitle">
+            Initialize or update the central index of your .var packages. This allows for near-instant
+            search results and advanced duplicate detection based on file hashes and content meta-data.
+          </p>
+        </header>
+
+        <!-- Database Status -->
+        <article class="card build-db-card build-db-status-card">
+          <div class="build-db-card-head build-db-card-head-split">
+            <div class="build-db-card-head-left">
+              <span class="material-symbols-outlined build-db-card-icon">database</span>
+              <h3 class="build-db-card-title" id="build-db-status-title">Database Status</h3>
+            </div>
+            <div class="build-db-status-pill" id="build-db-status-pill">
+              <span class="build-db-status-dot" id="build-db-status-dot"></span>
+              <span id="build-db-status-label">Empty</span>
+            </div>
+          </div>
+          <div class="build-db-stats build-db-stats-live">
+            <div class="build-db-stat">
+              <span class="material-symbols-outlined build-db-stat-icon">inventory_2</span>
+              <span class="build-db-stat-label" id="build-db-stat-packages-label">Packages</span>
+              <strong class="build-db-stat-value" id="build-db-stat-packages-value">—</strong>
+            </div>
+            <div class="build-db-stat">
+              <span class="material-symbols-outlined build-db-stat-icon">data_object</span>
+              <span class="build-db-stat-label" id="build-db-stat-resources-label">Resources</span>
+              <strong class="build-db-stat-value" id="build-db-stat-resources-value">—</strong>
+            </div>
+            <div class="build-db-stat">
+              <span class="material-symbols-outlined build-db-stat-icon">database</span>
+              <span class="build-db-stat-label" id="build-db-stat-size-label">DB Size</span>
+              <strong class="build-db-stat-value" id="build-db-stat-size-value">—</strong>
+            </div>
+            <div class="build-db-stat">
+              <span class="material-symbols-outlined build-db-stat-icon">schedule</span>
+              <span class="build-db-stat-label" id="build-db-stat-last-label">Last Indexed</span>
+              <strong class="build-db-stat-value" id="build-db-stat-last-value">—</strong>
+            </div>
+          </div>
+        </article>
+
+        <!-- Indexing Configuration -->
+        <article class="card build-db-card">
+          <div class="build-db-card-head">
+            <span class="material-symbols-outlined build-db-card-icon">storage</span>
+            <h3 class="build-db-card-title">Indexing Configuration</h3>
+          </div>
+          <div class="build-db-card-body">
+            <div class="build-db-field">
+              <label class="build-db-field-label" id="build-db-input-label" for="build-db-input-dir">VAR Folder</label>
+              <div class="input-with-button">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">folder</span>
+                  <input id="build-db-input-dir" type="text" placeholder="D:\Vars" />
+                </div>
+                <button id="build-db-pick-input" class="ghost-button" type="button">
+                  <span class="material-symbols-outlined">folder_open</span>
+                  <span id="build-db-pick-input-label">Browse</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="build-db-actions-row">
+              <div class="build-db-checks">
+                <label class="check-row">
+                  <input type="checkbox" checked />
+                  <span>Deep Scan (File Hashes)</span>
+                </label>
+                <label class="check-row">
+                  <input type="checkbox" />
+                  <span>Include .vap</span>
+                </label>
+              </div>
+              <button id="build-db-scan-button" class="primary-button build-db-cta" type="button">
+                <span class="material-symbols-outlined">bolt</span>
+                <span>Scan &amp; Index</span>
+              </button>
+            </div>
+
+            <div id="build-db-progress" class="build-db-progress hidden">
+              <div class="build-db-progress-head">
+                <div class="build-db-progress-text">
+                  <h4>Indexing Progress</h4>
+                  <p>
+                    Currently processing:
+                    <span id="build-db-progress-target" class="build-db-progress-target"></span>
+                  </p>
+                </div>
+                <span id="build-db-progress-pct" class="build-db-progress-pct">0%</span>
+              </div>
+              <div class="build-db-progress-track">
+                <div id="build-db-progress-fill" class="build-db-progress-fill" style="width: 0%"></div>
+              </div>
+            </div>
+
+          </div>
+        </article>
+
+        <!-- Download Links (Pixeldrain / MediaFire mirror DB) -->
+        <article class="card build-db-card">
+          <div class="build-db-card-head build-db-card-head-split">
+            <div class="build-db-card-head-left">
+              <span class="material-symbols-outlined build-db-card-icon">link</span>
+              <h3 class="build-db-card-title">Download Links</h3>
+            </div>
+            <div class="build-db-status-pill">
+              <span id="dl-links-count">0</span>&nbsp;<span>links</span>
+            </div>
+          </div>
+          <div class="build-db-card-body">
+            <p class="reclaim-help">
+              Import community Pixeldrain / MediaFire mirror lists so Find Dependencies / Scan Dependencies
+              can find sources for packages that aren't on the VaM Hub. Point at a <code>_Download_Links</code> folder (one
+              <code>.txt</code> per creator) or a single text file of
+              <code>Creator.Package.N.var&nbsp;&nbsp;https://…</code> lines.
+            </p>
+            <div class="build-db-field">
+              <label class="build-db-field-label" for="dl-links-folder">Links folder</label>
+              <div class="input-with-button">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">folder</span>
+                  <input id="dl-links-folder" type="text" placeholder="…\_Download_Links" spellcheck="false" />
+                </div>
+                <button id="dl-links-folder-pick" class="ghost-button" type="button">
+                  <span class="material-symbols-outlined">folder_open</span><span>Browse</span>
+                </button>
+                <button id="dl-links-folder-import" class="primary-button" type="button">Import folder</button>
+              </div>
+            </div>
+            <div class="build-db-field">
+              <label class="build-db-field-label" for="dl-links-file">Links file</label>
+              <div class="input-with-button">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">description</span>
+                  <input id="dl-links-file" type="text" placeholder="…\links.txt" spellcheck="false" />
+                </div>
+                <button id="dl-links-file-pick" class="ghost-button" type="button">
+                  <span class="material-symbols-outlined">file_open</span><span>Browse</span>
+                </button>
+                <button id="dl-links-file-import" class="primary-button" type="button">Import file</button>
+              </div>
+            </div>
+            <div class="build-db-actions-row">
+              <p class="reclaim-help" id="dl-links-status"></p>
+              <button id="dl-links-clear" class="ghost-button" type="button">
+                <span class="material-symbols-outlined">delete</span><span>Clear links</span>
+              </button>
+            </div>
+            <div id="dl-links-progress" class="build-db-progress hidden">
+              <div class="build-db-progress-head">
+                <div class="build-db-progress-text">
+                  <h4>Importing links</h4>
+                  <p id="dl-links-progress-msg"></p>
+                </div>
+                <span id="dl-links-progress-pct" class="build-db-progress-pct">0%</span>
+              </div>
+              <div class="build-db-progress-track">
+                <div id="dl-links-progress-fill" class="build-db-progress-fill" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+
+        <!-- Unified Bulk Import -->
+        <section class="build-db-section">
+          <div class="build-db-section-head">
+            <span class="material-symbols-outlined build-db-card-icon">cloud_upload</span>
+            <h3 class="build-db-card-title">Unified Bulk Import</h3>
+          </div>
+          <div class="build-db-import-grid">
+            <article class="card build-db-import-card">
+              <div class="build-db-import-body">
+                <div id="build-db-bulk-dropzone" class="build-db-dropzone" role="button" tabindex="0">
+                  <span class="material-symbols-outlined build-db-dropzone-icon">upload_file</span>
+                  <p class="build-db-dropzone-text" id="build-db-bulk-dropzone-text">
+                    Click to browse for a manifest .txt file
+                  </p>
+                  <p class="build-db-dropzone-hint" id="build-db-bulk-dropzone-hint">
+                    Supports CRC32 registry via plain text manifest
+                  </p>
+                  <input id="build-db-bulk-file-input" type="file" accept=".txt" hidden />
+                </div>
+                <p id="build-db-bulk-selected" class="build-db-bulk-selected hidden">
+                  <span class="material-symbols-outlined">description</span>
+                  <span id="build-db-bulk-selected-path"></span>
+                </p>
+              </div>
+              <div class="build-db-import-actions">
+                <button id="build-db-bulk-cancel-button" class="ghost-button" type="button" disabled>
+                  <span id="build-db-bulk-cancel-label">Cancel</span>
+                </button>
+                <button id="build-db-bulk-start-button" class="primary-button" type="button" disabled>
+                  <span class="material-symbols-outlined">publish</span>
+                  <span id="build-db-bulk-start-label">Start Bulk Import</span>
+                </button>
+              </div>
+            </article>
+            <article class="card build-db-import-side">
+              <div class="build-db-import-side-head">
+                <span class="material-symbols-outlined">sync</span>
+                <span id="build-db-bulk-activity-title">Import Activity</span>
+              </div>
+              <div class="build-db-import-side-body">
+                <div id="build-db-bulk-progress" class="build-db-mini-progress hidden">
+                  <div class="build-db-mini-progress-row">
+                    <span class="build-db-mini-progress-label" id="build-db-bulk-progress-label">Manifest Import</span>
+                    <span id="build-db-bulk-progress-pct" class="build-db-mini-progress-pct">0%</span>
+                  </div>
+                  <div class="build-db-mini-progress-track">
+                    <div id="build-db-bulk-progress-fill" class="build-db-mini-progress-fill" style="width: 0%"></div>
+                  </div>
+                  <div class="build-db-mini-progress-meta">
+                    <span id="build-db-bulk-progress-counts">0 / 0 lines</span>
+                    <span id="build-db-bulk-progress-status">Idle</span>
+                  </div>
+                </div>
+                <p id="build-db-bulk-idle" class="build-db-import-note">
+                  Pick a manifest file and click Start to import. Resources already deeply hashed
+                  by a real scan are preserved.
+                </p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <!-- Backfill Resource Sizes -->
+        <section class="build-db-section">
+          <div class="build-db-section-head">
+            <span class="material-symbols-outlined build-db-card-icon">straighten</span>
+            <h3 class="build-db-card-title">Backfill Resource Sizes</h3>
+          </div>
+          <article class="card build-db-import-card">
+            <p class="build-db-import-note">
+              Patch DB rows whose <code>size</code> is missing — typically those imported from a
+              CRC manifest — by harvesting the real size from .var files in a folder. Runs in the
+              background and can be cancelled mid-flight.
+            </p>
+            <div class="build-db-field">
+              <label class="build-db-field-label" for="build-db-backfill-input">VAR Folder</label>
+              <div class="input-with-button">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">folder</span>
+                  <input id="build-db-backfill-input" type="text" placeholder="D:\Vars" spellcheck="false" />
+                </div>
+                <button id="build-db-backfill-pick" class="ghost-button" type="button">
+                  <span class="material-symbols-outlined">folder_open</span>
+                  <span>Browse</span>
+                </button>
+              </div>
+            </div>
+            <div class="build-db-import-actions">
+              <button id="build-db-backfill-cancel" class="ghost-button" type="button" disabled>
+                <span>Cancel</span>
+              </button>
+              <button id="build-db-backfill-start" class="primary-button" type="button">
+                <span class="material-symbols-outlined">straighten</span>
+                <span>Start Backfill</span>
+              </button>
+            </div>
+            <div id="build-db-backfill-progress" class="build-db-mini-progress hidden">
+              <div class="build-db-mini-progress-row">
+                <span class="build-db-mini-progress-label">Backfill</span>
+                <span id="build-db-backfill-progress-pct" class="build-db-mini-progress-pct">0%</span>
+              </div>
+              <div class="build-db-mini-progress-track">
+                <div id="build-db-backfill-progress-fill" class="build-db-mini-progress-fill" style="width: 0%"></div>
+              </div>
+              <div class="build-db-mini-progress-meta">
+                <span id="build-db-backfill-progress-status">Idle</span>
+              </div>
+            </div>
+            <p id="build-db-backfill-result" class="build-db-import-note hidden"></p>
+          </article>
+        </section>
+
+        <!-- Recent Activity -->
+        <section class="build-db-section">
+          <div class="build-db-section-head">
+            <span class="material-symbols-outlined build-db-card-icon">history</span>
+            <h3 class="build-db-card-title">Recent Activity</h3>
+          </div>
+          <article class="card build-db-activity">
+            <table class="build-db-activity-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Action</th>
+                  <th>Target</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>2023-11-24 14:22</td>
+                  <td class="build-db-activity-action">Manual Indexing</td>
+                  <td class="build-db-activity-target">C:/Users/Admin/VAM_Deduper/local_db.sqlite</td>
+                  <td>
+                    <span class="build-db-status build-db-status-success">Success</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>2023-11-24 12:05</td>
+                  <td class="build-db-activity-action">Bulk Import</td>
+                  <td class="build-db-activity-target">manifest_v1.txt</td>
+                  <td>
+                    <span class="build-db-status build-db-status-info">Completed</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>2023-11-24 09:15</td>
+                  <td class="build-db-activity-action">Database Backup</td>
+                  <td class="build-db-activity-target">backup_20231124.db</td>
+                  <td>
+                    <span class="build-db-status build-db-status-success">Success</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </article>
+        </section>
+      </section>
+
+      <!-- VAR Packages View (hidden by default; revealed by sidebar VAR Packages link) -->
+      <section id="var-packages-view" class="app-main var-packages-view hidden">
+        <header class="var-packages-header">
+          <div class="var-packages-title-row">
+            <h1 class="var-packages-title" id="var-packages-title">VAR Packages</h1>
+            <span class="var-packages-count" id="var-packages-count">0 Packages Found</span>
+          </div>
+          <p class="var-packages-subtitle" id="var-packages-subtitle">
+            Browse every .var package in a folder. Status reflects whether the package is currently
+            indexed in your local database.
+          </p>
+          <div class="var-packages-mode-row">
+            <div class="mode-switch" role="tablist" aria-label="Source">
+              <button id="var-packages-mode-database" class="mode-button" type="button" role="tab" aria-selected="false">
+                <span class="material-symbols-outlined">database</span>
+                <span id="var-packages-mode-database-label">Database</span>
+              </button>
+              <button id="var-packages-mode-folders" class="mode-button active" type="button" role="tab" aria-selected="true">
+                <span class="material-symbols-outlined">folder</span>
+                <span id="var-packages-mode-folders-label">VAR Folders</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <!-- Recycling/moving packages leaves packages.file_path pointing at the
+             old location. We deliberately never write to the database from the
+             apply path, so this banner is how the staleness surfaces — a log
+             line would scroll away inside a drawer that is closed by default. -->
+        <div id="var-packages-db-stale" class="vp-db-stale hidden">
+          <span class="material-symbols-outlined">warning</span>
+          <span id="var-packages-db-stale-text"></span>
+          <button id="var-packages-db-stale-rebuild" class="ghost-button" type="button">
+            Rebuild Database
+          </button>
+        </div>
+
+        <article class="card var-packages-controls">
+          <div id="var-packages-folder-controls" class="build-db-field">
+            <label class="build-db-field-label" id="var-packages-input-label" for="var-packages-input-dir">VAR Folder</label>
+            <div class="input-with-button">
+              <div class="input-with-icon">
+                <span class="material-symbols-outlined input-leading-icon">folder</span>
+                <input id="var-packages-input-dir" type="text" placeholder="D:\Vars" />
+              </div>
+              <button id="var-packages-pick-input" class="ghost-button" type="button">
+                <span class="material-symbols-outlined">folder_open</span>
+                <span id="var-packages-pick-input-label">Browse</span>
+              </button>
+              <button id="var-packages-scan-button" class="primary-button" type="button">
+                <span class="material-symbols-outlined">sync</span>
+                <span id="var-packages-scan-label">Scan Directory</span>
+              </button>
+            </div>
+            <div class="vp-depth-row">
+              <span class="vp-depth-label">Scan depth</span>
+              <div class="mode-switch" role="tablist" aria-label="Scan depth">
+                <button id="var-packages-depth-deep" class="mode-button active" type="button" role="tab" aria-selected="true">
+                  <span class="material-symbols-outlined">account_tree</span>
+                  <span>Deep</span>
+                </button>
+                <button id="var-packages-depth-normal" class="mode-button" type="button" role="tab" aria-selected="false">
+                  <span class="material-symbols-outlined">description</span>
+                  <span>Normal</span>
+                </button>
+              </div>
+              <span class="vp-depth-hint" id="var-packages-depth-hint"></span>
+            </div>
+            <div class="build-db-field">
+              <label class="build-db-field-label" id="var-packages-additional-dirs-label"></label>
+              <div class="additional-dirs">
+                <div id="var-packages-additional-dirs" class="additional-dirs-list"></div>
+                <button id="var-packages-add-folder-button" class="ghost-button" type="button"></button>
+              </div>
+            </div>
+            <!-- Inside #var-packages-folder-controls on purpose: these are path
+                 operations, and applyVarPackagesModeUi already hides this whole
+                 container in Database mode, so they cannot be reached there. -->
+            <div class="vp-maintenance-row">
+              <button id="var-packages-clean-dupes" class="ghost-button" type="button">
+                <span class="material-symbols-outlined">content_copy</span>
+                <span>Clean Duplicates</span>
+              </button>
+              <button id="var-packages-organize" class="ghost-button" type="button">
+                <span class="material-symbols-outlined">create_new_folder</span>
+                <span>Organize by Creator</span>
+              </button>
+              <button id="var-packages-find-deps" class="ghost-button" type="button">
+                <span class="material-symbols-outlined">content_paste</span>
+                <span>Find Dependencies</span>
+              </button>
+              <button id="var-packages-export-scenes" class="ghost-button" type="button">
+                <span class="material-symbols-outlined">image</span>
+                <span id="var-packages-export-scenes-label">Export Scene Images</span>
+              </button>
+              <span class="vp-maintenance-hint">
+                Acts on the VAR Folder and any additional folders above &mdash; not on the current filter.
+              </span>
+            </div>
+          </div>
+          <div id="var-packages-db-controls" class="var-packages-db-controls hidden">
+            <p class="var-packages-db-hint" id="var-packages-db-hint">
+              Listing every package recorded in the local database.
+            </p>
+            <button id="var-packages-db-refresh-button" class="primary-button" type="button">
+              <span class="material-symbols-outlined">sync</span>
+              <span id="var-packages-db-refresh-label">Refresh</span>
+            </button>
+          </div>
+          <div class="var-packages-search">
+            <span class="material-symbols-outlined input-leading-icon">search</span>
+            <input id="var-packages-filter" type="text" placeholder="Search packages..." />
+          </div>
+        </article>
+
+        <div class="var-packages-filter-bar" id="var-packages-filter-bar">
+          <span class="vp-filter-label" id="var-packages-filter-bar-label">Filters:</span>
+          <div class="vp-filter-buttons">
+            <div class="vp-filter-dropdown" data-vp-filter="size">
+              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="size">
+                <span class="vp-filter-chip-label" id="var-packages-filter-size-label">Size: All</span>
+                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
+              </button>
+              <div class="vp-filter-menu hidden" data-vp-menu="size" role="menu"></div>
+            </div>
+            <div class="vp-filter-dropdown" data-vp-filter="creator">
+              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="creator">
+                <span class="vp-filter-chip-label" id="var-packages-filter-creator-label">Creator: All</span>
+                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
+              </button>
+              <div class="vp-filter-menu vp-filter-menu-search hidden" data-vp-menu="creator" role="menu">
+                <input type="text" class="vp-filter-menu-search-input" data-vp-menu-search="creator" placeholder="Search…" />
+                <div class="vp-filter-menu-list" data-vp-menu-list="creator"></div>
+              </div>
+            </div>
+            <div class="vp-filter-dropdown" data-vp-filter="favorites">
+              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="favorites">
+                <span class="vp-filter-chip-label" id="var-packages-filter-favorites-label">Favorites</span>
+                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
+              </button>
+              <div class="vp-filter-menu hidden" data-vp-menu="favorites" role="menu"></div>
+            </div>
+            <label class="vp-filter-chip vp-filter-check" for="var-packages-filter-scene">
+              <input type="checkbox" id="var-packages-filter-scene" />
+              <span id="var-packages-filter-scene-label">Scene image</span>
+            </label>
+            <!-- Sort is NOT a filter: it lives in state.varPackagesSort, is not
+                 counted by activeVarPackageFilterCount, and "Clear All" leaves
+                 it alone. It shares the chip markup purely for appearance. -->
+            <div class="vp-filter-dropdown" data-vp-filter="sort">
+              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="sort">
+                <span class="vp-filter-chip-label" id="var-packages-filter-sort-label">Sort: Name</span>
+                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
+              </button>
+              <div class="vp-filter-menu hidden" data-vp-menu="sort" role="menu"></div>
+            </div>
+            <button type="button" class="vp-filter-clear hidden" id="var-packages-filter-clear">Clear All</button>
+          </div>
+        </div>
+
+        <div class="vp-selection-bar hidden" id="var-packages-selection-bar">
+          <span class="vp-selection-count" id="var-packages-selection-count"></span>
+          <button id="var-packages-select-all" class="ghost-button" type="button">Select all</button>
+          <button id="var-packages-select-page" class="ghost-button" type="button">Select page</button>
+          <button id="var-packages-selection-clear" class="ghost-button" type="button">Unselect all</button>
+          <span class="vp-selection-spacer"></span>
+          <button id="var-packages-bulk-delete" class="ghost-button vp-bulk-danger" type="button">
+            <span class="material-symbols-outlined">delete</span><span>Delete</span>
+          </button>
+          <button id="var-packages-bulk-organize" class="ghost-button" type="button">
+            <span class="material-symbols-outlined">create_new_folder</span><span>Organize by Creator</span>
+          </button>
+          <button id="var-packages-bulk-export" class="ghost-button" type="button">
+            <span class="material-symbols-outlined">image</span><span>Export Scene Images</span>
+          </button>
+        </div>
+
+        <article class="card var-packages-table-card">
+          <div id="var-packages-progress" class="var-packages-progress hidden" aria-hidden="true">
+            <div class="var-packages-progress-bar"></div>
+          </div>
+          <div class="var-packages-table-wrap">
+            <table class="var-packages-table">
+              <thead>
+                <tr>
+                  <th class="vp-col-select" aria-label="Select"></th>
+                  <th class="vp-col-status" id="var-packages-th-status">Status</th>
+                  <th class="vp-col-name" id="var-packages-th-name">Package Name</th>
+                  <th class="vp-col-creator" id="var-packages-th-creator">Creator</th>
+                  <th class="vp-col-size" id="var-packages-th-size">Size</th>
+                  <th class="vp-col-modified" id="var-packages-th-modified">Last Modified</th>
+                  <th class="vp-col-actions" aria-label="Actions"></th>
+                </tr>
+              </thead>
+              <tbody id="var-packages-tbody">
+                <tr class="var-packages-empty-row">
+                  <td colspan="7" id="var-packages-empty">
+                    Pick a VAR folder and click Scan Directory to list packages.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="var-packages-grid" class="var-packages-grid hidden"></div>
+          <div id="var-packages-pagination" class="var-packages-pagination hidden">
+            <span class="var-packages-pagination-summary" id="var-packages-pagination-summary"></span>
+            <div class="var-packages-pagination-controls" id="var-packages-pagination-controls"></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- VAR Details View (hidden by default; revealed by clicking a row in VAR Packages) -->
+      <section id="var-details-view" class="app-main var-details-view hidden">
+        <header class="var-details-header">
+          <button class="var-details-back" id="var-details-back" type="button">
+            <span class="material-symbols-outlined">arrow_back</span>
+            <span>VAR Packages</span>
+          </button>
+          <h1 class="var-details-title" id="var-details-title">VAR Details</h1>
+          <button class="var-details-fav-btn" id="var-details-fav-button" type="button" hidden
+                  aria-pressed="false" title="Add to favorites">
+            <span class="material-symbols-outlined">star</span>
+            <span class="var-details-fav-label" id="var-details-fav-label">Favorite</span>
+          </button>
+        </header>
+
+        <div class="var-details-grid">
+          <article class="card var-details-source">
+            <header class="card-eyebrow">Source Configuration</header>
+            <div class="var-details-dropzone" id="var-details-dropzone">
+              <div class="var-details-dropzone-icon">
+                <span class="material-symbols-outlined">upload_file</span>
+              </div>
+              <h4 class="var-details-dropzone-title">Drag and drop package files</h4>
+              <p class="var-details-dropzone-subtitle">Supports .var, .zip and .vmi. Max 2GB.</p>
+              <div class="var-details-dropzone-actions">
+                <button id="var-details-select-files" class="primary-button" type="button">Select Files</button>
+                <span class="var-details-dropzone-or">or</span>
+                <button id="var-details-browse-dir" class="ghost-button" type="button">Browse Directory</button>
+              </div>
+            </div>
+            <div class="var-details-action">
+              <div class="var-details-folder-field">
+                <label class="var-details-folder-label" for="var-details-package-input">Package File</label>
+                <div class="var-details-folder-row">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">description</span>
+                    <input id="var-details-package-input" type="text" placeholder="C:\Path\To\Creator.Package.var" spellcheck="false" />
+                  </div>
+                  <button id="var-details-package-pick" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">file_open</span>
+                    <span>Browse</span>
+                  </button>
+                </div>
+              </div>
+              <div class="var-details-folder-field">
+                <label class="var-details-folder-label" for="var-details-folder-input">VAR Folder (for Scan Local)</label>
+                <div class="var-details-folder-row">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">folder</span>
+                    <input id="var-details-folder-input" type="text" placeholder="D:\Vars" spellcheck="false" />
+                  </div>
+                  <button id="var-details-folder-pick" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span>Browse</span>
+                  </button>
+                </div>
+              </div>
+              <div class="var-details-folder-field">
+                <label class="var-details-folder-label" id="var-details-additional-dirs-label"></label>
+                <div class="additional-dirs">
+                  <div id="var-details-additional-dirs" class="additional-dirs-list"></div>
+                  <button id="var-details-add-folder-button" class="ghost-button" type="button"></button>
+                </div>
+              </div>
+              <div class="var-details-scan-buttons">
+                <button id="var-details-scan-db-button" class="var-details-scan-button is-primary" type="button">
+                  <span class="material-symbols-outlined">database</span>
+                  <span id="var-details-scan-db-label">Scan to Database</span>
+                </button>
+                <button id="var-details-scan-local-button" class="var-details-scan-button is-secondary" type="button">
+                  <span class="material-symbols-outlined">folder_zip</span>
+                  <span id="var-details-scan-local-label">Scan Local</span>
+                </button>
+                <button id="var-details-scan-deps-button" class="var-details-scan-button is-secondary" type="button">
+                  <span class="material-symbols-outlined">account_tree</span>
+                  <span id="var-details-scan-deps-label">Scan Dependencies</span>
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card var-details-info">
+            <header class="card-eyebrow">VAR Info</header>
+            <!-- Availability banner: shown only when the opened VAR isn't present
+                 locally, offering to download it from the Hub. JS-rendered. -->
+            <div id="var-details-availability" class="var-details-availability hidden"></div>
+            <div class="var-details-info-body">
+              <div class="var-details-preview" id="var-details-preview">
+                <span class="material-symbols-outlined">image_not_supported</span>
+                <div class="var-details-preview-caption">Scene Preview</div>
+              </div>
+              <div class="var-details-meta">
+                <div class="var-details-meta-tile">
+                  <span class="var-details-meta-label">Filename</span>
+                  <span class="var-details-meta-value" id="var-details-meta-filename">—</span>
+                </div>
+                <div class="var-details-meta-tile">
+                  <span class="var-details-meta-label">Creator</span>
+                  <span class="var-details-meta-value" id="var-details-meta-creator">—</span>
+                  <div class="var-details-creator-flags" id="var-details-creator-flags" hidden>
+                    <button
+                      type="button"
+                      class="var-details-creator-flag-btn"
+                      data-creator-flag="favorite"
+                      id="var-details-creator-flag-favorite"
+                      title="Favorite: this creator's VARs won't be scanned for replacement"
+                    >★ Favorite</button>
+                    <button
+                      type="button"
+                      class="var-details-creator-flag-btn"
+                      data-creator-flag="blocked"
+                      id="var-details-creator-flag-blocked"
+                      title="Block: this creator's packages won't appear as download candidates"
+                    >⊘ Block</button>
+                  </div>
+                </div>
+                <div class="var-details-meta-tile">
+                  <span class="var-details-meta-label">Size</span>
+                  <span class="var-details-meta-value" id="var-details-meta-size">—</span>
+                </div>
+                <div class="var-details-meta-tile">
+                  <span class="var-details-meta-label">Modified Date</span>
+                  <span class="var-details-meta-value" id="var-details-meta-modified">—</span>
+                </div>
+                <div class="var-details-meta-tile var-details-meta-status" id="var-details-meta-status-tile">
+                  <div>
+                    <span class="var-details-meta-label">Status</span>
+                    <span class="var-details-meta-value" id="var-details-meta-status">—</span>
+                  </div>
+                  <span class="var-details-status-dot" id="var-details-status-dot"></span>
+                </div>
+                <div class="var-details-meta-tile var-details-meta-path" id="var-details-meta-path-tile" hidden>
+                  <div>
+                    <span class="var-details-meta-label">Path</span>
+                    <span class="var-details-meta-value" id="var-details-meta-path" title="">—</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="var-details-meta-path-action"
+                    id="var-details-meta-path-action"
+                    title="Show in Explorer"
+                    aria-label="Show in Explorer"
+                    hidden
+                  >
+                    <span class="material-symbols-outlined">folder_open</span>
+                  </button>
+                </div>
+                <div class="var-details-meta-tile var-details-meta-sendto" id="var-details-meta-sendto-tile" hidden>
+                  <span class="var-details-meta-label">Send as Target VAR</span>
+                  <div class="var-details-meta-sendto-actions">
+                    <button
+                      type="button"
+                      class="var-details-meta-sendto-button"
+                      id="var-details-send-dbfind"
+                      title="Send to Clean VARs as Target VAR"
+                    >
+                      <span class="material-symbols-outlined">difference</span>
+                      <span>Clean VARs</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="var-details-meta-sendto-button"
+                      id="var-details-send-missing-button"
+                      title="Send the current VAR to the Missing Resources page as the Target VAR and switch to that view."
+                    >
+                      <span class="material-symbols-outlined">link_off</span>
+                      <span>Missing Resources</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="var-details-meta-sendto-button"
+                      id="var-details-send-internalize-button"
+                      title="Send the current VAR to the Internalize Resources page as the Target VAR and switch to that view."
+                    >
+                      <span class="material-symbols-outlined">download_for_offline</span>
+                      <span>Internalize Resources</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <!-- Progress -->
+        <article class="card var-details-progress-card" id="var-details-progress-card">
+          <div class="var-details-pipeline">
+            <div class="var-details-pipeline-row">
+              <span class="var-details-pipeline-label">Progress</span>
+              <span class="var-details-pipeline-percent" id="var-details-pipeline-percent">0%</span>
+            </div>
+            <div class="var-details-pipeline-track">
+              <div class="var-details-pipeline-fill" id="var-details-pipeline-fill"></div>
+            </div>
+            <div class="var-details-pipeline-status">
+              <span class="var-details-pipeline-dot" id="var-details-pipeline-dot"></span>
+              <span class="var-details-pipeline-text" id="var-details-pipeline-text">Idle</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- Overlap Summary -->
+        <article class="card var-details-overlap" id="var-details-overlap-card">
+          <header class="var-details-overlap-header">
+            <div class="var-details-overlap-title">
+              <h3>Overlap Analysis</h3>
+              <span class="var-details-asset-count" id="var-details-overlap-source">Not Scanned</span>
+            </div>
+            <span class="var-details-overlap-hint" id="var-details-overlap-hint">
+              Run a scan to compare this package against your collection.
+            </span>
+          </header>
+          <div class="var-details-overlap-grid" id="var-details-overlap-grid">
+            <div class="var-details-stat-tile">
+              <span class="var-details-stat-label">Total Resources</span>
+              <span class="var-details-stat-value" id="var-details-stat-total">—</span>
+            </div>
+            <div class="var-details-stat-tile">
+              <span class="var-details-stat-label">Shared</span>
+              <span class="var-details-stat-value" id="var-details-stat-shared">—</span>
+              <span class="var-details-stat-sub" id="var-details-stat-shared-sub"></span>
+            </div>
+            <div class="var-details-stat-tile">
+              <span class="var-details-stat-label">Unique</span>
+              <span class="var-details-stat-value" id="var-details-stat-unique">—</span>
+              <span class="var-details-stat-sub" id="var-details-stat-unique-sub"></span>
+            </div>
+            <div class="var-details-stat-tile">
+              <span class="var-details-stat-label">Reclaimable</span>
+              <span class="var-details-stat-value" id="var-details-stat-reclaim">—</span>
+              <span class="var-details-stat-sub">across other VARs</span>
+            </div>
+          </div>
+          <div class="var-details-verdict" id="var-details-verdict" hidden></div>
+        </article>
+
+        <!-- Top Sharing Packages -->
+        <article class="card var-details-top-packages" id="var-details-top-packages-card">
+          <header class="var-details-top-packages-header">
+            <div class="var-details-top-packages-title">
+              <h3>Top Sharing Packages</h3>
+              <div class="var-details-filter-group" id="var-details-top-packages-sort" role="tablist" aria-label="Top sharing sort" hidden>
+                <button class="var-details-filter-button is-active" type="button" role="tab" aria-selected="true" data-top-sort="count">By Count</button>
+                <button class="var-details-filter-button" type="button" role="tab" aria-selected="false" data-top-sort="size">By Size</button>
+              </div>
+            </div>
+            <span class="var-details-top-packages-hint" id="var-details-top-packages-hint">
+              Other VARs that contain the most resources from this package.
+            </span>
+          </header>
+          <ul class="var-details-top-packages-list" id="var-details-top-packages-list">
+            <li class="var-details-top-packages-empty" id="var-details-top-packages-empty">
+              Run a scan to see overlapping packages.
+            </li>
+          </ul>
+        </article>
+
+        <!-- Resources -->
+        <article class="card var-details-browser">
+          <header class="var-details-browser-header">
+            <div class="var-details-browser-title">
+              <h3>Resources</h3>
+              <span class="var-details-asset-count" id="var-details-asset-count">Not Scanned</span>
+            </div>
+            <div class="var-details-browser-actions">
+              <div class="var-details-filter-group" role="tablist" aria-label="Resource filter">
+                <button id="var-details-filter-all" class="var-details-filter-button is-active" type="button" role="tab" aria-selected="true" data-resource-filter="all">All</button>
+                <button id="var-details-filter-shared" class="var-details-filter-button" type="button" role="tab" aria-selected="false" data-resource-filter="shared">Shared</button>
+              </div>
+              <div class="var-details-search">
+                <span class="material-symbols-outlined input-leading-icon">search</span>
+                <input id="var-details-search" type="text" placeholder="Search resources..." />
+              </div>
+            </div>
+          </header>
+          <div class="var-details-table-wrap">
+            <table class="var-details-table">
+              <thead>
+                <tr>
+                  <th class="vd-col-preview">Type</th>
+                  <th class="vd-col-name">Resource</th>
+                  <th class="vd-col-cat">Category</th>
+                  <th class="vd-col-crc">CRC32</th>
+                  <th class="vd-col-category">Sharing</th>
+                  <th class="vd-col-size">Size</th>
+                </tr>
+              </thead>
+              <tbody id="var-details-tbody">
+                <tr class="var-details-empty-row">
+                  <td colspan="6" id="var-details-empty">
+                    Select a package to view its resources.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="var-details-browser-footer">
+            <span id="var-details-browser-summary"></span>
+            <div class="var-details-pagination" id="var-details-pagination" hidden>
+              <button class="var-details-page-nav" id="var-details-page-prev" type="button">
+                <span class="material-symbols-outlined">chevron_left</span>
+              </button>
+              <span class="var-details-page-indicator" id="var-details-page-indicator">1 / 1</span>
+              <button class="var-details-page-nav" id="var-details-page-next" type="button">
+                <span class="material-symbols-outlined">chevron_right</span>
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <!-- Sheet-style overlay panel for the active resource preview. Lives at
+             the end of the view so its fixed position is relative to the
+             viewport, mirroring the shadcn/ui Sheet component (slides in from
+             the right with an overlay). Hidden by default. -->
+        <div id="var-details-resource-preview-overlay" class="var-details-sheet-overlay hidden" data-vd-preview-close="1"></div>
+        <aside
+          id="var-details-resource-preview"
+          class="var-details-sheet card hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="var-details-resource-preview-title"
+        ></aside>
+      </section>
+
+      <!-- Reclaim Space View (hidden by default; revealed by sidebar Reclaim Space link).
+           Scans a folder of local VARs, aggregates their unique CRC set, and ranks DB
+           packages by total bytes covered — the user could download those packages and
+           rewire local VARs to depend on the shared resources, reclaiming duplicate bytes. -->
+      <section id="reclaim-space-view" class="app-main reclaim-space-view hidden">
+        <header class="var-details-header">
+          <h1 class="var-details-title">Reclaim Space</h1>
+          <span class="var-details-eyebrow">Find downloadable VARs that cover your local resources</span>
+        </header>
+
+        <div class="var-details-grid">
+          <article class="card var-details-source">
+            <header class="card-eyebrow">Source Folder</header>
+            <div class="var-details-action">
+              <div class="var-details-folder-field">
+                <label class="var-details-folder-label" for="reclaim-folder-input">Local VAR Folder</label>
+                <div class="var-details-folder-row">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">folder</span>
+                    <input id="reclaim-folder-input" type="text" placeholder="D:\Vars" spellcheck="false" />
+                  </div>
+                  <button id="reclaim-folder-pick" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span>Browse</span>
+                  </button>
+                </div>
+              </div>
+              <div class="var-details-folder-field">
+                <label class="var-details-folder-label" id="reclaim-additional-dirs-label"></label>
+                <div class="additional-dirs">
+                  <div id="reclaim-additional-dirs" class="additional-dirs-list"></div>
+                  <button id="reclaim-add-folder-button" class="ghost-button" type="button"></button>
+                </div>
+              </div>
+              <div class="var-details-scan-buttons">
+                <button id="reclaim-scan-button" class="var-details-scan-button is-primary" type="button">
+                  <span class="material-symbols-outlined">search</span>
+                  <span>Scan Folder</span>
+                </button>
+              </div>
+              <p class="reclaim-help">
+                Walks every <code>.var</code> in the folder, deduplicates the resource set,
+                then queries the database for packages that cover the largest share of
+                bytes. Top results are candidates you can download to replace duplicate
+                local resources with dependency links.
+              </p>
+            </div>
+          </article>
+
+          <article class="card var-details-info">
+            <header class="card-eyebrow">Local Summary</header>
+            <div class="var-details-overlap-grid">
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">VARs Scanned</span>
+                <span class="var-details-stat-value" id="reclaim-stat-vars">—</span>
+              </div>
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">Unique Resources</span>
+                <span class="var-details-stat-value" id="reclaim-stat-resources">—</span>
+              </div>
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">Total Bytes</span>
+                <span class="var-details-stat-value" id="reclaim-stat-bytes">—</span>
+              </div>
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">Candidates Found</span>
+                <span class="var-details-stat-value" id="reclaim-stat-candidates">—</span>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="card var-details-progress-card" id="reclaim-progress-card">
+          <div class="var-details-pipeline">
+            <div class="var-details-pipeline-row">
+              <span class="var-details-pipeline-label">Progress</span>
+              <span class="var-details-pipeline-percent" id="reclaim-progress-percent">0%</span>
+            </div>
+            <div class="var-details-pipeline-track">
+              <div class="var-details-pipeline-fill" id="reclaim-progress-fill"></div>
+            </div>
+            <div class="var-details-pipeline-status">
+              <span class="var-details-pipeline-dot" id="reclaim-progress-dot"></span>
+              <span class="var-details-pipeline-text" id="reclaim-progress-text">Idle</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="card var-details-browser">
+          <header class="var-details-browser-header">
+            <div class="var-details-browser-title">
+              <h3>Top Replacement Candidates</h3>
+              <span class="var-details-asset-count" id="reclaim-candidate-count">Not Scanned</span>
+            </div>
+          </header>
+          <div class="var-details-table-wrap">
+            <table class="var-details-table reclaim-table">
+              <thead>
+                <tr>
+                  <th class="vd-col-name" data-reclaim-sort="package">Package</th>
+                  <th class="vd-col-cat" data-reclaim-sort="creator">Creator</th>
+                  <th class="vd-col-size" data-reclaim-sort="count">Resources Matched</th>
+                  <th class="vd-col-size" data-reclaim-sort="bytes">Bytes Reclaimable</th>
+                  <th class="vd-col-size" data-reclaim-sort="coverage">Coverage %</th>
+                </tr>
+              </thead>
+              <tbody id="reclaim-tbody">
+                <tr class="var-details-empty-row">
+                  <td colspan="5" id="reclaim-empty">
+                    Pick a folder and click "Scan Folder" to find replacement candidates.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="var-details-browser-footer">
+            <span id="reclaim-summary"></span>
+            <div class="var-details-pagination" id="reclaim-pagination" hidden>
+              <button class="var-details-page-nav" id="reclaim-page-prev" type="button">
+                <span class="material-symbols-outlined">chevron_left</span>
+              </button>
+              <span class="var-details-page-indicator" id="reclaim-page-indicator">1 / 1</span>
+              <button class="var-details-page-nav" id="reclaim-page-next" type="button">
+                <span class="material-symbols-outlined">chevron_right</span>
+              </button>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- Unique Resources View (hidden by default; revealed by sidebar link).
+           Local-only: walks the picked folder, dedupes resources by (crc32, size),
+           and shows every source VAR for each unique resource. -->
+      <section id="unique-resources-view" class="app-main unique-resources-view hidden">
+        <header class="var-details-header">
+          <h1 class="var-details-title">Unique Resources</h1>
+          <span class="var-details-eyebrow">Deduplicate by content and see every VAR that holds each resource</span>
+        </header>
+
+        <div class="var-details-grid" id="ur-top-grid">
+          <article class="card var-details-source">
+            <header class="card-eyebrow">Source Folder</header>
+            <div class="var-details-action">
+              <div class="var-details-folder-field">
+                <label class="var-details-folder-label" for="ur-folder-input">Local VAR Folder</label>
+                <div class="var-details-folder-row">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">folder</span>
+                    <input id="ur-folder-input" type="text" placeholder="D:\Vars" spellcheck="false" />
+                  </div>
+                  <button id="ur-folder-pick" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span>Browse</span>
+                  </button>
+                </div>
+              </div>
+              <div class="var-details-folder-field">
+                <label class="var-details-folder-label" id="ur-additional-dirs-label"></label>
+                <div class="additional-dirs">
+                  <div id="ur-additional-dirs" class="additional-dirs-list"></div>
+                  <button id="ur-add-folder-button" class="ghost-button" type="button"></button>
+                </div>
+              </div>
+              <div class="var-details-scan-buttons">
+                <button id="ur-scan-button" class="var-details-scan-button is-primary" type="button">
+                  <span class="material-symbols-outlined">search</span>
+                  <span>Scan Folder</span>
+                </button>
+              </div>
+              <p class="reclaim-help">
+                Walks every <code>.var</code> in the folder and lists every unique
+                resource by content (CRC32 + size), with every VAR that contains it.
+                Nothing is written to disk or to the database.
+              </p>
+            </div>
+          </article>
+
+          <article class="card var-details-info">
+            <header class="card-eyebrow ur-summary-head">
+              <span>Local Summary</span>
+              <button id="ur-summary-toggle" class="ur-summary-toggle hidden" type="button" aria-pressed="false">Hide details</button>
+            </header>
+            <div class="var-details-overlap-grid">
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">VARs Scanned</span>
+                <span class="var-details-stat-value" id="ur-stat-vars">—</span>
+              </div>
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">Unique Resources</span>
+                <span class="var-details-stat-value" id="ur-stat-resources">—</span>
+              </div>
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">Total Unique Bytes</span>
+                <span class="var-details-stat-value" id="ur-stat-unique-bytes">—</span>
+              </div>
+              <div class="var-details-stat-tile">
+                <span class="var-details-stat-label">Reclaimable Bytes</span>
+                <span class="var-details-stat-value" id="ur-stat-reclaimable">—</span>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="card var-details-progress-card" id="ur-progress-card">
+          <div class="var-details-pipeline">
+            <div class="var-details-pipeline-row">
+              <span class="var-details-pipeline-label">Progress</span>
+              <span class="var-details-pipeline-percent" id="ur-progress-percent">0%</span>
+            </div>
+            <div class="var-details-pipeline-track">
+              <div class="var-details-pipeline-fill" id="ur-progress-fill"></div>
+            </div>
+            <div class="var-details-pipeline-status">
+              <span class="var-details-pipeline-dot" id="ur-progress-dot"></span>
+              <span class="var-details-pipeline-text" id="ur-progress-text">Idle</span>
+            </div>
+          </div>
+        </article>
+
+        <section class="content-grid" id="ur-body">
+          <article class="panel card var-details-browser">
+            <div class="panel-head panel-head-groups">
+              <div class="panel-head-main">
+                <div class="var-details-browser-title">
+                  <h2>Unique Resources</h2>
+                  <span class="var-details-asset-count" id="ur-resource-count">Not Scanned</span>
+                </div>
+                <div class="resource-list-search">
+                  <span class="material-symbols-outlined input-leading-icon">search</span>
+                  <input
+                    id="ur-filter"
+                    type="search"
+                    placeholder="Filter by path, CRC32, or package id…"
+                  />
+                  <button id="ur-filter-clear-button" class="ghost-button hidden" type="button">
+                    <span>Clear</span>
+                  </button>
+                </div>
+                <div class="var-details-filter-group" id="ur-sort-group" role="tablist" aria-label="Sort unique resources">
+                  <button class="var-details-filter-button" type="button" role="tab" data-ur-sort="combined">Size</button>
+                  <button class="var-details-filter-button" type="button" role="tab" data-ur-sort="sources">Sources</button>
+                  <button class="var-details-filter-button" type="button" role="tab" data-ur-sort="reclaimable">Reclaim</button>
+                </div>
+              </div>
+            </div>
+            <div id="ur-list" class="group-list empty">
+              <div class="detail-empty" id="ur-empty">
+                Pick a folder and click "Scan Folder" to list every unique resource.
+              </div>
+            </div>
+            <div class="var-details-browser-footer">
+              <span id="ur-summary"></span>
+              <div class="var-details-pagination" id="ur-pagination" hidden>
+                <button class="var-details-page-nav" id="ur-page-prev" type="button">
+                  <span class="material-symbols-outlined">chevron_left</span>
+                </button>
+                <span class="var-details-page-indicator" id="ur-page-indicator">1 / 1</span>
+                <button class="var-details-page-nav" id="ur-page-next" type="button">
+                  <span class="material-symbols-outlined">chevron_right</span>
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <article id="ur-side-panel" class="panel card">
+            <div class="panel-head">
+              <div>
+                <h2 id="ur-side-title">Sources</h2>
+                <p class="panel-subtitle" id="ur-side-subtitle">
+                  Every VAR containing the selected resource.
+                </p>
+              </div>
+            </div>
+            <div class="resource-list-side-body" id="ur-side-body">
+              <div class="resource-list-side-meta" id="ur-side-meta"></div>
+              <section id="ur-side-preview" class="hidden"></section>
+              <p class="resource-list-side-empty" id="ur-side-empty">
+                Select a row to inspect its sources.
+              </p>
+              <ul class="resource-list-side-list" id="ur-side-list"></ul>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <!-- Resource List View (hidden by default; revealed by sidebar Resource List link) -->
+      <section id="resource-list-view" class="app-main resource-list-view hidden">
+        <header class="resource-list-header">
+          <div class="resource-list-title-row">
+            <h1 class="resource-list-title" id="resource-list-title">Resource List</h1>
+            <span class="resource-list-count" id="resource-list-count">0 Resources</span>
+          </div>
+          <p class="resource-list-subtitle" id="resource-list-subtitle">
+            Browse every indexed file across your local database. Sort, filter, and inspect
+            duplicates without picking a single package first.
+          </p>
+        </header>
+
+        <article class="card resource-list-controls">
+          <div class="resource-list-controls-row">
+            <button id="resource-list-refresh-button" class="primary-button" type="button">
+              <span class="material-symbols-outlined">sync</span>
+              <span id="resource-list-refresh-label">Refresh</span>
+            </button>
+            <div class="resource-list-search">
+              <span class="material-symbols-outlined input-leading-icon">search</span>
+              <input
+                id="resource-list-filter"
+                type="search"
+                placeholder="Search by package prefix or CRC32 (8 hex)…"
+              />
+              <button id="resource-list-filter-button" class="primary-button" type="button">
+                <span class="material-symbols-outlined">search</span>
+                <span id="resource-list-filter-button-label">Search</span>
+              </button>
+              <button id="resource-list-filter-clear-button" class="ghost-button hidden" type="button">
+                <span id="resource-list-filter-clear-button-label">Clear</span>
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <div class="resource-list-filter-bar" id="resource-list-filter-bar">
+          <span class="rl-filter-label" id="resource-list-filter-bar-label">Filters:</span>
+          <div class="rl-filter-buttons">
+            <div class="rl-filter-dropdown" data-rl-filter="category">
+              <button type="button" class="rl-filter-chip rl-filter-trigger" data-rl-trigger="category">
+                <span class="rl-filter-chip-label" id="resource-list-filter-category-label">Category: All</span>
+                <span class="material-symbols-outlined rl-filter-chevron">expand_more</span>
+              </button>
+              <div class="rl-filter-menu rl-filter-menu-search hidden" data-rl-menu="category" role="menu">
+                <input type="text" class="rl-filter-menu-search-input" data-rl-menu-search="category" placeholder="Search…" />
+                <div class="rl-filter-menu-list" data-rl-menu-list="category"></div>
+              </div>
+            </div>
+            <div class="rl-filter-dropdown" data-rl-filter="size">
+              <button type="button" class="rl-filter-chip rl-filter-trigger" data-rl-trigger="size">
+                <span class="rl-filter-chip-label" id="resource-list-filter-size-label">Size: All</span>
+                <span class="material-symbols-outlined rl-filter-chevron">expand_more</span>
+              </button>
+              <div class="rl-filter-menu hidden" data-rl-menu="size" role="menu"></div>
+            </div>
+            <button type="button" class="rl-filter-clear hidden" id="resource-list-filter-clear">Clear All</button>
+          </div>
+        </div>
+
+        <div class="resource-list-body" id="resource-list-body">
+          <article class="card resource-list-table-card">
+            <div id="resource-list-progress" class="resource-list-progress hidden" aria-hidden="true">
+              <div class="resource-list-progress-bar"></div>
+            </div>
+            <div class="resource-list-table-wrap">
+              <table class="resource-list-table">
+                <thead>
+                  <tr>
+                    <th class="rl-col-icon" id="resource-list-th-icon">Type</th>
+                    <th class="rl-col-name" id="resource-list-th-name">Resource</th>
+                    <th class="rl-col-cat" id="resource-list-th-category">Category</th>
+                    <th class="rl-col-crc" id="resource-list-th-crc">CRC32</th>
+                    <th class="rl-col-package" id="resource-list-th-package">Package</th>
+                    <th class="rl-col-size" id="resource-list-th-size">Size</th>
+                  </tr>
+                </thead>
+                <tbody id="resource-list-tbody">
+                  <tr class="resource-list-empty-row">
+                    <td colspan="6" id="resource-list-empty">
+                      No resources indexed. Build the database first.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="resource-list-pagination" class="resource-list-pagination hidden">
+              <span class="resource-list-pagination-summary" id="resource-list-pagination-summary"></span>
+              <div class="resource-list-pagination-controls" id="resource-list-pagination-controls"></div>
+            </div>
+          </article>
+
+          <article id="resource-list-side-panel" class="card resource-list-side-panel hidden">
+            <header class="resource-list-side-head">
+              <div class="resource-list-side-title-row">
+                <h3 id="resource-list-side-title">Appears In</h3>
+                <button
+                  type="button"
+                  class="icon-button resource-list-side-close"
+                  id="resource-list-side-close"
+                  aria-label="Close"
+                >
+                  <span class="material-symbols-outlined">close</span>
+                </button>
+              </div>
+              <p class="resource-list-side-subtitle" id="resource-list-side-subtitle">
+                Every package containing this hash.
+              </p>
+              <div class="resource-list-side-meta" id="resource-list-side-meta"></div>
+            </header>
+            <div class="resource-list-side-body" id="resource-list-side-body">
+              <p class="resource-list-side-empty" id="resource-list-side-empty">
+                Select a row to inspect duplicates.
+              </p>
+              <ul class="resource-list-side-list" id="resource-list-side-list"></ul>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- Missing Resources View (hidden by default; revealed by sidebar link) -->
+      <section id="missing-resources-view" class="app-main missing-resources-view hidden">
+        <!-- Top Grid: Source Config + VAR Details (mirrors Overview) -->
+        <section class="dashboard-grid">
+          <!-- Source Configuration -->
+          <article class="card source-card">
+            <header class="card-eyebrow">Source Configuration</header>
+            <div class="source-body">
+              <div class="var-details-dropzone missing-target-dropzone" id="missing-target-dropzone">
+                <div class="var-details-dropzone-icon">
+                  <span class="material-symbols-outlined">upload_file</span>
+                </div>
+                <h4 class="var-details-dropzone-title">Drag and drop target VAR</h4>
+                <p class="var-details-dropzone-subtitle">The .var file you want to fix.</p>
+                <div class="var-details-dropzone-actions">
+                  <button id="missing-pick-target" class="primary-button" type="button">Select File</button>
+                </div>
+              </div>
+              <div class="path-grid">
+                <div class="path-row">
+                  <span class="path-label">Target VAR Path</span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">description</span>
+                      <input id="missing-target-var" type="text" placeholder="No file selected" spellcheck="false" />
+                    </div>
+                  </div>
+                </div>
+                <div class="path-row">
+                  <span class="path-label">VAR Folder</span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">folder</span>
+                      <input id="missing-input-dir" type="text" placeholder="D:\Vars" spellcheck="false" />
+                    </div>
+                    <button id="missing-pick-input" class="ghost-button" type="button">Browse</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="profile-row" id="missing-mode-row">
+                <span class="profile-row-label" id="missing-mode-label"
+                      title="Which replacement candidates to show for each missing resource. Local only: candidates found in the scanned VAR folder. Database: local plus everything in the resource index. Either way, every missing reference is listed — even ones with no candidate at all.">Mode</span>
+                <div class="radio-group" role="radiogroup" aria-labelledby="missing-mode-label">
+                  <label class="radio-pill">
+                    <input type="radio" name="missing-mode" value="local" checked />
+                    <span>Local only</span>
+                  </label>
+                  <label class="radio-pill">
+                    <input type="radio" name="missing-mode" value="db" />
+                    <span>Database</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="action-row">
+                <button id="missing-scan-button" class="primary-button action-button" type="button">Scan Target VAR</button>
+              </div>
+            </div>
+          </article>
+
+          <!-- VAR Details + Run CTA -->
+          <article class="card details-card">
+            <header class="card-eyebrow">VAR Details</header>
+            <div id="missing-var-info-panel" class="var-info-panel">
+              <p id="missing-var-info-empty" class="var-info-empty">No target VAR selected.</p>
+              <div id="missing-var-info-body" class="var-info-body hidden">
+                <div class="var-info-text">
+                  <h2 class="var-info-title">
+                    <span id="missing-var-info-label"></span>
+                  </h2>
+                  <div class="var-info-grid">
+                    <div class="var-info-row">
+                      <span class="var-info-key">Size</span>
+                      <span id="missing-var-info-size-val"></span>
+                    </div>
+                    <div class="var-info-row">
+                      <span class="var-info-key">Modified</span>
+                      <span id="missing-var-info-time-val"></span>
+                    </div>
+                    <div id="missing-var-info-scene-row" class="var-info-row hidden">
+                      <span class="var-info-key">Scene</span>
+                      <span id="missing-var-info-scene-val" class="var-info-val-mono"></span>
+                    </div>
+                  </div>
+                </div>
+                <div id="missing-var-info-thumb" class="var-info-thumb hidden">
+                  <img id="missing-var-info-scene-img" alt="scene preview" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Run-time settings: output folder + replace/backup toggles
+                 belong with the Run Fixes button, not the scan controls. -->
+            <div class="missing-run-settings">
+              <div class="path-grid">
+                <div class="path-row">
+                  <span class="path-label">Output Folder</span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">folder_open</span>
+                      <input id="missing-output-dir" type="text" placeholder="D:\Vars_fixed" spellcheck="false" />
+                    </div>
+                    <button id="missing-pick-output" class="ghost-button" type="button">Browse</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="toggle-row">
+                <label class="check-row"
+                       title="When on, the rewritten VAR overwrites the original file at its current location. When off, the fixed VAR is written to <Output Folder>/changed/<filename>.var and the original is left untouched.">
+                  <input id="missing-replace-in-place" type="checkbox" />
+                  <span>Replace in place</span>
+                </label>
+                <label class="check-row"
+                       title="When on, the original VAR is copied to <Output Folder>/backup/ (or a sibling fix-var-backup folder if no Output Folder is set) before Replace in place overwrites it. Disabled when Replace in place is off — in that mode the original is already preserved in its source folder.">
+                  <input id="missing-backup" type="checkbox" checked />
+                  <span>Backup before fix</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="run-cta">
+              <div class="run-cta-text">
+                <span class="run-cta-eyebrow">Final Step</span>
+                <span class="run-cta-sub">Apply chosen replacements</span>
+              </div>
+              <button id="missing-run-button" class="accent-button action-button" type="button" disabled>Run Fixes</button>
+            </div>
+          </article>
+        </section>
+
+        <!-- Progress -->
+        <section id="missing-progress-card" class="progress-card card hidden">
+          <div class="progress-head">
+            <strong id="missing-progress-title">Scanning</strong>
+            <span id="missing-progress-percent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="missing-progress-bar" class="progress-bar"></div>
+          </div>
+          <p id="missing-progress-message" class="panel-subtitle"></p>
+        </section>
+
+        <p class="missing-resources-status" id="missing-status"></p>
+
+        <!-- Two-panel grid: Missing Resources list + Replacement Sources -->
+        <section class="content-grid">
+          <article class="panel card">
+            <div class="panel-head panel-head-groups">
+              <div class="panel-head-main">
+                <div class="groups-header-row">
+                  <h2>Missing Resources</h2>
+                  <div class="group-filter-stack">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">search</span>
+                      <input id="missing-list-filter" type="search" placeholder="Filter by package / path / kind" />
+                    </div>
+                  </div>
+                </div>
+                <p class="panel-subtitle" id="missing-list-subtitle">Scan a target VAR to populate this list.</p>
+              </div>
+            </div>
+            <div id="missing-list" class="group-list empty"></div>
+            <div id="missing-list-pagination" class="group-pagination hidden"></div>
+          </article>
+
+          <article class="panel card">
+            <div class="panel-head">
+              <div>
+                <h2 id="missing-detail-title">Replacement Sources</h2>
+                <p class="panel-subtitle" id="missing-detail-subtitle">
+                  Select a missing resource to view candidates.
+                </p>
+              </div>
+            </div>
+            <div id="missing-detail-empty" class="detail-empty">
+              No missing resource selected.
+            </div>
+            <div id="missing-detail-panel" class="detail-panel hidden">
+              <div class="detail-meta">
+                <div class="detail-block">
+                  <span>Broken reference</span>
+                  <code id="missing-detail-ref"></code>
+                </div>
+                <div class="detail-chip-row">
+                  <span class="chip" id="missing-detail-kind"></span>
+                  <span class="chip" id="missing-detail-crc"></span>
+                </div>
+              </div>
+              <section class="missing-source-files-section">
+                <h3>Referenced in</h3>
+                <ul id="missing-source-files" class="missing-source-files"></ul>
+              </section>
+              <section class="keep-actions">
+                <h3>Local candidates</h3>
+                <div id="missing-local-candidates" class="keep-options"></div>
+                <div id="missing-db-section">
+                  <div class="missing-db-header">
+                    <h3>Database candidates</h3>
+                    <input id="missing-db-search" type="search" class="missing-db-search"
+                           placeholder="Filter by package id or path…" spellcheck="false" />
+                  </div>
+                  <div id="missing-db-scroll" class="missing-db-scroll">
+                    <div id="missing-db-candidates" class="keep-options"></div>
+                    <div id="missing-db-sentinel" class="missing-db-sentinel" aria-hidden="true"></div>
+                  </div>
+                </div>
+              </section>
+              <section class="quick-actions">
+                <button id="missing-apply-scope-button" class="ghost-button" type="button" disabled
+                        title="Apply the current replacement package to every broken ref sharing the same broken package as the current one (where that package has a matching candidate).">
+                  Apply to same broken pkg
+                </button>
+                <button id="missing-apply-filtered-button" class="ghost-button" type="button" disabled
+                        title="Apply the current replacement package to every broken ref currently visible after the filter (where that package has a matching candidate).">
+                  Apply to filtered refs
+                </button>
+                <button id="missing-apply-global-button" class="ghost-button" type="button" disabled
+                        title="Apply the current replacement package to every broken ref in the list (where that package has a matching candidate).">
+                  Apply to all refs
+                </button>
+                <button id="missing-clear-button" class="ghost-button" type="button" disabled>Clear Choices</button>
+              </section>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <!-- Internalize Resources View — inverse of Missing Resources. For
+           every *valid* external `Pkg:/path` ref in the target VAR, the user
+           can pick to copy the referenced bundle (vam + vaj + vab + textures)
+           in from the source VAR, rewrite the refs to `SELF:/...`, and drop
+           the source pkg from the target's meta.json deps so the (often huge)
+           source var can be deleted. Mirrors Missing Resources layout. -->
+      <section id="internalize-resources-view" class="app-main internalize-resources-view hidden">
+        <section class="dashboard-grid">
+          <article class="card source-card">
+            <header class="card-eyebrow">Source Configuration</header>
+            <div class="source-body">
+              <div class="var-details-dropzone missing-target-dropzone" id="internalize-target-dropzone">
+                <div class="var-details-dropzone-icon">
+                  <span class="material-symbols-outlined">upload_file</span>
+                </div>
+                <h4 class="var-details-dropzone-title">Drag and drop target VAR</h4>
+                <p class="var-details-dropzone-subtitle">The .var file whose external refs you want to internalize.</p>
+                <div class="var-details-dropzone-actions">
+                  <button id="internalize-pick-target" class="primary-button" type="button">Select File</button>
+                </div>
+              </div>
+              <div class="path-grid">
+                <div class="path-row">
+                  <span class="path-label">Target VAR Path</span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">description</span>
+                      <input id="internalize-target-var" type="text" placeholder="No file selected" spellcheck="false" />
+                    </div>
+                  </div>
+                </div>
+                <div class="path-row">
+                  <span class="path-label">VAR Folder</span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">folder</span>
+                      <input id="internalize-input-dir" type="text" placeholder="D:\Vars" spellcheck="false" />
+                    </div>
+                    <button id="internalize-pick-input" class="ghost-button" type="button">Browse</button>
+                  </div>
+                </div>
+                <div class="path-row">
+                  <span class="path-label" id="internalize-additional-dirs-label"></span>
+                  <div class="additional-dirs">
+                    <div id="internalize-additional-dirs" class="additional-dirs-list"></div>
+                    <button id="internalize-add-folder-button" class="ghost-button" type="button"></button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="action-row">
+                <button id="internalize-scan-button" class="primary-button action-button" type="button">Scan Target VAR</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card details-card">
+            <header class="card-eyebrow">VAR Details</header>
+            <div id="internalize-var-info-panel" class="var-info-panel">
+              <p id="internalize-var-info-empty" class="var-info-empty">No target VAR selected.</p>
+              <div id="internalize-var-info-body" class="var-info-body hidden">
+                <div class="var-info-text">
+                  <h2 class="var-info-title">
+                    <span id="internalize-var-info-label"></span>
+                  </h2>
+                  <div class="var-info-grid">
+                    <div class="var-info-row">
+                      <span class="var-info-key">Size</span>
+                      <span id="internalize-var-info-size-val"></span>
+                    </div>
+                    <div class="var-info-row">
+                      <span class="var-info-key">Modified</span>
+                      <span id="internalize-var-info-time-val"></span>
+                    </div>
+                    <div id="internalize-var-info-scene-row" class="var-info-row hidden">
+                      <span class="var-info-key">Scene</span>
+                      <span id="internalize-var-info-scene-val" class="var-info-val-mono"></span>
+                    </div>
+                  </div>
+                </div>
+                <div id="internalize-var-info-thumb" class="var-info-thumb hidden">
+                  <img id="internalize-var-info-scene-img" alt="scene preview" />
+                </div>
+              </div>
+            </div>
+
+            <div class="missing-run-settings">
+              <div class="path-grid">
+                <div class="path-row">
+                  <span class="path-label">Output Folder</span>
+                  <div class="input-with-button">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">folder_open</span>
+                      <input id="internalize-output-dir" type="text" placeholder="D:\Vars_internalized" spellcheck="false" />
+                    </div>
+                    <button id="internalize-pick-output" class="ghost-button" type="button">Browse</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="toggle-row">
+                <label class="check-row"
+                       title="When on, the rewritten VAR overwrites the original file at its current location. When off, the new VAR is written to <Output Folder>/changed/<filename>.var and the original is left untouched.">
+                  <input id="internalize-replace-in-place" type="checkbox" />
+                  <span>Replace in place</span>
+                </label>
+                <label class="check-row"
+                       title="When on, the original VAR is copied to <Output Folder>/backup/ (or a sibling internalize-backup folder if no Output Folder is set) before Replace in place overwrites it.">
+                  <input id="internalize-backup" type="checkbox" checked />
+                  <span>Backup before run</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="run-cta">
+              <div class="run-cta-text">
+                <span class="run-cta-eyebrow">Final Step</span>
+                <span class="run-cta-sub">Copy bundles into target as SELF refs</span>
+              </div>
+              <button id="internalize-run-button" class="accent-button action-button" type="button" disabled>Internalize Selected</button>
+            </div>
+          </article>
+        </section>
+
+        <section id="internalize-progress-card" class="progress-card card hidden">
+          <div class="progress-head">
+            <strong id="internalize-progress-title">Scanning</strong>
+            <span id="internalize-progress-percent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="internalize-progress-bar" class="progress-bar"></div>
+          </div>
+          <p id="internalize-progress-message" class="panel-subtitle"></p>
+        </section>
+
+        <p class="missing-resources-status" id="internalize-status"></p>
+
+        <section class="content-grid">
+          <article class="panel card">
+            <div class="panel-head panel-head-groups">
+              <div class="panel-head-main">
+                <div class="groups-header-row">
+                  <h2>External Refs</h2>
+                  <div class="group-filter-stack">
+                    <div class="input-with-icon">
+                      <span class="material-symbols-outlined input-leading-icon">search</span>
+                      <input id="internalize-list-filter" type="search" placeholder="Filter by source package / path" />
+                    </div>
+                  </div>
+                </div>
+                <p class="panel-subtitle" id="internalize-list-subtitle">Scan a target VAR to populate this list.</p>
+              </div>
+            </div>
+            <div id="internalize-list" class="group-list empty"></div>
+            <div id="internalize-list-pagination" class="group-pagination hidden"></div>
+          </article>
+
+          <article class="panel card">
+            <div class="panel-head">
+              <div>
+                <h2 id="internalize-detail-title">Bundle Members</h2>
+                <p class="panel-subtitle" id="internalize-detail-subtitle">
+                  Select a source package to view its referenced resources.
+                </p>
+              </div>
+            </div>
+            <div id="internalize-detail-empty" class="detail-empty">
+              No source package selected.
+            </div>
+            <div id="internalize-detail-panel" class="detail-panel hidden">
+              <div class="detail-meta">
+                <div class="detail-block">
+                  <span>Source package</span>
+                  <code id="internalize-detail-pkg"></code>
+                </div>
+                <div class="detail-chip-row">
+                  <span class="chip" id="internalize-detail-source-size"></span>
+                  <span class="chip" id="internalize-detail-bundle-size"></span>
+                </div>
+              </div>
+              <section class="keep-actions">
+                <h3>Referenced resources</h3>
+                <p class="panel-subtitle" id="internalize-detail-help">
+                  Each row is one ref. Picking it copies the full bundle (vam + vaj + vab + textures) into the target as SELF.
+                </p>
+                <div id="internalize-refs" class="keep-options"></div>
+              </section>
+              <section class="quick-actions">
+                <button id="internalize-select-all-group" class="ghost-button" type="button" disabled
+                        title="Select every ref in the current source package.">
+                  Select all in this pkg
+                </button>
+                <button id="internalize-clear-button" class="ghost-button" type="button" disabled>Clear Selection</button>
+              </section>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <!-- Settings View (hidden by default; revealed by sidebar Settings link) -->
+      <section id="settings-view" class="app-main settings-view hidden">
+        <header class="settings-header">
+          <span class="settings-eyebrow">Configuration</span>
+          <h1 class="settings-title" id="settings-title"></h1>
+          <p class="settings-subtitle" id="settings-subtitle"></p>
+        </header>
+
+        <div class="settings-sections">
+          <!-- Environment Paths -->
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="settings-section-title" id="settings-paths-title"></h3>
+              <p class="settings-section-desc" id="settings-paths-desc"></p>
+            </div>
+            <div class="settings-section-body settings-paths-stack">
+              <div class="settings-path-card">
+                <label class="settings-path-label" id="settings-path-input-label" for="settings-input-dir"></label>
+                <div class="input-with-button">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">folder</span>
+                    <input id="settings-input-dir" type="text" placeholder="D:\Vars" />
+                  </div>
+                  <button id="settings-pick-input" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span id="settings-pick-input-label"></span>
+                  </button>
+                </div>
+                <p class="settings-path-hint" id="settings-path-input-desc"></p>
+              </div>
+
+              <div class="settings-path-card">
+                <label class="settings-path-label" id="settings-path-output-label" for="settings-output-dir"></label>
+                <div class="input-with-button">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">folder_open</span>
+                    <input id="settings-output-dir" type="text" placeholder="D:\Vars_deduped" />
+                  </div>
+                  <button id="settings-pick-output" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span id="settings-pick-output-label"></span>
+                  </button>
+                </div>
+                <p class="settings-path-hint" id="settings-path-output-desc"></p>
+              </div>
+
+              <div class="settings-path-card" id="settings-path-vap-row">
+                <label class="settings-path-label" id="settings-path-vap-label" for="settings-vap-dir"></label>
+                <div class="input-with-button">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">tune</span>
+                    <input id="settings-vap-dir" type="text" placeholder="D:\VAM\Custom\Atom\Person\Appearance" />
+                  </div>
+                  <button id="settings-pick-vap" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span id="settings-pick-vap-label"></span>
+                  </button>
+                </div>
+                <p class="settings-path-hint" id="settings-path-vap-desc"></p>
+              </div>
+
+              <div class="settings-path-card">
+                <label class="settings-path-label" for="settings-library-folder">VAR library folder (AddonPackages root)</label>
+                <div class="input-with-button">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">folder</span>
+                    <input id="settings-library-folder" type="text" placeholder="D:\Vars" spellcheck="false" />
+                  </div>
+                  <button id="settings-pick-library" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span>Browse</span>
+                  </button>
+                </div>
+                <div class="additional-dirs">
+                  <label class="settings-path-label" id="settings-library-additional-dirs-label"></label>
+                  <div id="settings-library-additional-dirs" class="additional-dirs-list"></div>
+                  <button id="settings-library-add-folder-button" class="ghost-button" type="button"></button>
+                </div>
+                <p class="settings-path-hint">
+                  Your AddonPackages root(s). Checked when finding a package's dependencies (Scan Dependencies / Find Dependencies) and when scanning which packages use one before you delete it.
+                </p>
+              </div>
+
+              <div class="settings-path-card">
+                <label class="settings-path-label" for="settings-downloads-folder">Downloads folder</label>
+                <div class="input-with-button">
+                  <div class="input-with-icon">
+                    <span class="material-symbols-outlined input-leading-icon">download</span>
+                    <input id="settings-downloads-folder" type="text" placeholder="Defaults to your VAR library folder" spellcheck="false" />
+                  </div>
+                  <button id="settings-pick-downloads" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span>Browse</span>
+                  </button>
+                </div>
+                <p class="settings-path-hint">
+                  Where downloaded VARs are saved. Leave blank to use your VAR library folder; if neither
+                  is set you'll be asked to pick a folder the first time you download.
+                </p>
+                <label class="check-row" for="settings-organize-by-creator">
+                  <input id="settings-organize-by-creator" type="checkbox" />
+                  <span>Organize downloads into creator subfolders</span>
+                </label>
+                <p class="settings-path-hint">
+                  e.g. <code>qing.hgf1.1</code> &rarr; <code>&lt;downloads&gt;\qing\qing.hgf1.1.var</code>
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <div class="settings-divider"></div>
+
+          <!-- Appearance -->
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="settings-section-title" id="settings-appearance-eyebrow"></h3>
+              <p class="settings-section-desc" id="settings-theme-desc"></p>
+            </div>
+            <div class="settings-section-body">
+              <div class="theme-grid">
+                <button id="settings-theme-light" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-light">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-light-label"></span>
+                </button>
+                <button id="settings-theme-dark" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-dark">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-dark-label"></span>
+                </button>
+                <button id="settings-theme-nord" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-nord">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-nord-label"></span>
+                </button>
+                <button id="settings-theme-solarized" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-solarized">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-solarized-label"></span>
+                </button>
+                <button id="settings-theme-monolith" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-monolith">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-monolith-label"></span>
+                </button>
+                <button id="settings-theme-amber" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-amber">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-amber-label"></span>
+                </button>
+                <button id="settings-theme-emerald" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-emerald">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-emerald-label"></span>
+                </button>
+                <button id="settings-theme-midnight" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-midnight">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-midnight-label"></span>
+                </button>
+                <button id="settings-theme-cyber" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-cyber">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-cyber-label"></span>
+                </button>
+                <button id="settings-theme-porcelain" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-porcelain">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-porcelain-label"></span>
+                </button>
+                <button id="settings-theme-frost" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-frost">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-frost-label"></span>
+                </button>
+                <button id="settings-theme-circuit" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-circuit">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-circuit-label"></span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div class="settings-divider"></div>
+
+          <!-- Process Preferences -->
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="settings-section-title" id="settings-scan-title"></h3>
+              <p class="settings-section-desc" id="settings-scan-desc"></p>
+              <span class="settings-section-tag" id="settings-scan-eyebrow"></span>
+            </div>
+            <div class="settings-section-body settings-toggle-stack">
+              <label class="settings-toggle-card">
+                <input id="settings-default-backup" type="checkbox" />
+                <span class="settings-toggle-box" aria-hidden="true">
+                  <span class="material-symbols-outlined">check</span>
+                </span>
+                <span class="settings-toggle-text">
+                  <span class="settings-toggle-title" id="settings-default-backup-label"></span>
+                  <span class="settings-toggle-desc">Create a .bak file of any archive before modification.</span>
+                </span>
+              </label>
+              <label class="settings-toggle-card">
+                <input id="settings-default-replace" type="checkbox" />
+                <span class="settings-toggle-box" aria-hidden="true">
+                  <span class="material-symbols-outlined">check</span>
+                </span>
+                <span class="settings-toggle-text">
+                  <span class="settings-toggle-title" id="settings-default-replace-label"></span>
+                  <span class="settings-toggle-desc">Directly modify archives in the source folder. Use with caution.</span>
+                </span>
+              </label>
+              <label class="settings-toggle-card">
+                <input id="settings-default-vap" type="checkbox" />
+                <span class="settings-toggle-box" aria-hidden="true">
+                  <span class="material-symbols-outlined">check</span>
+                </span>
+                <span class="settings-toggle-text">
+                  <span class="settings-toggle-title" id="settings-default-vap-label"></span>
+                  <span class="settings-toggle-desc">Extract and deduplicate resources within preset (.vap) files.</span>
+                </span>
+              </label>
+            </div>
+          </section>
+
+          <div class="settings-divider"></div>
+
+          <!-- Database -->
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="settings-section-title" id="settings-db-title"></h3>
+              <p class="settings-section-desc" id="settings-db-desc"></p>
+              <span class="settings-section-tag" id="settings-db-eyebrow"></span>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-stats-grid">
+                <div class="settings-stat">
+                  <span class="material-symbols-outlined settings-stat-icon">inventory_2</span>
+                  <span class="settings-stat-label" id="settings-db-packages-label"></span>
+                  <strong class="settings-stat-value" id="settings-db-packages-value">—</strong>
+                </div>
+                <div class="settings-stat">
+                  <span class="material-symbols-outlined settings-stat-icon">data_object</span>
+                  <span class="settings-stat-label" id="settings-db-resources-label"></span>
+                  <strong class="settings-stat-value" id="settings-db-resources-value">—</strong>
+                </div>
+                <div class="settings-stat">
+                  <span class="material-symbols-outlined settings-stat-icon">database</span>
+                  <span class="settings-stat-label" id="settings-db-size-label"></span>
+                  <strong class="settings-stat-value" id="settings-db-size-value">—</strong>
+                </div>
+              </div>
+              <div class="settings-actions">
+                <button id="settings-refresh-button" class="ghost-button" type="button">
+                  <span class="material-symbols-outlined">refresh</span>
+                  <span id="settings-refresh-label"></span>
+                </button>
+              </div>
+              <p class="settings-feedback" id="settings-feedback"></p>
+            </div>
+          </section>
+
+          <div class="settings-divider"></div>
+
+          <!-- Advanced -->
+          <section class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="settings-section-title" id="settings-advanced-title">Advanced</h3>
+              <p class="settings-section-desc" id="settings-advanced-desc">
+                Optional power-user features. These touch how the local database is
+                indexed; only enable if you understand the trade-offs.
+              </p>
+              <span class="settings-section-tag" id="settings-advanced-eyebrow">Optional</span>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-advanced-feature">
+                <div class="settings-advanced-feature-head">
+                  <div class="settings-advanced-feature-text">
+                    <h4 class="settings-advanced-feature-title" id="settings-clear-db-title">
+                      Clear local database
+                    </h4>
+                    <p class="settings-advanced-feature-desc" id="settings-clear-db-desc">
+                      Permanently deletes every indexed package, resource, and creator
+                      from the local SQLite file. Your .var files on disk are not
+                      touched.
+                    </p>
+                  </div>
+                </div>
+
+                <div class="settings-advanced-warning is-danger" id="settings-clear-db-warning">
+                  <span class="material-symbols-outlined">delete_forever</span>
+                  <div>
+                    <strong id="settings-clear-db-warning-title">This cannot be undone:</strong>
+                    <span id="settings-clear-db-warning-body">
+                      You will need to re-scan or re-import to rebuild the database. On
+                      multi-million-row libraries this takes several minutes. If the
+                      path search index was enabled, it will also be wiped.
+                    </span>
+                  </div>
+                </div>
+
+                <div class="settings-advanced-actions">
+                  <button
+                    id="settings-clear-db-button"
+                    class="ghost-button settings-danger"
+                    type="button"
+                  >
+                    <span class="material-symbols-outlined">delete_sweep</span>
+                    <span id="settings-clear-db-button-label">Clear database</span>
+                  </button>
+                </div>
+
+                <div
+                  id="settings-clear-db-progress"
+                  class="settings-advanced-progress hidden"
+                >
+                  <div class="settings-advanced-progress-row">
+                    <span id="settings-clear-db-progress-label">Clearing</span>
+                    <span id="settings-clear-db-progress-pct">0%</span>
+                  </div>
+                  <div class="settings-advanced-progress-track">
+                    <div
+                      id="settings-clear-db-progress-fill"
+                      class="settings-advanced-progress-fill"
+                    ></div>
+                  </div>
+                  <p
+                    id="settings-clear-db-progress-status"
+                    class="settings-advanced-progress-status"
+                  ></p>
+                </div>
+
+                <p class="settings-feedback" id="settings-clear-db-status"></p>
+              </div>
+            </div>
+          </section>
+
+          <div class="settings-divider"></div>
+
+          <!-- About -->
+          <section class="settings-section settings-section-about">
+            <div class="settings-section-head">
+              <h3 class="settings-section-title" id="settings-about-eyebrow"></h3>
+              <p class="settings-section-desc" id="settings-about-desc"></p>
+            </div>
+            <div class="settings-section-body">
+              <div class="settings-about-card">
+                <div class="settings-about-row">
+                  <div class="settings-about-mark" aria-hidden="true">
+                    <span class="material-symbols-outlined">terminal</span>
+                  </div>
+                  <div class="settings-about-text">
+                    <h4 id="settings-about-title">VAM VAR Deduper</h4>
+                    <div class="settings-about-meta">
+                      <span class="settings-version-pill" id="settings-about-version">v0.1.0</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="settings-about-footer">
+                  <span>© 2026 VAM VAR Engine</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="settings-footer">
+          <p class="settings-feedback settings-footer-feedback" id="settings-save-feedback"></p>
+          <div class="settings-footer-actions">
+            <button id="settings-reset-button" class="ghost-button" type="button">
+              <span class="material-symbols-outlined">restart_alt</span>
+              <span id="settings-reset-label"></span>
+            </button>
+            <button id="settings-save-button" class="primary-button" type="button">
+              <span class="material-symbols-outlined">save</span>
+              <span id="settings-save-label"></span>
+            </button>
+          </div>
+        </div>
+      </section>
+      </div>
+    </div>
+
+    <!-- Central Downloads popover (top-right, browser-style) -->
+    <div id="downloads-overlay" class="downloads-overlay"></div>
+    <div id="downloads-popover" class="downloads-popover">
+      <div class="downloads-head">
+        <div class="downloads-title-row">
+          <span class="material-symbols-outlined">download</span>
+          <h3>Downloads</h3>
+        </div>
+        <div class="downloads-actions">
+          <button id="downloads-clear" class="ghost-button dl-mini" type="button">Clear finished</button>
+          <button id="downloads-close" class="icon-button" type="button" aria-label="Close downloads">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
+      <div id="downloads-list" class="downloads-list"></div>
+    </div>
+
+    <!-- Console Drawer -->
+    <div
+      id="console-overlay"
+      class="console-overlay"
+      onclick="window.__toggleConsole && window.__toggleConsole()"
+    ></div>
+    <div id="console-drawer" class="console-drawer">
+      <div class="console-handle"></div>
+      <div class="console-head">
+        <div class="console-title-row">
+          <span class="material-symbols-outlined">terminal</span>
+          <h3>Console Output</h3>
+        </div>
+        <div class="console-actions">
+          <span class="console-status">System Ready</span>
+          <button class="icon-button" type="button" onclick="window.__toggleConsole && window.__toggleConsole()" aria-label="Close console">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
+      <div id="log-list" class="log-list"></div>
+    </div>
+
+    <!-- Floating Console FAB (mobile fallback) -->
+    <div id="context-menu" class="context-menu hidden"></div>
+    <div id="context-submenu" class="context-menu hidden"></div>
+
+    <!-- VAR Packages hover info card. Fixed-position and pointer-events:none,
+         so it never gets between the cursor and the card it describes. Lives
+         next to the context menus because it is positioned against the
+         viewport, not against the grid. -->
+    <div id="vp-hover-card" class="vp-hover-card hidden" aria-hidden="true"></div>
+
+    <!-- Transient toast notifications (auto-dismiss). Visible without opening
+         the console drawer. -->
+    <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+    <!-- VAR Packages maintenance preview. Must stay BEFORE #dialog-backdrop:
+         every .dialog-backdrop shares z-index 1400, so DOM order decides
+         stacking, and showAppConfirm (used to confirm Apply from inside this
+         dialog) would otherwise render behind it. -->
+    <div id="vp-plan-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card vp-plan-card" role="dialog" aria-modal="true" aria-labelledby="vp-plan-title">
+        <h3 id="vp-plan-title"></h3>
+        <p id="vp-plan-scope" class="vp-plan-scope"></p>
+        <p id="vp-plan-summary"></p>
+        <div id="vp-plan-warning" class="vp-plan-warning hidden"></div>
+        <label class="check-row" id="vp-plan-deep-row" for="vp-plan-deep">
+          <input type="checkbox" id="vp-plan-deep" checked />
+          <span>Also scan inside packages for version references (slower, safer)</span>
+        </label>
+        <div id="vp-plan-progress" class="progress-card vp-plan-progress hidden">
+          <div class="progress-track"><div class="progress-bar" id="vp-plan-bar"></div></div>
+          <p id="vp-plan-progress-message" class="panel-subtitle"></p>
+        </div>
+        <div id="vp-plan-list" class="vp-plan-list"></div>
+        <details id="vp-plan-notes-wrap" class="vp-plan-notes hidden">
+          <summary id="vp-plan-notes-summary"></summary>
+          <div id="vp-plan-notes"></div>
+        </details>
+        <div class="dialog-actions">
+          <button id="vp-plan-cancel" class="ghost-button" type="button">Close</button>
+          <button id="vp-plan-apply" class="primary-button" type="button">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- VAR Details dependency scan. Must stay BEFORE #vp-delete-backdrop and
+         #dialog-backdrop: every .dialog-backdrop shares z-index 1400, so DOM
+         order decides stacking. A found row's Remove button opens the delete
+         modal, and a download from inside this modal may call showAppConfirm —
+         both have to render above it. (The Escape handler's else-if chain runs
+         in the reverse of this order.) -->
+    <div id="dep-scan-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card dep-scan-card" role="dialog" aria-modal="true" aria-labelledby="dep-scan-title">
+        <h3 id="dep-scan-title">Dependencies</h3>
+        <div id="dep-scan-text-region" class="dep-scan-text-region hidden">
+          <label class="dep-scan-text-label" for="dep-scan-text-input">
+            Paste meta.json dependencies, a scene, or any text with <code>Creator.Pkg:/path</code> references.
+          </label>
+          <textarea id="dep-scan-text-input" class="download-vars-textarea" spellcheck="false"
+            placeholder="e.g.&#10;Creator.Package.1:/Custom/Atom/Person/Morphs/female/morph.vmi&#10;AnotherCreator.HairPack.latest"></textarea>
+          <button id="dep-scan-analyze-text" class="primary-button dep-scan-analyze" type="button">Analyze</button>
+        </div>
+        <div class="dep-scan-root-row">
+          <span class="dep-scan-root-label" id="dep-scan-root-label">Checking against</span>
+          <button class="dep-scan-root-settings" id="dep-scan-root-settings" type="button">Change in Settings</button>
+        </div>
+        <div class="dep-scan-root-list" id="dep-scan-root-list"></div>
+        <p id="dep-scan-summary"></p>
+        <div id="dep-scan-progress" class="progress-card dep-scan-progress hidden">
+          <div class="progress-track"><div class="progress-bar" id="dep-scan-bar"></div></div>
+          <p id="dep-scan-progress-message" class="panel-subtitle"></p>
+        </div>
+        <div id="dep-scan-filter" class="dep-scan-filter mode-switch" role="tablist" aria-label="Filter dependencies">
+          <button data-dep-filter="all" class="mode-button active" type="button" role="tab" aria-selected="true">All</button>
+          <button data-dep-filter="missing" class="mode-button" type="button" role="tab" aria-selected="false">Missing</button>
+        </div>
+        <div id="dep-scan-list" class="dep-scan-list"></div>
+        <div class="dialog-actions">
+          <button id="dep-scan-collect" class="ghost-button hidden" type="button" title="Look for these dependencies in folders outside your VAM library">Find in Folders…</button>
+          <button id="dep-scan-download-all" class="primary-button" type="button">Download All Missing</button>
+          <button id="dep-scan-close" class="ghost-button" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- VAR Packages "Collect Dependencies": finds a package's dependencies in
+         folders outside the library and copies them into <Creator>\deps\. Sits
+         AFTER #dep-scan-backdrop so it stacks above it (Scan Dependencies opens
+         it over itself), and BEFORE #vp-delete-backdrop and #dialog-backdrop
+         like every modal here: all .dialog-backdrops share z-index 1400, so DOM
+         order decides stacking. (The Escape chain runs in the reverse order.) -->
+    <div id="dep-collect-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card dep-scan-card" role="dialog" aria-modal="true" aria-labelledby="dep-collect-title">
+        <h3 id="dep-collect-title">Collect Dependencies</h3>
+        <p class="dep-collect-intro">
+          Finds this package's dependencies in folders outside your VAM library, then copies them into a
+          <code>deps</code> folder in the package's creator folder &mdash; moving the package and its preview image there too.
+        </p>
+        <div class="dep-scan-root-row">
+          <span class="dep-scan-root-label">Search folders</span>
+          <button id="dep-collect-browse" class="ghost-button dep-collect-small" type="button">
+            <span class="material-symbols-outlined">folder_open</span>
+            <span>Browse…</span>
+          </button>
+        </div>
+        <div id="dep-collect-dirs" class="dep-collect-dirs"></div>
+        <div class="dep-collect-options">
+          <label class="check-row" for="dep-collect-remember">
+            <input type="checkbox" id="dep-collect-remember" />
+            <span>Remember these folders</span>
+          </label>
+          <button id="dep-collect-rescan" class="ghost-button dep-collect-small" type="button">
+            <span class="material-symbols-outlined">sync</span>
+            <span>Scan again</span>
+          </button>
+        </div>
+        <div id="dep-collect-dest" class="dep-collect-dest"></div>
+        <p id="dep-collect-summary"></p>
+        <div id="dep-collect-notes" class="dep-collect-notes"></div>
+        <div id="dep-collect-progress" class="progress-card dep-scan-progress hidden">
+          <div class="progress-track"><div class="progress-bar" id="dep-collect-bar"></div></div>
+          <p id="dep-collect-progress-message" class="panel-subtitle"></p>
+        </div>
+        <div id="dep-collect-filter" class="dep-scan-filter mode-switch" role="tablist" aria-label="Filter dependencies">
+          <button data-dc-filter="all" class="mode-button active" type="button" role="tab" aria-selected="true">All</button>
+          <button data-dc-filter="copy" class="mode-button" type="button" role="tab" aria-selected="false">To copy</button>
+        </div>
+        <div id="dep-collect-list" class="dep-scan-list"></div>
+        <div class="dialog-actions">
+          <button id="dep-collect-copy-all" class="primary-button" type="button">Copy All</button>
+          <button id="dep-collect-close" class="ghost-button" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="vp-delete-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card vp-delete-card" role="dialog" aria-modal="true" aria-labelledby="vp-delete-title">
+        <h3 id="vp-delete-title">Delete package?</h3>
+        <p id="vp-delete-message"></p>
+        <div class="vp-delete-root-row">
+          <span class="vp-delete-root-label" id="vp-delete-root-label">Scan folders</span>
+          <button class="vp-delete-root-settings" id="vp-delete-root-settings" type="button">Change in Settings</button>
+        </div>
+        <div class="vp-delete-root-list" id="vp-delete-root-list"></div>
+        <div class="vp-delete-scan-row">
+          <button id="vp-delete-scan-button" class="ghost-button" type="button">Scan for usage</button>
+          <label class="check-row vp-delete-deep-label">
+            <input type="checkbox" id="vp-delete-deep" />
+            <span>Deep scan (scene/preset refs — slower)</span>
+          </label>
+          <button id="vp-delete-dep-scan-button" class="ghost-button" type="button">Scan dependencies</button>
+        </div>
+        <div id="vp-delete-scan-progress" class="progress-card hidden">
+          <div class="progress-track"><div class="progress-bar" id="vp-delete-scan-bar"></div></div>
+          <p id="vp-delete-scan-message" class="panel-subtitle"></p>
+        </div>
+        <p id="vp-delete-usage-header" class="vp-ddep-header hidden">Used by</p>
+        <p id="vp-delete-scan-summary" class="vp-delete-scan-summary hidden"></p>
+        <div id="vp-delete-scan-list" class="vp-delete-scan-list"></div>
+        <p id="vp-delete-dep-header" class="vp-ddep-header hidden">Dependencies</p>
+        <p id="vp-delete-dep-hint" class="vp-ddep-hint hidden">Tick dependencies to send them to the Recycle Bin together with this package.</p>
+        <p id="vp-delete-dep-summary" class="vp-delete-scan-summary hidden"></p>
+        <div id="vp-delete-dep-list" class="vp-ddep-list"></div>
+        <div class="dialog-actions">
+          <button id="vp-delete-cancel" class="ghost-button" type="button">Cancel</button>
+          <button id="vp-delete-confirm" class="primary-button vp-bulk-danger" type="button">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- VAR Packages image gallery. Sits after #vp-delete-backdrop and before
+         #dialog-backdrop for the usual DOM-order stacking reason (every
+         .dialog-backdrop shares z-index 1400). The zoom lightbox it opens is
+         #image-zoom-backdrop at z-index 1500, so that always renders above
+         this card regardless of DOM order. -->
+    <div id="vp-images-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card vp-images-card" role="dialog" aria-modal="true" aria-labelledby="vp-images-title">
+        <h3 id="vp-images-title">Images in package</h3>
+        <p id="vp-images-message" class="panel-subtitle"></p>
+        <div class="vp-images-controls">
+          <label class="vp-images-max-label" for="vp-images-max">Max size</label>
+          <input id="vp-images-max" class="vp-images-max" type="number" min="0.1" max="1024" step="0.1" value="2" />
+          <span class="vp-images-max-unit">MB</span>
+        </div>
+        <p id="vp-images-summary" class="vp-images-summary hidden"></p>
+        <div id="vp-images-grid" class="vp-images-grid"></div>
+        <div class="dialog-actions">
+          <button id="vp-images-close" class="ghost-button" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="dialog-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+        <h3 id="dialog-title"></h3>
+        <p id="dialog-message"></p>
+        <div class="dialog-actions">
+          <button id="dialog-cancel" class="ghost-button" type="button"></button>
+          <button id="dialog-confirm" class="primary-button" type="button"></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="complete-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="complete-title">
+        <h3 id="complete-title"></h3>
+        <p id="complete-message"></p>
+        <button id="complete-report" class="ghost-button hidden" type="button"></button>
+        <p id="complete-sizes" class="complete-sizes"></p>
+        <div class="dialog-actions">
+          <button id="complete-open" class="primary-button" type="button"></button>
+          <button id="complete-open-backup" class="ghost-button" type="button"></button>
+          <button id="complete-ok" class="ghost-button" type="button"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Image zoom lightbox: opened by clicking a scene preview image. Shows the
+         full image with a zoom slider; closes on backdrop click, ESC, or the X. -->
+    <div id="image-zoom-backdrop" class="image-zoom-backdrop hidden" data-zoom-close="1">
+      <div class="image-zoom-card" role="dialog" aria-modal="true" aria-label="Image preview">
+        <button
+          type="button"
+          id="image-zoom-close"
+          class="icon-button image-zoom-close"
+          data-zoom-close="1"
+          aria-label="Close"
+          title="Close"
+        >
+          <span class="material-symbols-outlined">close</span>
+        </button>
+        <div class="image-zoom-stage" id="image-zoom-stage">
+          <img id="image-zoom-img" alt="Scene preview" />
+        </div>
+        <div class="image-zoom-controls">
+          <span class="material-symbols-outlined">zoom_out</span>
+          <input
+            type="range"
+            id="image-zoom-slider"
+            class="image-zoom-slider"
+            min="100"
+            max="500"
+            value="100"
+            step="10"
+            aria-label="Zoom level"
+          />
+          <span class="material-symbols-outlined">zoom_in</span>
+          <span class="image-zoom-level" id="image-zoom-level">100%</span>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.__toggleConsole = function () {
+        document.getElementById("console-drawer").classList.toggle("open");
+        document.getElementById("console-overlay").classList.toggle("open");
+      };
+      (function () {
+        var btn = document.getElementById("sidebar-toggle");
+        if (!btn) return;
+        btn.addEventListener("click", function () {
+          var collapsed = document.body.classList.toggle("sidebar-collapsed");
+          var icon = document.getElementById("sidebar-toggle-icon");
+          if (icon) icon.textContent = collapsed ? "menu" : "menu_open";
+        });
+        document.querySelectorAll("[data-sidebar-link]").forEach(function (link) {
+          link.addEventListener("click", function (event) {
+            event.preventDefault();
+            document.querySelectorAll("[data-sidebar-link]").forEach(function (other) {
+              other.classList.remove("active");
+            });
+            link.classList.add("active");
+
+            var route = link.getAttribute("data-sidebar-link");
+            var settings = document.getElementById("settings-view");
+            var buildDb = document.getElementById("build-db-view");
+            var varPackages = document.getElementById("var-packages-view");
+            var varDetails = document.getElementById("var-details-view");
+            var resourceList = document.getElementById("resource-list-view");
+            var reclaim = document.getElementById("reclaim-space-view");
+            var uniqueResources = document.getElementById("unique-resources-view");
+            var missingResources = document.getElementById("missing-resources-view");
+            var internalizeResources = document.getElementById("internalize-resources-view");
+            var dbfPage = document.getElementById("dbf-page");
+            if (!settings || !buildDb || !varPackages || !varDetails || !resourceList || !reclaim || !uniqueResources || !missingResources || !internalizeResources || !dbfPage) return;
+            settings.classList.add("hidden");
+            buildDb.classList.add("hidden");
+            varPackages.classList.add("hidden");
+            varDetails.classList.add("hidden");
+            resourceList.classList.add("hidden");
+            reclaim.classList.add("hidden");
+            uniqueResources.classList.add("hidden");
+            missingResources.classList.add("hidden");
+            internalizeResources.classList.add("hidden");
+            dbfPage.classList.add("hidden");
+            if (route === "settings") {
+              settings.classList.remove("hidden");
+              if (window.__loadSettingsView) window.__loadSettingsView();
+            } else if (route === "build-db") {
+              buildDb.classList.remove("hidden");
+              if (window.__refreshBuildDbStats) window.__refreshBuildDbStats();
+            } else if (route === "var-packages") {
+              varPackages.classList.remove("hidden");
+              if (window.__refreshVarPackagesView) window.__refreshVarPackagesView();
+            } else if (route === "var-details") {
+              varDetails.classList.remove("hidden");
+              if (window.__refreshVarDetailsView) window.__refreshVarDetailsView();
+            } else if (route === "resource-list") {
+              resourceList.classList.remove("hidden");
+              if (window.__refreshResourceListView) window.__refreshResourceListView();
+            } else if (route === "reclaim-space") {
+              reclaim.classList.remove("hidden");
+              if (window.__refreshReclaimSpaceView) window.__refreshReclaimSpaceView();
+            } else if (route === "unique-resources") {
+              uniqueResources.classList.remove("hidden");
+              if (window.__refreshUniqueResourcesView) window.__refreshUniqueResourcesView();
+            } else if (route === "missing-resources") {
+              missingResources.classList.remove("hidden");
+              if (window.__refreshMissingResourcesView) window.__refreshMissingResourcesView();
+            } else if (route === "internalize-resources") {
+              internalizeResources.classList.remove("hidden");
+              if (window.__refreshInternalizeResourcesView) window.__refreshInternalizeResourcesView();
+            } else if (route === "db-find") {
+              // Clean VARs is the sole workspace page (<section id="dbf-page">).
+              // __switchPage handles per-page state restore; we just reveal it.
+              dbfPage.classList.remove("hidden");
+              if (window.__switchPage) window.__switchPage("db-find");
+            }
+          });
+        });
+      })();
+    </script>
+    <script src="./app.js"></script>
+  </body>
+</html>

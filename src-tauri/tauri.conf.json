@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VAM VAR Deduper",
+  "version": "0.1.0",
+  "identifier": "com.vam.var.deduper",
+  "build": {
+    "frontendDist": "../ui",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "VAM VAR Deduper",
+        "width": 1480,
+        "height": 920,
+        "resizable": true,
+        "minWidth": 1180,
+        "minHeight": 760
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

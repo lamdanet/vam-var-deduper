@@ -1,0 +1,43 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024' width='1024' height='1024'>
+  <defs>
+    <clipPath id='clip'>
+      <rect x='0' y='0' width='1024' height='1024' rx='225' ry='225'/>
+    </clipPath>
+    <linearGradient id='vfill' x1='0' y1='0' x2='0' y2='1'>
+      <stop offset='0%' stop-color='#FFBA3C'/>
+      <stop offset='55%' stop-color='#FF6B35'/>
+      <stop offset='100%' stop-color='#D64933'/>
+    </linearGradient>
+    <filter id='glow' x='-20%' y='-20%' width='140%' height='140%'>
+      <feGaussianBlur stdDeviation='34' result='blur'/>
+      <feMerge>
+        <feMergeNode in='blur'/>
+        <feMergeNode in='SourceGraphic'/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g clip-path='url(#clip)'>
+    <rect width='1024' height='1024' fill='#131314'/>
+    <!-- a few representative PCB traces -->
+    <g stroke='#2A2A2B' stroke-width='4' fill='#2A2A2B' opacity='0.55'>
+      <polyline points='64,128 240,128 240,256' fill='none'/>
+      <circle cx='240' cy='256' r='6'/>
+      <polyline points='896,160 720,160 720,320' fill='none'/>
+      <circle cx='720' cy='320' r='6'/>
+      <polyline points='128,768 128,640 320,640' fill='none'/>
+      <circle cx='320' cy='640' r='6'/>
+      <polyline points='896,800 896,672 704,672' fill='none'/>
+      <circle cx='704' cy='672' r='6'/>
+    </g>
+    <!-- extruded shadow V -->
+    <text x='521' y='772' font-family='Arial Black, Arial, sans-serif' font-weight='900'
+          font-size='760' text-anchor='middle' fill='#5D1900' opacity='0.9'>V</text>
+    <!-- main V (gradient + glow) -->
+    <text x='512' y='763' font-family='Arial Black, Arial, sans-serif' font-weight='900'
+          font-size='760' text-anchor='middle' fill='url(#vfill)' filter='url(#glow)'>V</text>
+    <!-- chamfer rim -->
+    <rect x='4' y='4' width='1016' height='1016' rx='221' ry='221'
+          fill='none' stroke='#FFFFFF' stroke-opacity='0.10' stroke-width='4'/>
+  </g>
+</svg>

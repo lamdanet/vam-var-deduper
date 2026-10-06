@@ -1,0 +1,2 @@
+whole point of find duplicates page is to find resources replacement in both local and db.
+using local bundle and finding in crc if the all crc in db than it is right match

@@ -1,0 +1,47 @@
+[package]
+name = "vam_var_deduper_tauri"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+encoding_rs = "0.8"
+regex = "1"
+# default-tls = the OS TLS stack (SChannel on Windows), matching the C# tool's
+# HttpClient and curl. rustls was getting filtered by the Hub's Cloudflare.
+# "stream" + tokio/futures-util power the async download path (per-chunk idle
+# timeout for stall detection; blocking client lacks a read timeout).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "default-tls", "stream"] }
+tokio = { version = "1", features = ["rt", "time"] }
+futures-util = "0.3"
+rfd = "0.15"
+rayon = "1.10"
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+# Recycle Bin for whole-.var removals on the VAR Packages page. Never a
+# permanent delete: a failed recycle must stay failed, not fall back to unlink.
+trash = "5"
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# GetDriveTypeW, to refuse recycling on volumes that have no Recycle Bin (exFAT/
+# FAT32 removables, NukeOnDelete) — there `trash::delete` permanently deletes and
+# still returns Ok. Already in the tree via tao/tauri-runtime-wry, so this pulls
+# in no new compile.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

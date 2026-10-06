@@ -1,0 +1,3 @@
+# Excluded from `git archive` output (the "Download ZIP" equivalent).
+# These are tracked in the repo but not useful to someone reading the code.
+src-tauri/gen/   export-ignore
