@@ -1670,3 +1670,98 @@ pub(crate) async fn hub_image(url: String) -> Result<Option<String>, String> {
     }
     Ok(data)
 }
+
+/// Lowercased file stems of every `.var` under `roots` (recursive) — what the
+/// Hub page compares Hub files against to show "Installed".
+#[tauri::command(async)]
+pub(crate) fn list_local_package_ids(roots: Vec<String>) -> Vec<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    for root in roots.iter().map(|r| r.trim()).filter(|r| !r.is_empty()) {
+        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let is_var = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("var"));
+            if !is_var {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                out.insert(stem.to_ascii_lowercase());
+            }
+        }
+    }
+    let mut ids: Vec<String> = out.into_iter().collect();
+    ids.sort();
+    ids
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct WishlistEntry {
+    pub(crate) resource_id: String,
+    pub(crate) snapshot: serde_json::Value,
+    pub(crate) created_at: i64,
+}
+
+/// The Hub wishlist, newest first.
+#[tauri::command(async)]
+pub(crate) fn hub_wishlist_list(db: State<'_, Db>) -> Result<Vec<WishlistEntry>, String> {
+    let conn = db.read().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT resource_id, snapshot, created_at FROM hub_wishlist ORDER BY created_at DESC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .flatten()
+        .map(|(resource_id, snapshot, created_at)| WishlistEntry {
+            resource_id,
+            snapshot: serde_json::from_str(&snapshot).unwrap_or(serde_json::Value::Null),
+            created_at,
+        })
+        .collect())
+}
+
+/// Adds (with `snapshot`) or removes (`snapshot: null`) a wishlist entry.
+/// Re-adding refreshes the snapshot but keeps the original date.
+#[tauri::command]
+pub(crate) fn hub_wishlist_set(
+    resource_id: String,
+    snapshot: Option<serde_json::Value>,
+    db: State<'_, Db>,
+) -> Result<(), String> {
+    let rid = resource_id.trim();
+    if rid.is_empty() {
+        return Err("missing resource id".to_string());
+    }
+    let conn = db.conn.lock().map_err(|_| "database connection poisoned".to_string())?;
+    match snapshot {
+        Some(snap) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            conn.execute(
+                "INSERT INTO hub_wishlist (resource_id, snapshot, created_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(resource_id) DO UPDATE SET snapshot = excluded.snapshot",
+                rusqlite::params![rid, snap.to_string(), now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        None => {
+            conn.execute("DELETE FROM hub_wishlist WHERE resource_id = ?1", rusqlite::params![rid])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}

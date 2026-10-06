@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 13;
+pub(crate) const SCHEMA_VERSION: i32 = 14;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -580,6 +580,22 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         )
         .context("failed to create v13 var_info_cache table")?;
         tx.commit().context("failed to commit v13 migration")?;
+    }
+
+    if current < 14 {
+        // Hub page wishlist, as in VaM Backstage: a durable copy of each saved
+        // resource's Hub JSON (paid/removed resources can't be re-fetched from
+        // an id alone, so the row owns its snapshot).
+        let tx = conn.transaction().context("failed to start v14 tx")?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS hub_wishlist (
+                resource_id TEXT PRIMARY KEY,
+                snapshot    TEXT NOT NULL,
+                created_at  INTEGER NOT NULL
+            );",
+        )
+        .context("failed to create v14 hub_wishlist table")?;
+        tx.commit().context("failed to commit v14 migration")?;
     }
 
     if current != SCHEMA_VERSION {

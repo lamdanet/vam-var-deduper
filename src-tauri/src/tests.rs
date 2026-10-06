@@ -6059,3 +6059,31 @@ fn hub_body_matches_vam_format() {
     let v: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
     assert_eq!(v["action"], "getResources");
 }
+
+#[test]
+fn migration_creates_hub_wishlist_table() {
+    let db = crate::db::open_in_memory().expect("db");
+    let conn = db.conn.lock().unwrap();
+    conn.execute(
+        "INSERT INTO hub_wishlist (resource_id, snapshot, created_at) VALUES ('94', '{}', 1)",
+        [],
+    )
+    .expect("insert");
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM hub_wishlist", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn local_package_ids_walk_roots_recursively() {
+    let root = std::env::temp_dir().join(format!("vam_local_ids_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Creator")).unwrap();
+    fs::write(root.join("A.B.1.var"), b"x").unwrap();
+    fs::write(root.join("Creator").join("C.D.2.VAR"), b"x").unwrap();
+    fs::write(root.join("Creator").join("readme.txt"), b"x").unwrap();
+    let ids = crate::library::list_local_package_ids(vec![root.display().to_string(), String::new()]);
+    assert_eq!(ids, vec!["a.b.1".to_string(), "c.d.2".to_string()]);
+    fs::remove_dir_all(&root).expect("cleanup");
+}
