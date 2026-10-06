@@ -6022,30 +6022,6 @@ fn hub_detail_must_be_the_requested_family() {
 }
 
 #[test]
-fn library_graph_nodes_edges_and_missing_placeholders() {
-    let items = vec![
-        lib_item("A.Scene.1", &["B.Look.2", "B.Look.latest", "Gone.Pack.1", "C.Hair.min9"]),
-        lib_item("B.Look.2", &[]),
-        lib_item("C.Hair.4", &["A.Scene.1"]),
-    ];
-    let g = crate::library::build_library_graph(&items);
-    assert!(g.scanned);
-    // 3 packages + 1 missing placeholder.
-    assert_eq!(g.nodes.len(), 4);
-    let missing = g.nodes.iter().find(|n| n.missing).expect("placeholder");
-    assert_eq!(missing.package_id, "Gone.Pack.1");
-    assert_eq!(missing.used_by_count, 1);
-    let from_a: Vec<_> = g.edges.iter().filter(|e| e.source.ends_with("A.Scene.1.var")).collect();
-    // B.Look.2 and B.Look.latest collapse to one edge.
-    assert_eq!(from_a.len(), 3);
-    assert!(from_a.iter().any(|e| e.target.ends_with("B.Look.2.var") && e.status == "found"));
-    assert!(from_a.iter().any(|e| e.target.ends_with("C.Hair.4.var") && e.status == "other_version"));
-    assert!(from_a.iter().any(|e| e.target == "missing:gone.pack.1" && e.status == "missing"));
-    // C depends back on A: cycles are kept as plain edges.
-    assert!(g.edges.iter().any(|e| e.source.ends_with("C.Hair.4.var") && e.target.ends_with("A.Scene.1.var")));
-}
-
-#[test]
 fn hub_body_matches_vam_format() {
     let mut params = serde_json::Map::new();
     params.insert("perpage".to_string(), json!("60"));

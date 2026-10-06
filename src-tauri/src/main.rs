@@ -23,7 +23,7 @@ use tauri::Manager;
 use crate::{
     collect_deps::{start_collect_deps_copy_task, start_collect_deps_scan_task},
     library::{
-        get_hub_package_meta, get_library_graph, get_var_image, get_var_package_details, hub_api,
+        get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
         inspect_vam_dir,
         list_missing_dependencies,
@@ -145,7 +145,6 @@ fn main() {
             set_var_package_disabled,
             inspect_vam_dir,
             get_hub_package_meta,
-            get_library_graph,
             hub_api,
             hub_image,
             list_local_package_ids,

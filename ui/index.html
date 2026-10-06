@@ -78,10 +78,6 @@
                 <span class="material-symbols-outlined">explore</span>
                 <span class="sidebar-label">Hub</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="graph">
-                <span class="material-symbols-outlined">hub</span>
-                <span class="sidebar-label">Graph</span>
-              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="var-details">
                 <span class="material-symbols-outlined">description</span>
                 <span class="sidebar-label" id="sidebar-var-details-label">VAR Details</span>
@@ -3117,11 +3113,9 @@
             var internalizeResources = document.getElementById("internalize-resources-view");
             var dbfPage = document.getElementById("dbf-page");
             if (!settings || !buildDb || !varPackages || !varDetails || !resourceList || !reclaim || !uniqueResources || !missingResources || !internalizeResources || !dbfPage) return;
-            // Hub and Graph (VaM Backstage pages) are hidden with the rest.
+            // Hub (after VaM Backstage's Hub page) is hidden with the rest.
             var hubView = document.getElementById("hub-view");
-            var graphView = document.getElementById("graph-view");
             if (hubView) hubView.classList.add("hidden");
-            if (graphView) graphView.classList.add("hidden");
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
@@ -3135,9 +3129,6 @@
             if (route === "hub" && hubView) {
               hubView.classList.remove("hidden");
               if (window.__refreshHubView) window.__refreshHubView();
-            } else if (route === "graph" && graphView) {
-              graphView.classList.remove("hidden");
-              if (window.__refreshGraphView) window.__refreshGraphView();
             } else if (route === "settings") {
               settings.classList.remove("hidden");
               if (window.__loadSettingsView) window.__loadSettingsView();
