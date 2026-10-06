@@ -1306,14 +1306,6 @@ input[type="text"]:disabled {
   border-color: var(--primary);
 }
 
-.check-row input[type="checkbox"]:checked::after {
-  content: "";
-  position: absolute;
-  inset: 2px;
-  background: var(--primary-fg);
-  -webkit-mask: linear-gradient(45deg, transparent 50%, currentColor 50% 60%, transparent 60%);
-}
-
 .check-row input[type="checkbox"]:checked::before {
   content: "";
   position: absolute;
@@ -12105,4 +12097,418 @@ button.lib-dep-ref:hover {
   margin: 0;
   font-size: 11px;
   color: var(--text-dim);
+}
+
+/* =========================================================
+   Backstage skin. With the Backstage theme active the whole app takes on
+   VaM Backstage's component styling — rail-style navigation with the
+   blue→pink active bar, gradient primary actions, translucent outline
+   buttons, raised inputs, 8px cards, compact type — not only its palette.
+   Everything here is scoped to :root[data-theme="backstage"].
+   ========================================================= */
+
+:root[data-theme="backstage"] {
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --bs-elevated: #191a22;
+  --bs-hover: #1f2029;
+  --bs-aside: #57596e;
+  --bs-placeholder: #4e5064;
+  --bs-gradient: linear-gradient(to bottom right, #3a7cf4, #c740e8);
+  --bs-brand: linear-gradient(135deg, #4a91f1, #ef5bed);
+  --bs-outline-bg: rgba(31, 32, 41, 0.3);
+  --bs-outline-bg-hover: rgba(31, 32, 41, 0.55);
+}
+
+:root[data-theme="backstage"] body {
+  letter-spacing: 0;
+}
+
+:root[data-theme="backstage"] ::selection {
+  background: rgba(74, 145, 241, 0.4);
+  color: #e8e9ed;
+}
+
+:root[data-theme="backstage"] ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+:root[data-theme="backstage"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:root[data-theme="backstage"] ::-webkit-scrollbar-thumb {
+  background: #2e303b;
+  border-radius: 3px;
+}
+
+:root[data-theme="backstage"] ::-webkit-scrollbar-thumb:hover {
+  background: #4e5064;
+}
+
+/* ---- Shell: header ------------------------------------------------------ */
+
+:root[data-theme="backstage"] .app-header {
+  background: #111218;
+  border-bottom-color: #1f2029;
+  backdrop-filter: none;
+}
+
+:root[data-theme="backstage"] .brand-mark {
+  background: var(--bs-brand);
+  color: #fff;
+  border-radius: 8px;
+}
+
+:root[data-theme="backstage"] .brand-eyebrow {
+  color: var(--bs-aside);
+  letter-spacing: 0.08em;
+}
+
+:root[data-theme="backstage"] .brand-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+:root[data-theme="backstage"] .header-right {
+  gap: 8px;
+}
+
+:root[data-theme="backstage"] .app-header .icon-text-button,
+:root[data-theme="backstage"] .app-header .icon-button {
+  height: 30px;
+  border-radius: 6px;
+  border-color: #1f2029;
+  background: var(--bs-outline-bg);
+  color: #82849a;
+  font-size: 12px;
+}
+
+:root[data-theme="backstage"] .app-header .icon-button {
+  width: 30px;
+}
+
+:root[data-theme="backstage"] .app-header .icon-text-button .material-symbols-outlined {
+  font-size: 17px;
+}
+
+:root[data-theme="backstage"] .app-header .icon-text-button:hover:not(:disabled),
+:root[data-theme="backstage"] .app-header .icon-button:hover:not(:disabled) {
+  background: var(--bs-outline-bg-hover);
+  color: #e8e9ed;
+}
+
+/* ---- Shell: navigation rail ------------------------------------------------ */
+
+:root[data-theme="backstage"] .app-sidebar {
+  background: #111218;
+  border-right-color: #1f2029;
+}
+
+:root[data-theme="backstage"] .sidebar-toggle:hover {
+  background: var(--bs-elevated);
+}
+
+:root[data-theme="backstage"] .sidebar-divider {
+  background: #1f2029;
+}
+
+:root[data-theme="backstage"] .sidebar-link {
+  position: relative;
+  border-radius: 8px;
+  color: #82849a;
+}
+
+:root[data-theme="backstage"] .sidebar-link .material-symbols-outlined {
+  color: var(--bs-aside);
+}
+
+:root[data-theme="backstage"] .sidebar-link:hover {
+  background: var(--bs-elevated);
+  color: #e8e9ed;
+}
+
+:root[data-theme="backstage"] .sidebar-link:hover .material-symbols-outlined {
+  color: #82849a;
+}
+
+:root[data-theme="backstage"] .sidebar-link.active {
+  background: #1f2029;
+  color: #e8e9ed;
+}
+
+:root[data-theme="backstage"] .sidebar-link.active .material-symbols-outlined {
+  color: #4a91f1;
+}
+
+/* Backstage's active marker: a 3px blue→pink bar on the rail's edge. */
+:root[data-theme="backstage"] .sidebar-link.active::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(to bottom, #4a91f1, #ef5bed);
+}
+
+/* ---- Type --------------------------------------------------------------- */
+
+:root[data-theme="backstage"] .app-main h1,
+:root[data-theme="backstage"] .settings-title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+:root[data-theme="backstage"] .settings-eyebrow {
+  padding: 0;
+  background: transparent;
+  color: #6b6e84;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+:root[data-theme="backstage"] .settings-subtitle,
+:root[data-theme="backstage"] .hero-copy {
+  font-size: 13px;
+  color: #82849a;
+}
+
+:root[data-theme="backstage"] .card-eyebrow,
+:root[data-theme="backstage"] .settings-path-label,
+:root[data-theme="backstage"] .settings-section-tag {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: #6b6e84;
+}
+
+:root[data-theme="backstage"] .build-db-card-title,
+:root[data-theme="backstage"] .dbf-section-title,
+:root[data-theme="backstage"] .settings-section-title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ---- Surfaces ------------------------------------------------------------- */
+
+:root[data-theme="backstage"] .card,
+:root[data-theme="backstage"] .settings-path-card,
+:root[data-theme="backstage"] .downloads-popover,
+:root[data-theme="backstage"] .console-drawer {
+  background: #111218;
+  border-color: #1f2029;
+}
+
+:root[data-theme="backstage"] .card,
+:root[data-theme="backstage"] .settings-path-card {
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+/* ---- Buttons ---------------------------------------------------------------- */
+
+:root[data-theme="backstage"] .icon-button,
+:root[data-theme="backstage"] .icon-text-button,
+:root[data-theme="backstage"] .ghost-button,
+:root[data-theme="backstage"] .primary-button,
+:root[data-theme="backstage"] .accent-button {
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+:root[data-theme="backstage"] .ghost-button,
+:root[data-theme="backstage"] .icon-button {
+  border-color: #1f2029;
+  background: var(--bs-outline-bg);
+  color: #e8e9ed;
+}
+
+:root[data-theme="backstage"] .icon-button {
+  color: #82849a;
+}
+
+:root[data-theme="backstage"] .ghost-button:hover:not(:disabled),
+:root[data-theme="backstage"] .icon-button:hover:not(:disabled) {
+  background: var(--bs-outline-bg-hover);
+  color: #e8e9ed;
+}
+
+:root[data-theme="backstage"] .primary-button,
+:root[data-theme="backstage"] .accent-button {
+  border-color: transparent;
+  background: var(--bs-gradient);
+  color: #fff;
+  box-shadow: none;
+}
+
+:root[data-theme="backstage"] .primary-button:hover:not(:disabled),
+:root[data-theme="backstage"] .accent-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--bs-gradient);
+  filter: brightness(1.1);
+}
+
+:root[data-theme="backstage"] .primary-button:active:not(:disabled),
+:root[data-theme="backstage"] .accent-button:active:not(:disabled),
+:root[data-theme="backstage"] .ghost-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+:root[data-theme="backstage"] .primary-button:disabled,
+:root[data-theme="backstage"] .accent-button:disabled {
+  background: var(--bs-gradient);
+  color: #fff;
+  opacity: 0.45;
+  filter: saturate(0.6);
+}
+
+/* ---- Inputs ---------------------------------------------------------------- */
+
+:root[data-theme="backstage"] input[type="text"],
+:root[data-theme="backstage"] input[type="search"],
+:root[data-theme="backstage"] input[type="number"],
+:root[data-theme="backstage"] textarea,
+:root[data-theme="backstage"] select {
+  background: var(--bs-elevated);
+  border-color: #1f2029;
+  border-radius: 6px;
+  color: #e8e9ed;
+}
+
+:root[data-theme="backstage"] input[type="text"]::placeholder,
+:root[data-theme="backstage"] input[type="search"]::placeholder,
+:root[data-theme="backstage"] textarea::placeholder {
+  color: var(--bs-placeholder);
+}
+
+:root[data-theme="backstage"] input[type="text"]:focus,
+:root[data-theme="backstage"] input[type="search"]:focus,
+:root[data-theme="backstage"] input[type="number"]:focus,
+:root[data-theme="backstage"] textarea:focus,
+:root[data-theme="backstage"] select:focus {
+  border-color: rgba(74, 145, 241, 0.5);
+  box-shadow: none;
+  outline: none;
+}
+
+:root[data-theme="backstage"] .input-leading-icon {
+  color: #6b6e84;
+}
+
+:root[data-theme="backstage"] .check-row input[type="checkbox"] {
+  border-color: #2e303b;
+  border-radius: 4px;
+  background: var(--bs-elevated);
+}
+
+:root[data-theme="backstage"] .check-row input[type="checkbox"]:checked {
+  border-color: #4a91f1;
+  background: #4a91f1;
+}
+
+/* ---- Segmented controls, chips ----------------------------------------------- */
+
+:root[data-theme="backstage"] .mode-switch {
+  padding: 2px;
+  gap: 1px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: var(--bs-elevated);
+}
+
+:root[data-theme="backstage"] .mode-button {
+  border-radius: 4px;
+  color: var(--bs-aside);
+}
+
+:root[data-theme="backstage"] .mode-button:hover:not(:disabled) {
+  color: #82849a;
+}
+
+:root[data-theme="backstage"] .mode-button.active {
+  border-color: transparent;
+  background: #1f2029;
+  color: #e8e9ed;
+}
+
+:root[data-theme="backstage"] .chip {
+  border-radius: 4px;
+}
+
+/* ---- Tables --------------------------------------------------------------- */
+
+:root[data-theme="backstage"] .app-main th {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #6b6e84;
+}
+
+/* ---- Overlays ---------------------------------------------------------------- */
+
+:root[data-theme="backstage"] .dialog-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+}
+
+:root[data-theme="backstage"] .dialog-card {
+  border-color: #2e303b;
+  border-radius: 12px;
+  background: #111218;
+}
+
+:root[data-theme="backstage"] .context-menu {
+  border-color: #2e303b;
+  border-radius: 6px;
+  background: var(--bs-elevated);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme="backstage"] .context-menu-item {
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+:root[data-theme="backstage"] .context-menu-item:hover {
+  background: #1f2029;
+}
+
+:root[data-theme="backstage"] .context-menu-separator {
+  background: #1f2029;
+}
+
+:root[data-theme="backstage"] .toast {
+  border-color: #2e303b;
+  border-radius: 8px;
+  background: var(--bs-elevated);
+}
+
+/* ---- Progress ---------------------------------------------------------------- */
+
+:root[data-theme="backstage"] .progress-bar,
+:root[data-theme="backstage"] .build-db-progress-fill,
+:root[data-theme="backstage"] .build-db-mini-progress-fill {
+  background: linear-gradient(90deg, #3a7cf4, #c740e8, #3a7cf4);
+  background-size: 200% 100%;
+  animation: bs-shimmer 2s linear infinite;
+}
+
+@keyframes bs-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
