@@ -6754,27 +6754,12 @@ function switchToBuildDatabase() {
 // Used both by the sidebar route switch and by row-clicks inside the VAR
 // Packages table. Sidebar nav also flips the .active class on its own.
 function showVarDetailsView() {
-  const main = document.querySelector(
-    ".app-main:not(.settings-view):not(.build-db-view):not(.var-packages-view):not(.var-details-view):not(.resource-list-view):not(.reclaim-space-view):not(.unique-resources-view):not(.dbf-view)"
-  );
-  const settings = $("settings-view");
-  const buildDb = $("build-db-view");
-  const varPackages = $("var-packages-view");
   const varDetails = $("var-details-view");
-  const resourceList = $("resource-list-view");
-  const reclaim = $("reclaim-space-view");
-  const uniqueResources = $("unique-resources-view");
-  const dbfPage = $("dbf-page");
   if (!varDetails) return;
-  if (main) main.classList.add("hidden");
-  if (settings) settings.classList.add("hidden");
-  if (buildDb) buildDb.classList.add("hidden");
-  if (varPackages) varPackages.classList.add("hidden");
-  if (resourceList) resourceList.classList.add("hidden");
-  if (reclaim) reclaim.classList.add("hidden");
-  if (uniqueResources) uniqueResources.classList.add("hidden");
-  if (dbfPage) dbfPage.classList.add("hidden");
-  varDetails.classList.remove("hidden");
+  // Every page is an .app-main section; show only VAR Details.
+  document.querySelectorAll(".app-main").forEach((view) => {
+    view.classList.toggle("hidden", view !== varDetails);
+  });
 
   const sidebarLinks = document.querySelectorAll("[data-sidebar-link]");
   sidebarLinks.forEach((link) => {
@@ -9952,6 +9937,9 @@ function libToggleDropdown(name) {
       libRenderAuthorPopup();
       input.focus();
     }
+  } else if (open) {
+    // Menus with a search box (the Hub's Tags / Author) focus it on open.
+    menu.querySelector("input[type='text']")?.focus();
   }
 }
 
@@ -13822,6 +13810,1601 @@ function syncReplaceOptions() {
   $("vap-dir").closest(".path-row")?.classList.toggle("field-disabled", !state.processVap);
 }
 
+// ============================================================
+// Hub — browse and install VaM Hub resources (after VaM Backstage's Hub)
+//
+// The Hub JSON API (hub_api → getInfo / getResources / getResourceDetail /
+// findPackages) drives a filter bar, an infinitely-scrolling card grid and a
+// details panel. Install resolves a resource's own .var files and its missing
+// dependencies the way Backstage does (detail.dependencies, then
+// findPackages) and hands every file to the Downloads queue, which saves into
+// AddonPackages. "Installed" is decided against the .var files actually in
+// AddonPackages (+ Settings' extra folders). Resource pages (description,
+// reviews, …) open in the system browser: there is no embedded Hub browser.
+// ============================================================
+
+const HUB_PER_PAGE = 60;
+const HUB_TYPE_COLORS = {
+  Scenes: "#3b82f6",
+  SubScenes: "#64839e",
+  Looks: "#ec4899",
+  Poses: "#f97316",
+  Clothing: "#8b5cf6",
+  Hairstyles: "#f59e0b",
+};
+const HUB_TYPE_FIRST = ["Scenes", "SubScenes", "Looks", "Poses", "Clothing", "Hairstyles"];
+const HUB_LICENSES = [
+  "Any",
+  "Non-commercial use allowed",
+  "Commercial use allowed",
+  "Public Domain",
+  "CC BY",
+  "CC BY-SA",
+  "CC BY-ND",
+  "CC BY-NC",
+  "CC BY-NC-SA",
+  "CC BY-NC-ND",
+  "FC",
+  "PC",
+  "PC EA",
+  "Questionable",
+];
+const HUB_COMMERCIAL = new Set(["Public Domain", "CC BY", "CC BY-SA", "CC BY-ND", "FC"]);
+const HUB_NONCOMMERCIAL = new Set([...HUB_COMMERCIAL, "CC BY-NC", "CC BY-NC-SA", "CC BY-NC-ND"]);
+const HUB_WISHLIST_SORTS = ["Recently added", "Author", "Name (A-Z)", "Downloads", "Rating", "Reaction Score"];
+const HUB_STORE_KEY = "hub.view";
+const HUB_GAP = 12;
+
+const HUB = {
+  mode: "hub",
+  info: null,
+  infoError: null,
+  items: [],
+  total: 0,
+  page: 0,
+  loading: false,
+  done: false,
+  error: null,
+  token: 0,
+  refreshNext: false,
+  filters: { search: "", type: "All", pricing: "All", tags: [], author: "", license: "Any", sort: "" },
+  wishSort: "Recently added",
+  wishlist: new Map(),
+  wishlistLoaded: false,
+  selected: null,
+  rows: new Map(),
+  details: new Map(),
+  detailPending: new Map(),
+  local: { ids: new Set(), bases: new Map(), loading: null, loaded: false },
+  installs: new Map(),
+  view: "cards",
+  cardWidth: 220,
+  detailWidth: 340,
+  opened: false,
+};
+
+// ---- Small helpers -----------------------------------------------------------
+
+function hubStr(v) {
+  return v == null || v === "null" ? "" : String(v);
+}
+
+function hubNum(v) {
+  const n = parseFloat(hubStr(v));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function hubFormatNumber(v) {
+  const n = hubNum(v);
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(Math.round(n));
+}
+
+function hubDate(unixSeconds) {
+  const n = hubNum(unixSeconds);
+  if (!n) return "—";
+  return new Date(n * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function hubTypeColor(type) {
+  if (HUB_TYPE_COLORS[type]) return HUB_TYPE_COLORS[type];
+  if (!type) return "#6366f1";
+  return `hsl(${Math.abs(libHash(type) % 360)} 45% 50%)`;
+}
+
+function hubLicense(r) {
+  return hubStr(r?.hubFiles?.[0]?.licenseType) || hubStr(r?.licenseType);
+}
+
+function hubLicenseMatches(license, filter) {
+  if (!filter || filter === "Any") return true;
+  if (filter === "Commercial use allowed") return HUB_COMMERCIAL.has(license);
+  if (filter === "Non-commercial use allowed") return HUB_NONCOMMERCIAL.has(license);
+  return license === filter;
+}
+
+function hubIsRealUrl(v) {
+  const s = hubStr(v);
+  return Boolean(s) && !s.endsWith("?file=");
+}
+
+function hubFileUrl(f) {
+  if (hubIsRealUrl(f?.downloadUrl)) return hubStr(f.downloadUrl);
+  if (hubIsRealUrl(f?.urlHosted)) return hubStr(f.urlHosted);
+  return null;
+}
+
+function hubEnsureVar(name) {
+  const s = hubStr(name).trim();
+  return !s ? "" : /\.var$/i.test(s) ? s : `${s}.var`;
+}
+
+function hubStem(name) {
+  return hubStr(name).trim().replace(/\.var$/i, "");
+}
+
+function hubBaseOf(stemOrRef) {
+  return hubStem(stemOrRef).replace(/\.(\d+|latest|min\d+)$/i, "");
+}
+
+function hubResourceUrl(rid) {
+  return `https://hub.virtamate.com/resources/${encodeURIComponent(rid)}/`;
+}
+
+function hubExternalLabel(url) {
+  const u = hubStr(url).toLowerCase();
+  const known = [
+    ["patreon.com", "Patreon"],
+    ["gumroad.com", "Gumroad"],
+    ["booth.pm", "Booth"],
+    ["ko-fi.com", "Ko-fi"],
+    ["subscribestar", "SubscribeStar"],
+    ["github.com", "GitHub"],
+  ];
+  const hit = known.find(([host]) => u.includes(host));
+  return hit ? `Get on ${hit[1]}` : "Get Package";
+}
+
+function hubOpenUrl(url) {
+  if (!url || !invoke) return;
+  invoke("open_url", { url }).catch((e) => addLog(`Open link: ${String(e)}`));
+}
+
+function hubToast(message, kind = "info") {
+  showToast(message, kind, kind === "error" ? 7000 : 4000);
+}
+
+async function hubCall(action, params = {}, refresh = false) {
+  const data = await invoke("hub_api", { action, params, refresh });
+  if (data && data.status === "error") throw new Error(data.error || "Hub API error");
+  return data;
+}
+
+// ---- Preferences -------------------------------------------------------------
+
+function hubLoadPrefs() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(HUB_STORE_KEY) || "{}");
+    const f = raw.filters || {};
+    HUB.filters = {
+      search: "",
+      type: typeof f.type === "string" ? f.type : "All",
+      pricing: ["All", "Free", "Paid"].includes(f.pricing) ? f.pricing : "All",
+      tags: Array.isArray(f.tags) ? f.tags.filter((t) => typeof t === "string") : [],
+      author: typeof f.author === "string" ? f.author : "",
+      license: HUB_LICENSES.includes(f.license) ? f.license : "Any",
+      sort: typeof f.sort === "string" ? f.sort : "",
+    };
+    if (["cards", "compact"].includes(raw.view)) HUB.view = raw.view;
+    if (Number(raw.cardWidth) >= 100 && Number(raw.cardWidth) <= 500) HUB.cardWidth = Number(raw.cardWidth);
+    if (Number(raw.detailWidth) >= 260 && Number(raw.detailWidth) <= 500) HUB.detailWidth = Number(raw.detailWidth);
+    if (HUB_WISHLIST_SORTS.includes(raw.wishSort)) HUB.wishSort = raw.wishSort;
+  } catch {
+    /* defaults */
+  }
+}
+
+function hubSavePrefs() {
+  try {
+    const { search, ...filters } = HUB.filters;
+    void search;
+    window.localStorage.setItem(
+      HUB_STORE_KEY,
+      JSON.stringify({ filters, view: HUB.view, cardWidth: HUB.cardWidth, detailWidth: HUB.detailWidth, wishSort: HUB.wishSort }),
+    );
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+// ---- Local packages (what "Installed" means) -------------------------------------
+
+function hubLocalRoots() {
+  const roots = [vamAddonPackagesDir(), ...getAdditionalDirs("varPackages"), ...getAdditionalDirs("downloadVars")];
+  const custom = ($("settings-downloads-folder")?.value || "").trim();
+  if (custom) roots.push(custom);
+  const seen = new Set();
+  return roots.filter((r) => {
+    const k = String(r || "").trim().toLowerCase();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function hubLocalIndex(ids) {
+  HUB.local.ids = new Set(ids);
+  HUB.local.bases = new Map();
+  for (const id of ids) {
+    const m = /^(.*)\.(\d+)$/.exec(id);
+    const base = m ? m[1] : id;
+    if (!HUB.local.bases.has(base)) HUB.local.bases.set(base, []);
+    if (m) HUB.local.bases.get(base).push(Number(m[2]));
+  }
+}
+
+function hubLoadLocal(force = false) {
+  if (!invoke) return Promise.resolve();
+  if (HUB.local.loading && !force) return HUB.local.loading;
+  if (HUB.local.loaded && !force) return Promise.resolve();
+  HUB.local.loading = invoke("list_local_package_ids", { roots: hubLocalRoots() })
+    .then((ids) => {
+      hubLocalIndex(Array.isArray(ids) ? ids : []);
+      HUB.local.loaded = true;
+    })
+    .catch((e) => addLog(`Hub: could not read local packages — ${String(e)}`))
+    .finally(() => {
+      HUB.local.loading = null;
+      hubRenderGrid();
+      hubRenderDetail();
+    });
+  return HUB.local.loading;
+}
+
+function hubLocalAdd(stem) {
+  const id = hubStem(stem).toLowerCase();
+  if (!id) return;
+  HUB.local.ids.add(id);
+  const m = /^(.*)\.(\d+)$/.exec(id);
+  const base = m ? m[1] : id;
+  if (!HUB.local.bases.has(base)) HUB.local.bases.set(base, []);
+  if (m) HUB.local.bases.get(base).push(Number(m[2]));
+}
+
+// A dependency ref ("A.B.5", "A.B.latest", "A.B.min5") against local files.
+function hubResolveLocal(ref) {
+  const lc = hubStem(ref).toLowerCase();
+  const m = /^(.*)\.(?:(latest)|min(\d+)|(\d+))$/.exec(lc);
+  const base = m ? m[1] : lc;
+  const versions = HUB.local.bases.get(base);
+  if (!versions) return "missing";
+  if (!m || m[2]) return "latest";
+  if (m[3]) return versions.some((v) => v >= Number(m[3])) ? "latest" : "fallback";
+  return versions.includes(Number(m[4])) ? "exact" : "fallback";
+}
+
+// ---- Install state ---------------------------------------------------------------
+
+function hubInstallJobs(rid) {
+  const inst = HUB.installs.get(String(rid));
+  if (!inst) return [];
+  return state.downloads.filter((j) => inst.jobs.has(j.id));
+}
+
+function hubResourceState(r) {
+  const rid = String(r?.resource_id ?? "");
+  const inst = HUB.installs.get(rid);
+  const jobs = hubInstallJobs(rid);
+  const active = jobs.filter(downloadJobActive);
+  if (inst?.resolving) return { kind: "queued" };
+  if (active.length) {
+    const done = jobs.filter((j) => j.status === "done").length;
+    const pct = Math.round(jobs.reduce((sum, j) => sum + (j.status === "done" ? 100 : Number(j.percent) || 0), 0) / jobs.length);
+    return { kind: "downloading", pct, done, total: jobs.length };
+  }
+  const files = Array.isArray(r?.hubFiles) ? r.hubFiles : [];
+  const stems = files.map((f) => hubStem(f.filename).toLowerCase()).filter(Boolean);
+  const exact = stems.find((s) => HUB.local.ids.has(s));
+  if (exact) return { kind: "installed", stem: exact };
+  if (inst && jobs.some((j) => j.status === "failed")) return { kind: "failed" };
+  if (stems.some((s) => HUB.local.bases.has(hubBaseOf(s)))) return { kind: "update" };
+  if (hubStr(r?.hubDownloadable) === "false") {
+    return { kind: "external", url: hubStr(r.download_url) || hubStr(r.external_url) || hubResourceUrl(rid) };
+  }
+  if (!files.length && hubStr(r?.category) === "Paid") return { kind: "hub-only" };
+  return { kind: "install" };
+}
+
+function hubActionHtml(r, { big = false, compact = false } = {}) {
+  const st = hubResourceState(r);
+  const rid = escapeAttribute(String(r.resource_id));
+  const cls = `hub-btn${big ? " is-big" : ""}${compact ? " is-compact" : ""}`;
+  switch (st.kind) {
+    case "downloading":
+      return `<div class="${cls} hub-btn-progress" title="Downloading">
+          <span class="hub-btn-fill" style="width:${Math.max(2, st.pct)}%"></span>
+          <span class="hub-btn-label">${compact ? `${st.pct}%` : `Downloading ${st.done}/${st.total} · ${st.pct}%`}</span>
+        </div>`;
+    case "queued":
+      return `<div class="${cls} hub-btn-queued"><span class="material-symbols-outlined">schedule</span>${compact ? "" : "Queued…"}</div>`;
+    case "installed":
+      return `<button type="button" class="${cls} hub-btn-installed" data-hub-act="library" data-hub-rid="${rid}">
+          <span class="material-symbols-outlined">check_circle</span><span class="hub-btn-text">${compact ? "View" : "View in Library"}</span></button>`;
+    case "update":
+      return `<button type="button" class="${cls} hub-btn-install" data-hub-act="install" data-hub-rid="${rid}" title="Another version is installed — download this one">
+          <span class="material-symbols-outlined">upgrade</span><span class="hub-btn-text">Update</span></button>`;
+    case "external":
+      return `<button type="button" class="${cls} hub-btn-external" data-hub-act="external" data-hub-rid="${rid}">
+          <span class="material-symbols-outlined">open_in_new</span><span class="hub-btn-text">${escapeHtml(compact ? "Get" : hubExternalLabel(st.url))}</span></button>`;
+    case "failed":
+      return `<button type="button" class="${cls} hub-btn-failed" data-hub-act="install" data-hub-rid="${rid}">
+          <span class="material-symbols-outlined">refresh</span><span class="hub-btn-text">Retry</span></button>`;
+    case "hub-only":
+      return `<button type="button" class="${cls} hub-btn-external" data-hub-act="open" data-hub-rid="${rid}">
+          <span class="material-symbols-outlined">open_in_new</span><span class="hub-btn-text">${compact ? "Hub" : "Open on Hub"}</span></button>`;
+    default: {
+      const detail = HUB.details.get(String(r.resource_id));
+      const size = big && detail ? hubInstallSize(detail) : 0;
+      const many = big && detail ? hubDependencyList(detail).some((d) => !d.installed) : false;
+      return `<button type="button" class="${cls} hub-btn-install" data-hub-act="install" data-hub-rid="${rid}">
+          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">${many ? "Install All" : "Install"}${
+            size ? ` · ${escapeHtml(formatBytesLocal(size))}` : ""
+          }</span></button>`;
+    }
+  }
+}
+
+// ---- Data loading ----------------------------------------------------------------
+
+async function hubLoadInfo(refresh = false) {
+  if (!invoke || (HUB.info && !refresh)) return;
+  try {
+    const data = await hubCall("getInfo", {}, refresh);
+    if (!Array.isArray(data?.type) || !data.type.length || !Array.isArray(data?.sort) || !data.sort.length) {
+      throw new Error("Hub getInfo returned an unexpected shape");
+    }
+    HUB.info = data;
+    HUB.infoError = null;
+    if (!HUB.filters.sort || !data.sort.includes(HUB.filters.sort)) HUB.filters.sort = data.sort[0];
+  } catch (e) {
+    HUB.infoError = String(e);
+    addLog(`Hub: ${String(e)}`);
+  }
+  hubRenderFilters();
+}
+
+function hubSearchParams(page) {
+  const f = HUB.filters;
+  const p = { latest_image: "Y", perpage: String(HUB_PER_PAGE), page: String(page) };
+  if (f.sort) p.sort = f.sort;
+  if (f.search.trim()) {
+    p.search = f.search.trim();
+    p.searchall = "true";
+  }
+  if (f.type && f.type !== "All") p.type = f.type;
+  if (f.pricing !== "All") p.category = f.pricing;
+  if (f.author) p.username = f.author;
+  if (f.tags.length) p.tags = f.tags.join(",");
+  return p;
+}
+
+async function hubLoadPage({ reset = false } = {}) {
+  if (!invoke || HUB.mode !== "hub") return;
+  if (reset) {
+    HUB.token += 1;
+    HUB.items = [];
+    HUB.total = 0;
+    HUB.page = 0;
+    HUB.done = false;
+    HUB.error = null;
+    HUB.loading = false;
+    const scroll = $("hub-scroll");
+    if (scroll) scroll.scrollTop = 0;
+  }
+  if (HUB.loading || HUB.done) return;
+  const token = HUB.token;
+  const page = HUB.page + 1;
+  HUB.loading = true;
+  hubRenderGrid();
+  try {
+    const data = await hubCall("getResources", hubSearchParams(page), HUB.refreshNext && page === 1);
+    if (token !== HUB.token) return;
+    const rows = Array.isArray(data?.resources) ? data.resources : [];
+    for (const r of rows) HUB.rows.set(String(r.resource_id), r);
+    // The Hub ignores the license parameter, so the page is filtered here.
+    HUB.items.push(...rows.filter((r) => hubLicenseMatches(hubLicense(r), HUB.filters.license)));
+    HUB.page = page;
+    HUB.total = parseInt(data?.pagination?.total_found, 10) || HUB.items.length;
+    const pages = parseInt(data?.pagination?.total_pages, 10) || page;
+    HUB.done = rows.length === 0 || page >= pages;
+    HUB.error = null;
+  } catch (e) {
+    if (token !== HUB.token) return;
+    HUB.error = String(e?.message || e);
+    if (page > 1) hubToast(`Failed to load Hub results: ${HUB.error}`, "error");
+  } finally {
+    if (token === HUB.token) {
+      HUB.loading = false;
+      if (page === 1) HUB.refreshNext = false;
+      hubRenderGrid();
+      requestAnimationFrame(() => hubMaybeLoadMore());
+    }
+  }
+}
+
+// Loads the next page when the grid's end is near (or the page didn't fill the
+// viewport — license filtering can leave a page short).
+function hubMaybeLoadMore() {
+  if (HUB.mode !== "hub" || HUB.loading || HUB.done || HUB.error) return;
+  const scroll = $("hub-scroll");
+  if (!scroll || scroll.offsetParent === null) return;
+  if (scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 700) hubLoadPage();
+}
+
+async function hubGetDetail(rid) {
+  const key = String(rid);
+  if (HUB.details.has(key)) return HUB.details.get(key);
+  if (HUB.detailPending.has(key)) return HUB.detailPending.get(key);
+  const p = hubCall("getResourceDetail", { latest_image: "Y", resource_id: key })
+    .then((d) => {
+      HUB.details.set(key, d);
+      if (HUB.wishlist.has(key)) hubWishlistSet(key, d, { quiet: true });
+      return d;
+    })
+    .finally(() => HUB.detailPending.delete(key));
+  HUB.detailPending.set(key, p);
+  return p;
+}
+
+async function hubLoadWishlist() {
+  if (!invoke) return;
+  try {
+    const rows = await invoke("hub_wishlist_list");
+    HUB.wishlist = new Map((rows || []).map((r) => [String(r.resource_id), r]));
+  } catch (e) {
+    addLog(`Hub wishlist: ${String(e)}`);
+  }
+  HUB.wishlistLoaded = true;
+  vpSetText("hub-wishlist-count", HUB.wishlist.size ? String(HUB.wishlist.size) : "");
+}
+
+function hubSnapshot(r) {
+  const out = {};
+  for (const [k, v] of Object.entries(r || {})) if (!k.startsWith("_")) out[k] = v;
+  return out;
+}
+
+async function hubWishlistSet(rid, row, { quiet = false } = {}) {
+  const key = String(rid);
+  try {
+    if (row) {
+      await invoke("hub_wishlist_set", { resourceId: key, snapshot: hubSnapshot(row) });
+      const prev = HUB.wishlist.get(key);
+      HUB.wishlist.set(key, { resource_id: key, snapshot: hubSnapshot(row), created_at: prev?.created_at ?? Date.now() / 1000 });
+    } else {
+      await invoke("hub_wishlist_set", { resourceId: key, snapshot: null });
+      HUB.wishlist.delete(key);
+    }
+  } catch (e) {
+    if (!quiet) hubToast(`Wishlist: ${String(e)}`, "error");
+    return;
+  }
+  vpSetText("hub-wishlist-count", HUB.wishlist.size ? String(HUB.wishlist.size) : "");
+  if (!quiet) {
+    if (HUB.mode === "wishlist") hubRenderGrid();
+    else hubSyncCards();
+    hubRenderDetail();
+  }
+}
+
+function hubToggleWishlist(rid) {
+  const key = String(rid);
+  if (HUB.wishlist.has(key)) hubWishlistSet(key, null);
+  else hubWishlistSet(key, HUB.details.get(key) || HUB.rows.get(key));
+}
+
+// The wishlist, filtered and sorted client-side like Backstage's.
+function hubWishlistItems() {
+  const f = HUB.filters;
+  const q = f.search.trim().toLowerCase();
+  const items = [...HUB.wishlist.values()]
+    .map((w) => ({ ...w.snapshot, _added: w.created_at }))
+    .filter((r) => {
+      if (q) {
+        const hay = [r.title, r.username, r.tag_line, r.tags].map(hubStr).join("\n").toLowerCase();
+        if (!q.split(/\s+/).every((t) => hay.includes(t))) return false;
+      }
+      if (f.type !== "All" && hubStr(r.type) !== f.type) return false;
+      if (f.pricing !== "All" && hubStr(r.category) !== f.pricing) return false;
+      if (f.author && hubStr(r.username).toLowerCase() !== f.author.toLowerCase()) return false;
+      if (f.tags.length) {
+        const tags = hubStr(r.tags).toLowerCase().split(",").map((t) => t.trim());
+        if (!f.tags.every((t) => tags.includes(t.toLowerCase()))) return false;
+      }
+      return hubLicenseMatches(hubLicense(r), f.license);
+    });
+  const by = {
+    "Recently added": (a, b) => b._added - a._added,
+    Author: (a, b) => hubStr(a.username).localeCompare(hubStr(b.username)),
+    "Name (A-Z)": (a, b) => hubStr(a.title).localeCompare(hubStr(b.title)),
+    Downloads: (a, b) => hubNum(b.download_count) - hubNum(a.download_count),
+    Rating: (a, b) => hubNum(b.rating_avg) - hubNum(a.rating_avg),
+    "Reaction Score": (a, b) => hubNum(b.reaction_score) - hubNum(a.reaction_score),
+  }[HUB.wishSort];
+  return by ? items.sort(by) : items;
+}
+
+// ---- Install -------------------------------------------------------------------------
+
+// Every dependency of a resource, de-duplicated, with its local resolution and
+// the concrete file a download would fetch.
+function hubDependencyList(detail) {
+  const groups = detail?.dependencies && typeof detail.dependencies === "object" ? detail.dependencies : {};
+  const seen = new Set();
+  const out = [];
+  for (const [group, list] of Object.entries(groups)) {
+    if (!Array.isArray(list)) continue;
+    for (const d of list) {
+      const ref = hubStr(d?.filename) || hubStr(d?.packageName);
+      const key = (ref || group).toLowerCase();
+      if (!ref || seen.has(key)) continue;
+      seen.add(key);
+      const version = hubStr(d.latest_version);
+      const concrete = /^\d+$/.test(version) && hubStr(d.packageName) ? `${d.packageName}.${version}.var` : "";
+      const resolution = hubResolveLocal(ref);
+      out.push({
+        ref,
+        packageName: hubStr(d.packageName) || hubBaseOf(ref),
+        concrete,
+        url: hubFileUrl(d),
+        size: hubNum(d.file_size),
+        resourceId: hubStr(d.resource_id),
+        username: hubStr(d.username),
+        license: hubStr(d.licenseType),
+        resolution,
+        installed: resolution === "exact" || resolution === "latest",
+      });
+    }
+  }
+  return out;
+}
+
+function hubInstallSize(detail) {
+  const files = (detail?.hubFiles || []).reduce((sum, f) => sum + hubNum(f.file_size), 0);
+  const deps = hubDependencyList(detail)
+    .filter((d) => !d.installed)
+    .reduce((sum, d) => sum + d.size, 0);
+  return files + deps;
+}
+
+function hubQueueFile(rid, { url, filename, label, host = "hub", depRef = null }, destDir) {
+  const name = hubEnsureVar(filename);
+  const stem = hubStem(name);
+  if (!url || !name) return null;
+  if (HUB.local.ids.has(stem.toLowerCase())) return null;
+  const inst = HUB.installs.get(String(rid));
+  if (depRef && inst) inst.depJobs.set(depRef, stem.toLowerCase());
+  const id = queueDownload({
+    packageId: stem,
+    url,
+    filename: name,
+    host,
+    destDir,
+    label: label || stem,
+    onProgress: () => hubOnJobProgress(rid),
+    onDone: (status) => hubOnJobDone(rid, stem, status),
+  });
+  if (id != null && inst) inst.jobs.add(id);
+  return id;
+}
+
+let hubProgressTimer = 0;
+function hubOnJobProgress() {
+  if (hubProgressTimer) return;
+  hubProgressTimer = setTimeout(() => {
+    hubProgressTimer = 0;
+    hubSyncCards();
+    hubSyncDetailAction();
+  }, 250);
+}
+
+function hubOnJobDone(rid, stem, status) {
+  if (status === "done") hubLocalAdd(stem);
+  hubSyncCards();
+  hubRenderDetail();
+  const jobs = hubInstallJobs(rid);
+  if (jobs.length && jobs.every((j) => !downloadJobActive(j))) {
+    const failed = jobs.filter((j) => j.status === "failed").length;
+    const title = HUB.rows.get(String(rid))?.title || HUB.details.get(String(rid))?.title || "Package";
+    hubToast(
+      failed ? `${title}: ${jobs.length - failed} downloaded, ${failed} failed` : `${title} installed`,
+      failed ? "error" : "success",
+    );
+    hubLoadLocal(true);
+    // The library listing scans AddonPackages; pick up the new files.
+    vpRefreshAfterMutation().catch(() => {});
+  }
+}
+
+// Install a resource: its own files, then every dependency that isn't on disk
+// (resolved through detail.dependencies, then findPackages), all through the
+// Downloads queue into AddonPackages.
+async function hubInstall(rid, { onlyRef = null } = {}) {
+  if (!invoke) return;
+  const key = String(rid);
+  const existing = HUB.installs.get(key);
+  if (existing?.resolving) return;
+  const inst = existing || { jobs: new Set(), depJobs: new Map(), unavailable: new Set() };
+  inst.resolving = true;
+  HUB.installs.set(key, inst);
+  hubSyncCards();
+  hubSyncDetailAction();
+  try {
+    await hubLoadLocal();
+    const destDir = await ensureDownloadsDir();
+    if (!destDir) throw new Error("No downloads folder — set your VaM directory in Settings.");
+    const detail = await hubGetDetail(key);
+    const title = hubStr(detail?.title) || `Resource ${key}`;
+    let queued = 0;
+    const deps = hubDependencyList(detail);
+    const lookups = new Map(); // findPackages name -> dependency ref
+
+    if (!onlyRef) {
+      const files = Array.isArray(detail?.hubFiles) ? detail.hubFiles : [];
+      if (!files.length) throw new Error("No downloadable files");
+      let anyUrl = false;
+      for (const f of files) {
+        const url = hubFileUrl(f);
+        if (!url) continue;
+        anyUrl = true;
+        if (hubQueueFile(key, { url, filename: f.filename, label: title }, destDir) != null) queued += 1;
+      }
+      if (!anyUrl) throw new Error("No download URL available");
+    }
+
+    for (const d of deps) {
+      if (onlyRef && d.ref !== onlyRef) continue;
+      if (d.installed) continue;
+      // Any version on disk satisfies a dependency for VaM's purposes (it falls
+      // back), and keeps built-ins from being re-downloaded.
+      if (!onlyRef && HUB.local.bases.has(hubBaseOf(d.ref).toLowerCase())) continue;
+      if (d.concrete && d.url) {
+        if (hubQueueFile(key, { url: d.url, filename: d.concrete, label: d.concrete, depRef: d.ref }, destDir) != null) {
+          queued += 1;
+        }
+      } else {
+        lookups.set(d.packageName ? `${d.packageName}.latest` : d.ref, d.ref);
+      }
+    }
+
+    const unresolved = [];
+    const names = [...lookups.keys()];
+    for (let i = 0; i < names.length; i += 50) {
+      const batch = names.slice(i, i + 50);
+      let found = {};
+      try {
+        found = (await hubCall("findPackages", { packages: batch.join(",") }))?.packages || {};
+      } catch (e) {
+        addLog(`Hub: findPackages failed — ${String(e)}`);
+      }
+      for (const name of batch) {
+        const hit = found[name];
+        const file = hubStr(hit?.filename);
+        const url = hubFileUrl(hit);
+        if (file && /\.\d+\.var$/i.test(file) && url) {
+          if (hubQueueFile(key, { url, filename: file, label: file, depRef: lookups.get(name) }, destDir) != null) {
+            queued += 1;
+          }
+        } else {
+          unresolved.push(hubBaseOf(name));
+          inst.unavailable.add(lookups.get(name));
+        }
+      }
+    }
+
+    if (unresolved.length) {
+      hubToast(
+        `${unresolved.length} ${unresolved.length === 1 ? "dependency" : "dependencies"} unavailable: ${unresolved.slice(0, 3).join(", ")}${unresolved.length > 3 ? "…" : ""}`,
+        "error",
+      );
+    }
+    if (!queued && !unresolved.length) hubToast(`${title}: everything is already installed`, "success");
+    else if (queued) hubToast(`Installing ${title} — ${queued} file${queued === 1 ? "" : "s"} queued`, "info");
+  } catch (e) {
+    hubToast(`Install failed: ${String(e?.message || e)}`, "error");
+  } finally {
+    inst.resolving = false;
+    hubSyncCards();
+    hubRenderDetail();
+  }
+}
+
+function hubShowInLibrary(r) {
+  const st = hubResourceState(r);
+  const stem = st.stem || hubStem(r?.hubFiles?.[0]?.filename);
+  document.querySelector('[data-sidebar-link="var-packages"]')?.click();
+  if (stem) setTimeout(() => libRevealPackage("", stem), 50);
+}
+
+// ---- Rendering: filters ----------------------------------------------------------------
+
+function hubTypes() {
+  const types = Array.isArray(HUB.info?.type) ? [...HUB.info.type] : [];
+  return types.sort((a, b) => {
+    const ia = HUB_TYPE_FIRST.indexOf(a);
+    const ib = HUB_TYPE_FIRST.indexOf(b);
+    if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    return a.localeCompare(b);
+  });
+}
+
+function hubActiveFilterCount() {
+  const f = HUB.filters;
+  return (f.type !== "All" ? 1 : 0) + (f.pricing !== "All" ? 1 : 0) + f.tags.length + (f.author ? 1 : 0) + (f.license !== "Any" ? 1 : 0);
+}
+
+function hubRenderFilters() {
+  const f = HUB.filters;
+  const typeList = $("hub-type-list");
+  if (typeList) {
+    typeList.innerHTML = ["All", ...hubTypes()]
+      .map((t) =>
+        libListRowHtml({
+          value: t === "All" ? null : t,
+          label: t === "All" ? "All types" : t,
+          dot: t === "All" ? "" : hubTypeColor(t),
+          selected: f.type === t,
+          count: null,
+        }),
+      )
+      .join("");
+  }
+  libSetDropdown("hub-type", f.type === "All" ? "Type" : f.type, f.type !== "All");
+  const dot = $("lib-dd-hub-type-dot");
+  if (dot) {
+    dot.classList.toggle("hidden", f.type === "All");
+    dot.style.setProperty("--dot", hubTypeColor(f.type));
+  }
+
+  const pricing = $("hub-pricing-list");
+  if (pricing) {
+    pricing.innerHTML = ["All", "Free", "Paid"]
+      .map((v) => libListRowHtml({ value: v === "All" ? null : v, label: v, selected: f.pricing === v, count: null }))
+      .join("");
+  }
+  libSetDropdown("hub-pricing", f.pricing === "All" ? "Pricing" : f.pricing, f.pricing !== "All");
+
+  const tagChips = $("hub-tag-chips");
+  if (tagChips) {
+    tagChips.classList.toggle("hidden", !f.tags.length);
+    tagChips.innerHTML =
+      f.tags
+        .map(
+          (t) => `<button type="button" class="lib-filter-chip" data-hub-tag-remove="${escapeAttribute(t)}">${escapeHtml(t)}<span class="material-symbols-outlined">close</span></button>`,
+        )
+        .join("") + (f.tags.length ? `<button type="button" class="lib-link-btn" data-hub-tags-clear>Clear</button>` : "");
+  }
+  libSetDropdown("hub-tags", f.tags.length ? `Tags · ${f.tags.length}` : "Tags", f.tags.length > 0);
+
+  const authorChips = $("hub-author-chips");
+  if (authorChips) {
+    authorChips.classList.toggle("hidden", !f.author);
+    authorChips.innerHTML = f.author
+      ? `<button type="button" class="lib-filter-chip" data-hub-author-clear>${escapeHtml(f.author)}<span class="material-symbols-outlined">close</span></button>`
+      : "";
+  }
+  libSetDropdown("hub-author", f.author ? `by ${f.author}` : "Author", Boolean(f.author));
+
+  const license = $("hub-license-list");
+  if (license) {
+    license.innerHTML = HUB_LICENSES.map((l) =>
+      libListRowHtml({ value: l === "Any" ? null : l, label: l, selected: f.license === l, count: null }),
+    ).join("");
+  }
+  libSetDropdown("hub-license", f.license === "Any" ? "License" : f.license, f.license !== "Any");
+
+  const sortList = $("hub-sort-list");
+  const sorts = HUB.mode === "wishlist" ? HUB_WISHLIST_SORTS : HUB.info?.sort || [];
+  const current = HUB.mode === "wishlist" ? HUB.wishSort : f.sort;
+  if (sortList) {
+    sortList.innerHTML = sorts
+      .map((s) => libListRowHtml({ value: s, label: s, selected: s === current, count: null }))
+      .join("");
+  }
+  libSetDropdown("hub-sort", current ? `Sort: ${current}` : "Sort", false);
+
+  const n = hubActiveFilterCount();
+  $("hub-filter-summary")?.classList.toggle("hidden", n === 0);
+  vpSetText("hub-filter-summary-text", `${n} filter${n === 1 ? "" : "s"}`);
+  const hasSearch = Boolean(f.search.trim());
+  $("hub-search-clear")?.classList.toggle("hidden", !hasSearch);
+  $("hub-search-wrap")?.classList.toggle("has-value", hasSearch);
+  document.querySelectorAll("[data-hub-mode]").forEach((b) =>
+    b.classList.toggle("active", b.getAttribute("data-hub-mode") === HUB.mode),
+  );
+  hubRenderSuggestions("tag");
+  hubRenderSuggestions("author");
+}
+
+// Tag / author suggestions from getInfo (prefix matches first, by count).
+const HUB_AC = { tag: -1, author: -1, tagMatches: [], authorMatches: [] };
+
+function hubRenderSuggestions(kind) {
+  const input = $(kind === "tag" ? "hub-tag-input" : "hub-author-input");
+  const list = $(kind === "tag" ? "hub-tag-list" : "hub-author-list");
+  if (!input || !list) return;
+  const source = kind === "tag" ? HUB.info?.tags : HUB.info?.users;
+  const q = input.value.trim().toLowerCase();
+  const entries = source && typeof source === "object" ? Object.entries(source) : [];
+  const chosen = new Set(kind === "tag" ? HUB.filters.tags.map((t) => t.toLowerCase()) : []);
+  const starts = [];
+  const contains = [];
+  for (const [name, meta] of entries) {
+    const lower = name.toLowerCase();
+    if (chosen.has(lower)) continue;
+    const ct = Number(meta?.ct) || 0;
+    if (!q || lower.startsWith(q)) starts.push([name, ct]);
+    else if (lower.includes(q)) contains.push([name, ct]);
+  }
+  const byCount = (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]);
+  const matches = [...starts.sort(byCount), ...contains.sort(byCount)].slice(0, 20);
+  HUB_AC[`${kind}Matches`] = matches.map((m) => m[0]);
+  if (HUB_AC[kind] >= matches.length) HUB_AC[kind] = matches.length - 1;
+  list.innerHTML = matches.length
+    ? matches
+        .map(
+          ([name, ct], i) => `<button type="button" class="lib-ac-option${i === HUB_AC[kind] ? " is-active" : ""}" data-hub-pick-${kind}="${escapeAttribute(name)}">
+            <span class="lib-row-label">${escapeHtml(name)}</span><span class="lib-row-count">${ct.toLocaleString()}</span></button>`,
+        )
+        .join("")
+    : `<div class="lib-ac-empty">${HUB.info ? "No matches" : "Loading Hub filters…"}</div>`;
+}
+
+// ---- Rendering: grid ---------------------------------------------------------------------
+
+function hubAvatarHtml(name, iconUrl, size = 30) {
+  const initials = libAuthorInitials(name || "?");
+  const img = hubStr(iconUrl)
+    ? `<img alt="" loading="lazy" referrerpolicy="no-referrer" src="${escapeAttribute(hubStr(iconUrl))}" data-hub-hide-on-error />`
+    : "";
+  return `<span class="lib-avatar hub-avatar${size < 24 ? " is-sm" : ""}" style="background:${libAuthorColor(name || "?")};width:${size}px;height:${size}px">${escapeHtml(initials)}${img}</span>`;
+}
+
+function hubThumbHtml(r, cls = "lib-thumb") {
+  const url = hubStr(r.image_url);
+  return `<div class="${cls}" style="--lib-thumb-bg:${escapeAttribute(libGradient(String(r.resource_id)))}">
+      ${url ? `<img alt="" loading="lazy" referrerpolicy="no-referrer" src="${escapeAttribute(url)}" data-hub-img="${escapeAttribute(url)}" />` : ""}`;
+}
+
+function hubCardHtml(r) {
+  const rid = String(r.resource_id);
+  const compact = HUB.view === "compact";
+  const type = hubStr(r.type);
+  const pinned = HUB.wishlist.has(rid);
+  const chips = [];
+  if (type && HUB.filters.type === "All") {
+    chips.push(`<span class="lib-chip lib-chip-type" style="background:${hubTypeColor(type)}cc">${escapeHtml(type)}</span>`);
+  }
+  if (hubStr(r.category) === "Paid") chips.push(`<span class="lib-chip lib-chip-type" style="background:#fbbf24cc">Paid</span>`);
+  const title = hubStr(r.title);
+  const user = hubStr(r.username);
+  const author = `<button type="button" class="lib-author-link" data-hub-author="${escapeAttribute(user)}" title="Filter by ${escapeAttribute(user)}">${escapeHtml(user)}</button>`;
+  const pin =
+    HUB.mode === "wishlist"
+      ? `<button type="button" class="hub-pin is-remove" data-hub-pin="${escapeAttribute(rid)}" title="Remove from wishlist">
+           <span class="material-symbols-outlined">delete</span></button>`
+      : `<button type="button" class="hub-pin${pinned ? " is-on" : ""}" data-hub-pin="${escapeAttribute(rid)}" title="${pinned ? "Remove from wishlist" : "Add to wishlist"}">
+           <span class="material-symbols-outlined">push_pin</span></button>`;
+  const stats = `<div class="lib-card-stats hub-stats">
+      <span class="lib-stat" title="Downloads"><span class="material-symbols-outlined">download</span>${hubFormatNumber(r.download_count)}</span>
+      <span class="lib-stat hub-stat-react" title="Reaction score"><span class="material-symbols-outlined">thumb_up</span>${hubFormatNumber(r.reaction_score)}</span>
+      <span class="lib-stat hub-stat-rating" title="Rating"><span class="material-symbols-outlined">star</span>${hubNum(r.rating_avg) ? hubNum(r.rating_avg).toFixed(1).replace(/\.0$/, "") : "—"}</span>
+    </div>`;
+  return `<div class="lib-card hub-card${HUB.selected === rid ? " is-picked" : ""}" data-hub-rid="${escapeAttribute(rid)}" role="option" tabindex="-1">
+      ${hubThumbHtml(r)}
+        <div class="lib-thumb-shade"></div>
+        <div class="lib-thumb-chips">${chips.join("")}</div>
+        ${pin}
+        ${
+          compact
+            ? `<div class="lib-card-scrim hub-scrim">
+                 <div class="hub-scrim-text">
+                   <div class="lib-card-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</div>
+                   <span class="lib-by">by ${author}</span>
+                 </div>
+                 <div class="hub-card-action" data-hub-action-slot="${escapeAttribute(rid)}">${hubActionHtml(r, { compact: true })}</div>
+               </div>`
+            : ""
+        }
+      </div>
+      ${
+        compact
+          ? ""
+          : `<div class="lib-card-footer hub-card-footer">
+               <div class="lib-card-row">
+                 ${hubAvatarHtml(user, r.icon_url)}
+                 <div class="lib-card-text">
+                   <div class="lib-title-line"><span class="lib-card-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</span></div>
+                   <span class="lib-by">by ${author}</span>
+                 </div>
+               </div>
+               ${stats}
+             </div>
+             <div class="hub-card-actions" data-hub-action-slot="${escapeAttribute(rid)}">${hubActionHtml(r)}</div>`
+      }
+    </div>`;
+}
+
+function hubVisibleItems() {
+  return HUB.mode === "wishlist" ? hubWishlistItems() : HUB.items;
+}
+
+function hubRenderGrid() {
+  const grid = $("hub-grid");
+  if (!grid) return;
+  const items = hubVisibleItems();
+  $("hub-progress")?.classList.toggle("hidden", !HUB.loading);
+  const err = $("hub-error");
+  const showErr = HUB.mode === "hub" && HUB.error && !HUB.items.length;
+  err?.classList.toggle("hidden", !showErr);
+  if (showErr) vpSetText("hub-error-text", `Couldn't reach the Hub: ${HUB.error}`);
+  document.querySelectorAll("[data-hub-view]").forEach((b) =>
+    b.classList.toggle("active", b.getAttribute("data-hub-view") === HUB.view),
+  );
+
+  if (HUB.mode === "wishlist") {
+    vpSetText("hub-count", `${items.length.toLocaleString()} of ${HUB.wishlist.size.toLocaleString()} wishlisted`);
+  } else {
+    vpSetText(
+      "hub-count",
+      HUB.loading && !HUB.items.length ? "Searching…" : `${HUB.total.toLocaleString()} packages`,
+    );
+  }
+
+  if (!items.length) {
+    if (HUB.mode === "hub" && HUB.loading) {
+      grid.innerHTML = Array.from({ length: 12 }, () => `<div class="lib-card hub-card hub-skeleton"><div class="lib-thumb lib-skeleton"></div><div class="lib-card-footer hub-card-footer"><div class="lib-skeleton" style="width:70%"></div><div class="lib-skeleton" style="width:40%;margin-top:8px"></div></div></div>`).join("");
+    } else if (HUB.mode === "wishlist") {
+      grid.innerHTML = `<div class="lib-empty">${HUB.wishlist.size ? "No wishlisted packages match the filters" : "Your wishlist is empty."}<span class="lib-empty-sub">Pin a package with <span class="material-symbols-outlined" style="font-size:13px;vertical-align:-2px">push_pin</span> to keep it here.</span></div>`;
+    } else if (!showErr) {
+      grid.innerHTML = `<div class="lib-empty">No packages found</div>`;
+    } else {
+      grid.innerHTML = "";
+    }
+  } else {
+    grid.innerHTML = items.map((r) => hubCardHtml(r)).join("");
+  }
+  const more = $("hub-load-more");
+  if (more) {
+    const show = HUB.mode === "hub" && HUB.items.length > 0 && (!HUB.done || HUB.loading);
+    more.classList.toggle("hidden", !show);
+    more.innerHTML = HUB.loading
+      ? "Loading more…"
+      : HUB.error
+        ? `Couldn't load more results. <button type="button" class="lib-link-btn" data-hub-retry-more>Retry</button>`
+        : `Showing ${HUB.items.length.toLocaleString()} — scroll for more`;
+  }
+  hubApplyLayout();
+  hubRenderStatusBar();
+  hubRenderFilters();
+}
+
+// Patches only the action buttons and pin states (download progress ticks).
+function hubSyncCards() {
+  document.querySelectorAll("#hub-grid [data-hub-action-slot]").forEach((slot) => {
+    const rid = slot.getAttribute("data-hub-action-slot");
+    const r = HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
+    if (r) slot.innerHTML = hubActionHtml(r, { compact: HUB.view === "compact" });
+  });
+  document.querySelectorAll("#hub-grid .hub-pin:not(.is-remove)").forEach((pin) => {
+    const on = HUB.wishlist.has(pin.getAttribute("data-hub-pin"));
+    pin.classList.toggle("is-on", on);
+    pin.title = on ? "Remove from wishlist" : "Add to wishlist";
+  });
+}
+
+function hubApplyLayout() {
+  const grid = $("hub-grid");
+  const scroll = $("hub-scroll");
+  if (!grid || !scroll) return;
+  const avail = Math.max(0, scroll.clientWidth - 32);
+  if (!avail) return;
+  const cols = Math.max(1, Math.floor((avail + HUB_GAP) / (HUB.cardWidth + HUB_GAP)));
+  grid.style.setProperty("--lib-cols", String(cols));
+  const slider = $("hub-size-slider");
+  if (slider) {
+    const minCols = Math.max(1, Math.ceil((avail + HUB_GAP) / (500 + HUB_GAP)));
+    const maxCols = Math.max(minCols, Math.floor((avail + HUB_GAP) / (100 + HUB_GAP)));
+    slider.min = String(minCols);
+    slider.max = String(maxCols);
+    slider.value = String(Math.min(maxCols, Math.max(minCols, cols)));
+    $("hub-size-slider-wrap")?.classList.toggle("hidden", maxCols <= minCols);
+  }
+  const view = $("hub-view");
+  view?.style.setProperty("--lib-detail-w", `${HUB.detailWidth}px`);
+}
+
+function hubRenderStatusBar() {
+  const bar = $("hub-statusbar");
+  if (!bar) return;
+  const sep = `<span class="lib-sb-sep">·</span>`;
+  const activeInstalls = [...HUB.installs.keys()].filter((rid) => hubInstallJobs(rid).some(downloadJobActive)).length;
+  bar.innerHTML = `
+    <span class="lib-sb-item"><span class="material-symbols-outlined">explore</span>${
+      HUB.mode === "wishlist" ? "Wishlist" : `${HUB.items.length.toLocaleString()} loaded of ${HUB.total.toLocaleString()}`
+    }</span>${sep}
+    <span class="lib-sb-item"><span class="material-symbols-outlined">push_pin</span>${HUB.wishlist.size.toLocaleString()} wishlisted</span>${sep}
+    <span class="lib-sb-item"><span class="material-symbols-outlined">inventory_2</span>${HUB.local.ids.size.toLocaleString()} installed</span>
+    ${activeInstalls ? `${sep}<span class="lib-sb-item hub-sb-active"><span class="material-symbols-outlined">downloading</span>${activeInstalls} installing</span>` : ""}
+    <span class="lib-sb-right">VaM Hub · hub.virtamate.com</span>`;
+}
+
+// ---- Rendering: details ---------------------------------------------------------------------
+
+function hubLicenseTag(license) {
+  if (!license) return "";
+  const cls = HUB_COMMERCIAL.has(license)
+    ? " is-commercial"
+    : ["PC", "PC EA", "Questionable"].includes(license) || /NC/.test(license)
+      ? " is-restricted"
+      : "";
+  return `<span class="lib-chip lib-license${cls}">${escapeHtml(license)}</span>`;
+}
+
+// Installed / Fallback (another version on disk; VaM uses it) / Install, plus
+// the live download state and "Unavailable" once the Hub couldn't find it.
+function hubDepPill(d, rid) {
+  const inst = HUB.installs.get(String(rid));
+  const stem = inst?.depJobs.get(d.ref) || (d.concrete ? hubStem(d.concrete).toLowerCase() : "");
+  const job = stem
+    ? [...state.downloads].reverse().find((j) => j.packageId && j.packageId.toLowerCase() === stem)
+    : null;
+  if (job && downloadJobActive(job)) {
+    return job.status === "queued"
+      ? `<span class="lib-pill lib-pill-info hub-pulse">Queued</span>`
+      : `<span class="lib-pill hub-pill-progress"><span style="width:${Math.max(2, job.percent || 0)}%"></span><b>${job.percent || 0}%</b></span>`;
+  }
+  if (d.installed) return `<span class="lib-pill lib-pill-ok">Installed</span>`;
+  if (job && job.status === "failed") return `<span class="lib-pill lib-pill-err" title="${escapeAttribute(job.error || "")}">Failed</span>`;
+  const attrs = `data-hub-dep-install="${escapeAttribute(d.ref)}" data-hub-rid="${escapeAttribute(String(rid))}"`;
+  if (d.resolution === "fallback") {
+    return d.url || d.packageName
+      ? `<button type="button" class="lib-pill lib-pill-warn" ${attrs} title="Another version is installed and VaM will use it. Click to download this version.">Fallback</button>`
+      : `<span class="lib-pill lib-pill-warn" title="Another version is installed and VaM will use it">Fallback</span>`;
+  }
+  if (inst?.unavailable.has(d.ref)) {
+    return `<span class="lib-pill lib-pill-err" title="Not available on the Hub">Unavailable</span>`;
+  }
+  if (d.url || d.packageName) {
+    return `<button type="button" class="lib-pill hub-pill-install" ${attrs} title="Download this dependency">Install</button>`;
+  }
+  return `<span class="lib-pill lib-pill-err">Missing</span>`;
+}
+
+function hubFileRowsHtml(detail, rid) {
+  const files = Array.isArray(detail?.hubFiles) ? detail.hubFiles : [];
+  return files
+    .map((f) => {
+      const stem = hubStem(f.filename);
+      const installed = HUB.local.ids.has(stem.toLowerCase());
+      const job = [...state.downloads].reverse().find((j) => j.packageId && j.packageId.toLowerCase() === stem.toLowerCase());
+      let pill;
+      if (job && downloadJobActive(job)) {
+        pill = job.status === "queued"
+          ? `<span class="lib-pill lib-pill-info hub-pulse">Queued</span>`
+          : `<span class="lib-pill hub-pill-progress"><span style="width:${Math.max(2, job.percent || 0)}%"></span><b>${job.percent || 0}%</b></span>`;
+      } else if (installed) {
+        pill = `<span class="lib-pill lib-pill-ok">Installed</span>`;
+      } else if (hubFileUrl(f)) {
+        pill = `<button type="button" class="lib-pill hub-pill-install" data-hub-act="install" data-hub-rid="${escapeAttribute(String(rid))}">Install</button>`;
+      } else {
+        pill = `<span class="lib-pill lib-pill-err">No file</span>`;
+      }
+      return `<div class="lib-dep-row hub-file-row">
+          <span class="lib-dep-ref is-resolved" title="${escapeAttribute(hubStr(f.filename))}">${escapeHtml(hubStr(f.filename))}</span>
+          <span class="lib-dep-size">${hubNum(f.file_size) ? escapeHtml(formatBytesLocal(hubNum(f.file_size))) : ""}</span>
+          ${pill}
+        </div>`;
+    })
+    .join("");
+}
+
+function hubDetailHtml(r, detail) {
+  const rid = String(r.resource_id);
+  const d = detail || r;
+  const type = hubStr(d.type);
+  const category = hubStr(d.category);
+  const license = hubLicense(d);
+  const pinned = HUB.wishlist.has(rid);
+  const support = hubStr(d.promotional_link);
+  const supportUrl = support ? (/^https?:\/\//i.test(support) ? support : `https://${support}`) : "";
+  const files = Array.isArray(detail?.hubFiles) ? detail.hubFiles : [];
+  const deps = detail ? hubDependencyList(detail) : [];
+  const depRows = deps.map(
+    (dep) => `<div class="lib-dep-row">
+        ${
+          dep.resourceId
+            ? `<button type="button" class="lib-dep-ref${dep.installed ? " is-resolved" : ""}" data-hub-open-rid="${escapeAttribute(dep.resourceId)}" title="${escapeAttribute(dep.ref)}">${escapeHtml(dep.ref)}</button>`
+            : `<span class="lib-dep-ref" title="${escapeAttribute(dep.ref)}">${escapeHtml(dep.ref)}</span>`
+        }
+        <span class="lib-dep-size">${dep.size ? escapeHtml(formatBytesLocal(dep.size)) : ""}</span>
+        ${hubDepPill(dep, rid)}
+      </div>`,
+  );
+  const reviewTab = hubNum(d.review_count) > 0 || hubNum(d.rating_count) > 0;
+  const links = [
+    ["", "Overview"],
+    ...(hubNum(d.update_count) > 0 ? [["updates", `Updates (${hubNum(d.update_count)})`]] : []),
+    ...(reviewTab ? [["reviews", `Reviews (${hubNum(d.review_count)})`]] : []),
+    ["history", "History"],
+  ];
+  const thread = hubStr(d.discussion_thread_id);
+  return `
+    <section class="lib-ds hub-detail-top">
+      ${hubThumbHtml(d, "hub-hero")}</div>
+      <div class="lib-title-line hub-detail-title">
+        <span class="lib-dh-title" title="${escapeAttribute(hubStr(d.title))}">${escapeHtml(hubStr(d.title))}</span>
+        ${hubStr(d.version_string) ? `<span class="lib-ver">${escapeHtml(hubStr(d.version_string))}</span>` : ""}
+      </div>
+      <button type="button" class="hub-author-card" data-hub-author="${escapeAttribute(hubStr(d.username))}" title="Show this author's packages">
+        ${hubAvatarHtml(hubStr(d.username), d.icon_url, 32)}
+        <span class="hub-author-text"><b>${escapeHtml(hubStr(d.username))}</b><small>Package author</small></span>
+      </button>
+      ${supportUrl ? `<button type="button" class="lib-link lib-support hub-support" data-hub-url="${escapeAttribute(supportUrl)}"><span class="material-symbols-outlined">favorite</span>Support this creator</button>` : ""}
+      <div class="lib-dh-chips hub-badges">
+        ${type ? `<span class="lib-chip lib-chip-type" style="background:${hubTypeColor(type)}cc">${escapeHtml(type)}</span>` : ""}
+        ${
+          category === "Free"
+            ? `<span class="lib-chip lib-chip-type" style="background:#34d399cc">Free</span>`
+            : category === "Paid"
+              ? `<span class="lib-chip lib-chip-type" style="background:#fbbf24cc">Paid</span>`
+              : category
+                ? `<span class="lib-chip lib-chip-plain">${escapeHtml(category)}</span>`
+                : ""
+        }
+        ${hubLicenseTag(license)}
+      </div>
+      ${hubStr(d.tag_line) ? `<p class="hub-tagline">${escapeHtml(hubStr(d.tag_line))}</p>` : ""}
+      <div class="hub-stats-row">
+        <span title="Downloads"><span class="material-symbols-outlined">download</span>${hubFormatNumber(d.download_count)}</span>
+        <span title="${escapeAttribute(`${hubNum(d.rating_count)} ratings · ${hubNum(d.rating_avg).toFixed(1)} average · ${hubNum(d.rating_weighted).toFixed(1)} weighted`)}"><span class="material-symbols-outlined">star</span>${hubNum(d.rating_avg) ? hubNum(d.rating_avg).toFixed(1).replace(/\.0$/, "") : "—"}</span>
+        <span title="Reaction score"><span class="material-symbols-outlined">thumb_up</span>${hubFormatNumber(d.reaction_score)}</span>
+        <button type="button" class="hub-pin-inline${pinned ? " is-on" : ""}" data-hub-pin="${escapeAttribute(rid)}" title="${pinned ? "Remove from wishlist" : "Add to wishlist"}">
+          <span class="material-symbols-outlined">push_pin</span></button>
+      </div>
+      <dl class="hub-dates">
+        <dt><span class="material-symbols-outlined">event</span>Released</dt><dd>${escapeHtml(hubDate(d.resource_date))}</dd>
+        <dt><span class="material-symbols-outlined">schedule</span>Updated</dt><dd>${escapeHtml(hubDate(d.last_update))}</dd>
+      </dl>
+      <div class="hub-detail-action" data-hub-detail-action="${escapeAttribute(rid)}">${hubActionHtml(d, { big: true })}</div>
+      <button type="button" class="lib-btn lib-btn-accent lib-btn-full hub-open-hub" data-hub-url="${escapeAttribute(hubResourceUrl(rid))}">
+        <span class="material-symbols-outlined">open_in_new</span>Open on Hub
+      </button>
+      <div class="hub-links">
+        ${links
+          .map(([path, label]) => `<button type="button" class="lib-small-link" data-hub-url="${escapeAttribute(hubResourceUrl(rid) + path)}">${escapeHtml(label)}</button>`)
+          .join("")}
+        ${thread ? `<button type="button" class="lib-small-link" data-hub-url="https://hub.virtamate.com/threads/${escapeAttribute(thread)}/">Discussion</button>` : ""}
+      </div>
+    </section>
+    <section class="lib-ds">
+      <div class="lib-group-head"><span class="lib-group-title">Package files <small>(${detail ? files.length : "…"})</small></span></div>
+      ${
+        !detail
+          ? `<div class="lib-skeleton" style="width:80%"></div>`
+          : files.length
+            ? `<div class="lib-box">${hubFileRowsHtml(detail, rid)}</div>`
+            : `<p class="lib-aside">The Hub lists no downloadable files for this resource.</p>`
+      }
+    </section>
+    <section class="lib-ds">
+      <div class="lib-group-head">
+        <span class="lib-group-title">Dependencies <small>(${detail ? deps.length : hubNum(r.dependency_count) || "…"})</small></span>
+        <span class="lib-group-tools">${
+          detail && deps.some((x) => !x.installed)
+            ? `<span class="lib-issue"><span class="material-symbols-outlined">warning</span>${deps.filter((x) => !x.installed).length} not installed</span>`
+            : ""
+        }</span>
+      </div>
+      ${
+        !detail
+          ? `<div class="lib-skeleton" style="width:70%"></div><div class="lib-skeleton" style="width:55%;margin-top:8px"></div>`
+          : deps.length
+            ? `<div class="lib-box">${libCollapsible(depRows, `hubdeps:${rid}`, depRows.length)}</div>`
+            : `<p class="lib-aside">No dependencies</p>`
+      }
+    </section>`;
+}
+
+function hubRenderDetail() {
+  const host = $("hub-detail");
+  if (!host) return;
+  const rid = HUB.selected;
+  if (!rid) {
+    host.innerHTML = `<div class="lib-detail-empty"><span class="material-symbols-outlined">explore</span>Select a package to see its details</div>`;
+    return;
+  }
+  const r = HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot || HUB.details.get(rid);
+  if (!r) {
+    host.innerHTML = `<div class="lib-detail-empty"><span class="material-symbols-outlined">hourglass_empty</span>Loading…</div>`;
+    return;
+  }
+  host.innerHTML = hubDetailHtml(r, HUB.details.get(rid) || null);
+}
+
+function hubSyncDetailAction() {
+  const slot = document.querySelector("#hub-detail [data-hub-detail-action]");
+  if (!slot) return;
+  const rid = slot.getAttribute("data-hub-detail-action");
+  const r = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
+  if (r) slot.innerHTML = hubActionHtml(r, { big: true });
+}
+
+async function hubSelect(rid) {
+  const key = String(rid);
+  HUB.selected = key;
+  document.querySelectorAll("#hub-grid .hub-card").forEach((c) =>
+    c.classList.toggle("is-picked", c.getAttribute("data-hub-rid") === key),
+  );
+  hubRenderDetail();
+  try {
+    const detail = await hubGetDetail(key);
+    if (!HUB.rows.has(key) && detail) HUB.rows.set(key, detail);
+    if (HUB.selected === key) hubRenderDetail();
+  } catch (e) {
+    if (HUB.selected === key) {
+      const host = $("hub-detail");
+      const msg = `Couldn't load the details: ${escapeHtml(String(e?.message || e))}`;
+      if (host?.querySelector(".lib-detail-empty")) {
+        host.innerHTML = `<div class="lib-detail-empty"><span class="material-symbols-outlined">cloud_off</span>${msg}</div>`;
+      } else {
+        host?.insertAdjacentHTML("beforeend", `<section class="lib-ds"><p class="lib-desc">${msg}</p></section>`);
+      }
+    }
+  }
+}
+
+// ---- Filters / actions ---------------------------------------------------------------------
+
+function hubSetFilter(field, value) {
+  HUB.filters[field] = value;
+  hubSavePrefs();
+  if (HUB.mode === "wishlist") {
+    hubRenderGrid();
+  } else {
+    hubRenderFilters();
+    hubLoadPage({ reset: true });
+  }
+}
+
+function hubResetFilters() {
+  HUB.filters = { ...HUB.filters, type: "All", pricing: "All", tags: [], author: "", license: "Any" };
+  hubSavePrefs();
+  if (HUB.mode === "wishlist") hubRenderGrid();
+  else {
+    hubRenderFilters();
+    hubLoadPage({ reset: true });
+  }
+}
+
+function hubSetMode(mode) {
+  if (HUB.mode === mode) return;
+  HUB.mode = mode;
+  hubRenderFilters();
+  if (mode === "hub" && !HUB.items.length) hubLoadPage({ reset: true });
+  else hubRenderGrid();
+}
+
+async function hubRefresh() {
+  HUB.refreshNext = true;
+  HUB.details.clear();
+  await Promise.all([hubLoadInfo(true), hubLoadLocal(true), hubLoadWishlist()]);
+  if (HUB.mode === "hub") hubLoadPage({ reset: true });
+  else hubRenderGrid();
+}
+
+function hubRunAction(btn) {
+  const act = btn.getAttribute("data-hub-act");
+  const rid = btn.getAttribute("data-hub-rid");
+  const r = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
+  if (!r) return;
+  if (act === "install") hubInstall(rid);
+  else if (act === "library") hubShowInLibrary(r);
+  else if (act === "external") hubOpenUrl(hubResourceState(r).url || hubResourceUrl(rid));
+  else if (act === "open") hubOpenUrl(hubResourceUrl(rid));
+}
+
+// Thumbnails the webview can't load directly (hotlink rules) go through the
+// Rust proxy once; anything still failing falls back to the gradient.
+function hubOnImageError(event) {
+  const img = event.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  if (img.hasAttribute("data-hub-hide-on-error")) {
+    img.remove();
+    return;
+  }
+  const url = img.getAttribute("data-hub-img");
+  if (!url || img.dataset.proxied || !invoke) {
+    img.remove();
+    return;
+  }
+  img.dataset.proxied = "1";
+  invoke("hub_image", { url })
+    .then((data) => {
+      if (data && img.isConnected) img.src = data;
+      else img.remove();
+    })
+    .catch(() => img.remove());
+}
+
+function setupHubView() {
+  hubLoadPrefs();
+  const view = $("hub-view");
+  if (!view) return;
+  view.addEventListener("error", hubOnImageError, true);
+
+  document.querySelectorAll("[data-hub-mode]").forEach((b) =>
+    b.addEventListener("click", () => hubSetMode(b.getAttribute("data-hub-mode"))),
+  );
+
+  const search = $("hub-search");
+  let timer = 0;
+  search?.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (HUB.filters.search === search.value) return;
+      hubSetFilter("search", search.value);
+    }, 320);
+  });
+  search?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      clearTimeout(timer);
+      hubSetFilter("search", search.value);
+    } else if (e.key === "Escape" && search.value) {
+      search.value = "";
+      clearTimeout(timer);
+      hubSetFilter("search", "");
+    }
+  });
+  $("hub-search-clear")?.addEventListener("click", () => {
+    if (!search) return;
+    search.value = "";
+    hubSetFilter("search", "");
+    search.focus();
+  });
+
+  const listFields = { "hub-type-list": "type", "hub-pricing-list": "pricing", "hub-license-list": "license" };
+  for (const [id, field] of Object.entries(listFields)) {
+    $(id)?.addEventListener("click", (e) => {
+      const row = e.target.closest("[data-lib-value]");
+      if (!row) return;
+      const v = row.getAttribute("data-lib-value") || (field === "license" ? "Any" : "All");
+      libCloseDropdowns();
+      hubSetFilter(field, v);
+    });
+  }
+  $("hub-sort-list")?.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-lib-value]");
+    if (!row) return;
+    libCloseDropdowns();
+    const v = row.getAttribute("data-lib-value");
+    if (HUB.mode === "wishlist") {
+      HUB.wishSort = v;
+      hubSavePrefs();
+      hubRenderGrid();
+    } else {
+      hubSetFilter("sort", v);
+    }
+  });
+
+  // Tags: chip input with suggestions; Enter or comma commits.
+  const tagInput = $("hub-tag-input");
+  const addTag = (t) => {
+    const tag = String(t || "").trim().replace(/,+$/, "");
+    if (!tag || HUB.filters.tags.some((x) => x.toLowerCase() === tag.toLowerCase())) return;
+    if (tagInput) tagInput.value = "";
+    HUB_AC.tag = -1;
+    hubSetFilter("tags", [...HUB.filters.tags, tag]);
+  };
+  tagInput?.addEventListener("input", () => {
+    if (tagInput.value.includes(",")) {
+      addTag(tagInput.value.split(",")[0]);
+      return;
+    }
+    HUB_AC.tag = -1;
+    hubRenderSuggestions("tag");
+  });
+  tagInput?.addEventListener("keydown", (e) => {
+    const n = HUB_AC.tagMatches.length;
+    if (e.key === "ArrowDown" && n) {
+      e.preventDefault();
+      HUB_AC.tag = (HUB_AC.tag + 1) % n;
+      hubRenderSuggestions("tag");
+    } else if (e.key === "ArrowUp" && n) {
+      e.preventDefault();
+      HUB_AC.tag = (HUB_AC.tag - 1 + n) % n;
+      hubRenderSuggestions("tag");
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      addTag(HUB_AC.tagMatches[HUB_AC.tag] ?? tagInput.value);
+    }
+  });
+  $("hub-tag-list")?.addEventListener("click", (e) => {
+    const opt = e.target.closest("[data-hub-pick-tag]");
+    if (opt) addTag(opt.getAttribute("data-hub-pick-tag"));
+  });
+  $("hub-tag-chips")?.addEventListener("click", (e) => {
+    const rm = e.target.closest("[data-hub-tag-remove]");
+    if (rm) hubSetFilter("tags", HUB.filters.tags.filter((t) => t !== rm.getAttribute("data-hub-tag-remove")));
+    else if (e.target.closest("[data-hub-tags-clear]")) hubSetFilter("tags", []);
+  });
+
+  // Author: autocomplete from getInfo.users.
+  const authorInput = $("hub-author-input");
+  const pickAuthor = (name) => {
+    if (authorInput) authorInput.value = "";
+    HUB_AC.author = -1;
+    libCloseDropdowns();
+    hubSetFilter("author", String(name || "").trim());
+  };
+  authorInput?.addEventListener("input", () => {
+    HUB_AC.author = -1;
+    hubRenderSuggestions("author");
+  });
+  authorInput?.addEventListener("keydown", (e) => {
+    const n = HUB_AC.authorMatches.length;
+    if (e.key === "ArrowDown" && n) {
+      e.preventDefault();
+      HUB_AC.author = (HUB_AC.author + 1) % n;
+      hubRenderSuggestions("author");
+    } else if (e.key === "ArrowUp" && n) {
+      e.preventDefault();
+      HUB_AC.author = (HUB_AC.author - 1 + n) % n;
+      hubRenderSuggestions("author");
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = HUB_AC.authorMatches[HUB_AC.author] ?? authorInput.value;
+      if (String(pick).trim()) pickAuthor(pick);
+    }
+  });
+  $("hub-author-list")?.addEventListener("click", (e) => {
+    const opt = e.target.closest("[data-hub-pick-author]");
+    if (opt) pickAuthor(opt.getAttribute("data-hub-pick-author"));
+  });
+  $("hub-author-chips")?.addEventListener("click", (e) => {
+    if (e.target.closest("[data-hub-author-clear]")) pickAuthor("");
+  });
+
+  $("hub-filter-reset")?.addEventListener("click", hubResetFilters);
+  $("hub-refresh")?.addEventListener("click", () => hubRefresh().catch((e) => addLog(`Hub: ${String(e)}`)));
+  $("hub-error-retry")?.addEventListener("click", () => {
+    HUB.error = null;
+    hubLoadInfo();
+    hubLoadPage({ reset: true });
+  });
+  document.querySelectorAll("[data-hub-view]").forEach((b) =>
+    b.addEventListener("click", () => {
+      HUB.view = b.getAttribute("data-hub-view");
+      hubSavePrefs();
+      hubRenderGrid();
+    }),
+  );
+  $("hub-size-slider")?.addEventListener("input", (e) => {
+    const scroll = $("hub-scroll");
+    const avail = Math.max(0, (scroll?.clientWidth || 0) - 32);
+    const n = Math.max(1, Number(e.target.value) || 1);
+    HUB.cardWidth = Math.max(100, Math.min(500, Math.floor((avail - (n - 1) * HUB_GAP) / n)));
+    hubSavePrefs();
+    hubApplyLayout();
+  });
+
+  $("hub-load-more")?.addEventListener("click", (e) => {
+    if (!e.target.closest("[data-hub-retry-more]")) return;
+    HUB.error = null;
+    hubLoadPage();
+  });
+
+  const scroll = $("hub-scroll");
+  scroll?.addEventListener("scroll", () => hubMaybeLoadMore(), { passive: true });
+  if (scroll && typeof ResizeObserver === "function") new ResizeObserver(() => hubApplyLayout()).observe(scroll);
+
+  // Grid clicks: pin, author, action buttons, then the card itself.
+  $("hub-grid")?.addEventListener("click", (e) => {
+    const pin = e.target.closest("[data-hub-pin]");
+    if (pin) {
+      e.stopPropagation();
+      hubToggleWishlist(pin.getAttribute("data-hub-pin"));
+      return;
+    }
+    const author = e.target.closest("[data-hub-author]");
+    if (author) {
+      e.stopPropagation();
+      hubSetFilter("author", author.getAttribute("data-hub-author"));
+      return;
+    }
+    const act = e.target.closest("[data-hub-act]");
+    if (act) {
+      e.stopPropagation();
+      hubRunAction(act);
+      return;
+    }
+    const card = e.target.closest("[data-hub-rid]");
+    if (card) hubSelect(card.getAttribute("data-hub-rid"));
+  });
+  $("hub-grid")?.addEventListener("dblclick", (e) => {
+    const card = e.target.closest(".hub-card[data-hub-rid]");
+    if (card && !e.target.closest("button")) hubOpenUrl(hubResourceUrl(card.getAttribute("data-hub-rid")));
+  });
+
+  $("hub-detail")?.addEventListener("click", (e) => {
+    const url = e.target.closest("[data-hub-url]");
+    if (url) return hubOpenUrl(url.getAttribute("data-hub-url"));
+    const pin = e.target.closest("[data-hub-pin]");
+    if (pin) return hubToggleWishlist(pin.getAttribute("data-hub-pin"));
+    const author = e.target.closest("[data-hub-author]");
+    if (author) return hubSetFilter("author", author.getAttribute("data-hub-author"));
+    const dep = e.target.closest("[data-hub-dep-install]");
+    if (dep) return hubInstall(dep.getAttribute("data-hub-rid"), { onlyRef: dep.getAttribute("data-hub-dep-install") });
+    const act = e.target.closest("[data-hub-act]");
+    if (act) return hubRunAction(act);
+    const open = e.target.closest("[data-hub-open-rid]");
+    if (open) return hubSelect(open.getAttribute("data-hub-open-rid"));
+    const expand = e.target.closest("[data-lib-expand]");
+    if (expand) {
+      const k = expand.getAttribute("data-lib-expand");
+      if (LIB_DETAILS.expanded.has(k)) LIB_DETAILS.expanded.delete(k);
+      else LIB_DETAILS.expanded.add(k);
+      hubRenderDetail();
+    }
+    return undefined;
+  });
+
+  // Details panel width (left-edge drag), remembered.
+  document.querySelector("[data-hub-resize]")?.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const start = HUB.detailWidth;
+    document.body.classList.add("lib-resizing");
+    const onMove = (e) => {
+      HUB.detailWidth = Math.min(500, Math.max(260, start - (e.clientX - startX)));
+      hubApplyLayout();
+    };
+    const onUp = () => {
+      document.body.classList.remove("lib-resizing");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      hubSavePrefs();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+
+  hubRenderFilters();
+  hubRenderGrid();
+  hubRenderDetail();
+}
+
+// Sidebar entry: first visit loads filters, local packages, wishlist and page 1.
+window.__refreshHubView = () => {
+  if (!invoke) return;
+  hubApplyLayout();
+  if (!HUB.opened) {
+    HUB.opened = true;
+    // The default sort comes from getInfo; a remembered one needn't wait for it.
+    const info = hubLoadInfo();
+    hubLoadLocal();
+    hubLoadWishlist().then(() => hubRenderGrid());
+    if (HUB.mode === "hub") {
+      if (HUB.filters.sort) hubLoadPage({ reset: true });
+      else info.finally(() => hubLoadPage({ reset: true }));
+    }
+  } else {
+    hubLoadLocal(true);
+    hubRenderGrid();
+  }
+};
+
 window.addEventListener("DOMContentLoaded", async () => {
   await initConfig();
   // Pull the persisted blocked-creators set so render-time filters honor
@@ -13878,6 +15461,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVamDir();
   setupLibraryView();
   setupDatabasePackages();
+  setupHubView();
 
   const vdBack = $("var-details-back");
   if (vdBack) {

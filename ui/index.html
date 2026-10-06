@@ -74,6 +74,14 @@
                 <span class="material-symbols-outlined">inventory_2</span>
                 <span class="sidebar-label" id="sidebar-var-packages-label">VAR Packages</span>
               </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="hub">
+                <span class="material-symbols-outlined">explore</span>
+                <span class="sidebar-label">Hub</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="graph">
+                <span class="material-symbols-outlined">hub</span>
+                <span class="sidebar-label">Graph</span>
+              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="var-details">
                 <span class="material-symbols-outlined">description</span>
                 <span class="sidebar-label" id="sidebar-var-details-label">VAR Details</span>
@@ -1033,6 +1041,147 @@
         </div>
 
         <footer class="lib-statusbar" id="lib-statusbar"></footer>
+      </section>
+
+      <!-- Hub — browse and install VaM Hub resources, after VaM Backstage's Hub
+           page. Same bars, grid and details-panel pattern as VAR Packages.
+           Resource pages open in the system browser (no embedded Hub browser). -->
+      <section id="hub-view" class="app-main lib-view hub-view hidden">
+        <div class="lib-filterbar hub-filterbar">
+          <div class="lib-seg hub-mode" role="tablist" aria-label="Hub source">
+            <button id="hub-mode-hub" class="lib-seg-btn active" type="button" role="tab" data-hub-mode="hub">Hub</button>
+            <button id="hub-mode-wishlist" class="lib-seg-btn" type="button" role="tab" data-hub-mode="wishlist">
+              Wishlist <span class="hub-mode-count" id="hub-wishlist-count"></span>
+            </button>
+          </div>
+          <div class="lib-search" id="hub-search-wrap">
+            <input id="hub-search" type="text" placeholder="Search the Hub…" spellcheck="false" autocomplete="off" />
+            <button id="hub-search-clear" class="lib-search-clear hidden" type="button" aria-label="Clear search">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="hub-type">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="hub-type">
+              <span class="lib-type-dot hidden" id="lib-dd-hub-type-dot"></span>
+              <span id="lib-dd-hub-type-label">Type</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="hub-type">
+              <div class="lib-list" id="hub-type-list"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="hub-pricing">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="hub-pricing">
+              <span id="lib-dd-hub-pricing-label">Pricing</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="hub-pricing">
+              <div class="lib-list" id="hub-pricing-list"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="hub-tags">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="hub-tags">
+              <span class="material-symbols-outlined">tag</span>
+              <span id="lib-dd-hub-tags-label">Tags</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu lib-dd-menu-wide hidden" data-lib-dd-menu="hub-tags">
+              <div class="lib-chips-row hidden" id="hub-tag-chips"></div>
+              <div class="lib-autocomplete">
+                <span class="material-symbols-outlined lib-ac-icon">tag</span>
+                <input id="hub-tag-input" class="lib-input lib-ac-input" type="text" placeholder="Filter by tags…" spellcheck="false" autocomplete="off" />
+              </div>
+              <div class="lib-ac-list" id="hub-tag-list" role="listbox"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="hub-author">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="hub-author">
+              <span id="lib-dd-hub-author-label">Author</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu lib-dd-menu-wide hidden" data-lib-dd-menu="hub-author">
+              <div class="lib-chips-row hidden" id="hub-author-chips"></div>
+              <div class="lib-autocomplete">
+                <span class="material-symbols-outlined lib-ac-icon">person</span>
+                <input id="hub-author-input" class="lib-input lib-ac-input" type="text" placeholder="Filter by author…" spellcheck="false" autocomplete="off" />
+              </div>
+              <div class="lib-ac-list" id="hub-author-list" role="listbox"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="hub-license">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="hub-license">
+              <span id="lib-dd-hub-license-label">License</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="hub-license">
+              <div class="lib-list" id="hub-license-list"></div>
+            </div>
+          </div>
+
+          <span class="lib-spacer"></span>
+
+          <div class="lib-dd lib-dd-right" data-lib-dd="hub-sort">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="hub-sort">
+              <span class="material-symbols-outlined">sort</span>
+              <span id="lib-dd-hub-sort-label">Sort</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="hub-sort">
+              <div class="lib-list" id="hub-sort-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lib-layout">
+          <div class="lib-center">
+            <div class="lib-toolbar">
+              <span class="lib-count" id="hub-count">Loading…</span>
+              <span class="lib-filter-summary hidden" id="hub-filter-summary">
+                <span class="lib-dot-sep">·</span>
+                <span id="hub-filter-summary-text"></span>
+                (<button id="hub-filter-reset" class="lib-reset" type="button">Reset</button>)
+              </span>
+              <button id="hub-refresh" class="lib-icon-btn lib-icon-btn-sm" type="button" title="Refresh">
+                <span class="material-symbols-outlined">refresh</span>
+              </button>
+              <span class="lib-spacer"></span>
+              <label class="lib-size-slider" id="hub-size-slider-wrap" title="Card size">
+                <span class="material-symbols-outlined lib-size-big">landscape</span>
+                <input id="hub-size-slider" class="thumbnail-size-slider" type="range" min="1" max="8" step="1" />
+                <span class="material-symbols-outlined lib-size-small">landscape</span>
+              </label>
+              <div class="lib-view-toggle" role="tablist" aria-label="Card size">
+                <button class="lib-view-btn" type="button" data-hub-view="compact" title="Small cards">
+                  <span class="material-symbols-outlined">grid_on</span>
+                </button>
+                <button class="lib-view-btn" type="button" data-hub-view="cards" title="Large cards">
+                  <span class="material-symbols-outlined">grid_view</span>
+                </button>
+              </div>
+            </div>
+            <div class="lib-banner hub-error hidden" id="hub-error">
+              <span class="material-symbols-outlined">cloud_off</span>
+              <span id="hub-error-text"></span>
+              <button class="lib-link-btn" id="hub-error-retry" type="button">Retry</button>
+            </div>
+            <div class="lib-progress hidden" id="hub-progress" aria-hidden="true">
+              <div class="var-packages-progress-bar"></div>
+            </div>
+            <div class="lib-scroll" id="hub-scroll">
+              <div class="lib-grid hub-grid" id="hub-grid"></div>
+              <div class="lib-load-more hidden" id="hub-load-more"></div>
+            </div>
+          </div>
+          <div class="lib-resize" data-hub-resize="detail" aria-hidden="true"></div>
+          <aside class="lib-detail" id="hub-detail"></aside>
+        </div>
+
+        <footer class="lib-statusbar" id="hub-statusbar"></footer>
       </section>
 
       <!-- VAR Details View (hidden by default; revealed by clicking a row in VAR Packages) -->
@@ -2968,6 +3117,11 @@
             var internalizeResources = document.getElementById("internalize-resources-view");
             var dbfPage = document.getElementById("dbf-page");
             if (!settings || !buildDb || !varPackages || !varDetails || !resourceList || !reclaim || !uniqueResources || !missingResources || !internalizeResources || !dbfPage) return;
+            // Hub and Graph (VaM Backstage pages) are hidden with the rest.
+            var hubView = document.getElementById("hub-view");
+            var graphView = document.getElementById("graph-view");
+            if (hubView) hubView.classList.add("hidden");
+            if (graphView) graphView.classList.add("hidden");
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
@@ -2978,7 +3132,13 @@
             missingResources.classList.add("hidden");
             internalizeResources.classList.add("hidden");
             dbfPage.classList.add("hidden");
-            if (route === "settings") {
+            if (route === "hub" && hubView) {
+              hubView.classList.remove("hidden");
+              if (window.__refreshHubView) window.__refreshHubView();
+            } else if (route === "graph" && graphView) {
+              graphView.classList.remove("hidden");
+              if (window.__refreshGraphView) window.__refreshGraphView();
+            } else if (route === "settings") {
               settings.classList.remove("hidden");
               if (window.__loadSettingsView) window.__loadSettingsView();
             } else if (route === "build-db") {

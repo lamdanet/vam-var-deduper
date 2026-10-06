@@ -12512,3 +12512,540 @@ button.lib-dep-ref:hover {
     background-position: -200% 0;
   }
 }
+
+/* =========================================================
+   Hub (VaM Hub browser, after VaM Backstage's Hub page). It reuses the
+   library view's bars, grid, cards and details panel; these rules add the
+   Hub-only parts: the Hub / Wishlist switch, card install buttons,
+   wishlist pins and the resource details.
+   ========================================================= */
+
+.hub-filterbar .hub-mode {
+  flex: 0 0 auto;
+}
+
+.hub-filterbar .hub-mode .lib-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.hub-mode-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--lib-text-3);
+}
+
+.hub-mode-count:empty {
+  display: none;
+}
+
+/* ---- Cards ----------------------------------------------------------------- */
+
+.hub-card {
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+
+.hub-card .hub-card-footer {
+  height: auto;
+  padding: 12px 12px 0;
+}
+
+.hub-card-actions {
+  min-width: 0;
+  margin-top: auto;
+  padding: 8px 12px 12px;
+}
+
+.hub-stats {
+  font-variant-numeric: tabular-nums;
+}
+
+@container (max-width: 150px) {
+  .hub-stat-rating {
+    display: none;
+  }
+}
+
+@container (max-width: 120px) {
+  .hub-stat-react {
+    display: none;
+  }
+}
+
+.hub-pin {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.6);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms, color 120ms, background-color 120ms;
+}
+
+.lib-view .hub-pin .material-symbols-outlined {
+  font-size: 15px;
+}
+
+.hub-card:hover .hub-pin {
+  opacity: 1;
+}
+
+.hub-pin:hover {
+  color: #fff;
+}
+
+.hub-pin.is-on {
+  opacity: 1;
+  background: transparent;
+  backdrop-filter: none;
+  color: var(--lib-accent);
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 3px rgba(0, 0, 0, 0.8));
+}
+
+.hub-card:hover .hub-pin.is-on {
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  filter: none;
+}
+
+.hub-pin.is-on .material-symbols-outlined,
+.hub-pin-inline.is-on .material-symbols-outlined {
+  font-variation-settings: "FILL" 1;
+}
+
+.hub-pin.is-remove:hover {
+  color: var(--lib-error);
+}
+
+.hub-scrim {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.hub-scrim-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hub-card-action {
+  flex: 0 0 auto;
+  margin-bottom: 1.5px;
+}
+
+.hub-avatar {
+  position: relative;
+  overflow: hidden;
+}
+
+.hub-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hub-skeleton {
+  pointer-events: none;
+}
+
+.hub-skeleton .lib-thumb.lib-skeleton {
+  height: auto;
+  border-radius: 0;
+}
+
+/* ---- Install / state buttons ------------------------------------------------------ */
+
+.hub-btn {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms, filter 120ms;
+}
+
+.lib-view .hub-btn .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.hub-btn-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hub-btn-install {
+  background: var(--lib-gradient);
+  color: var(--lib-gradient-fg);
+}
+
+.hub-btn-install:hover {
+  filter: brightness(1.1);
+}
+
+.hub-btn-installed,
+.hub-btn-external {
+  border-color: color-mix(in srgb, var(--lib-accent) 25%, transparent);
+  color: var(--lib-accent);
+}
+
+.hub-btn-installed:hover,
+.hub-btn-external:hover {
+  background: color-mix(in srgb, var(--lib-accent) 10%, transparent);
+}
+
+.hub-btn-failed {
+  border-color: color-mix(in srgb, var(--lib-error) 25%, transparent);
+  color: var(--lib-error);
+}
+
+.hub-btn-failed:hover {
+  background: color-mix(in srgb, var(--lib-error) 10%, transparent);
+}
+
+.hub-btn-queued {
+  border-color: var(--lib-border);
+  color: var(--lib-text-3);
+  cursor: default;
+}
+
+.hub-btn-progress {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  cursor: default;
+}
+
+.hub-btn-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: inherit;
+  background: var(--lib-gradient);
+  transition: width 200ms;
+}
+
+.hub-btn-label {
+  position: relative;
+  z-index: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small cards: the button sits on the thumbnail. */
+.hub-btn.is-compact {
+  width: auto;
+  max-width: 9rem;
+  min-height: 0;
+  padding: 4px 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.hub-btn.is-compact.hub-btn-installed,
+.hub-btn.is-compact.hub-btn-external,
+.hub-btn.is-compact.hub-btn-failed,
+.hub-btn.is-compact.hub-btn-queued {
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+.hub-btn.is-compact.hub-btn-progress {
+  min-width: 48px;
+}
+
+/* Details panel: the full-width primary action. */
+.hub-btn.is-big {
+  min-height: 34px;
+  border-radius: 8px;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.lib-view .hub-btn.is-big .material-symbols-outlined {
+  font-size: 15px;
+}
+
+@container (max-width: 159px) {
+  .hub-card-actions .hub-btn .material-symbols-outlined {
+    display: none;
+  }
+}
+
+/* ---- Banner, status -------------------------------------------------------------- */
+
+.hub-error {
+  background: color-mix(in srgb, var(--lib-error) 8%, transparent);
+}
+
+.lib-view .hub-error .material-symbols-outlined {
+  color: var(--lib-error);
+}
+
+.hub-sb-active {
+  color: var(--lib-accent);
+}
+
+/* ---- Details panel ----------------------------------------------------------------- */
+
+.hub-hero {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--lib-thumb-bg);
+}
+
+.hub-hero img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--lib-elevated);
+}
+
+.hub-detail-title .lib-dh-title {
+  font-size: 16px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.hub-author-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lib-elevated) 50%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+
+.hub-author-card:hover {
+  background: var(--lib-elevated);
+}
+
+.hub-author-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hub-author-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lib-text);
+}
+
+.hub-author-text small {
+  font-size: 10px;
+  color: var(--lib-text-2);
+}
+
+.hub-support {
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--lib-accent);
+  cursor: pointer;
+}
+
+.hub-badges {
+  margin-top: 8px;
+  gap: 6px;
+}
+
+.hub-tagline {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--lib-text-2);
+  user-select: text;
+}
+
+.hub-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--lib-border);
+  border-bottom: 1px solid var(--lib-border);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--lib-text);
+}
+
+.hub-stats-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lib-view .hub-stats-row .material-symbols-outlined {
+  font-size: 15px;
+  color: var(--lib-text-3);
+}
+
+.hub-pin-inline {
+  margin: -4px 0 -4px auto;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.lib-view .hub-stats-row .hub-pin-inline .material-symbols-outlined {
+  color: var(--lib-text-aside);
+}
+
+.lib-view .hub-stats-row .hub-pin-inline:hover .material-symbols-outlined {
+  color: var(--lib-text-2);
+}
+
+.lib-view .hub-stats-row .hub-pin-inline.is-on .material-symbols-outlined {
+  color: var(--lib-accent);
+}
+
+.hub-dates {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  margin: 12px 0 0;
+  font-size: 11px;
+}
+
+.hub-dates dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--lib-text-3);
+}
+
+.hub-dates dd {
+  margin: 0;
+  color: var(--lib-text);
+}
+
+.lib-view .hub-dates .material-symbols-outlined {
+  font-size: 13px;
+}
+
+.hub-detail-action {
+  margin-top: 12px;
+}
+
+.hub-open-hub {
+  margin-top: 8px;
+}
+
+.hub-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 10px;
+}
+
+.lib-view button.lib-pill {
+  border: 0;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.lib-view button.lib-pill-warn:hover {
+  background: color-mix(in srgb, var(--lib-warning) 16%, transparent);
+}
+
+.hub-pill-install {
+  border: 0;
+  color: #fff;
+  background: var(--lib-gradient);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.hub-pill-install:hover {
+  filter: brightness(1.1);
+}
+
+.hub-pill-progress {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.hub-pill-progress > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--lib-gradient);
+  transition: width 200ms;
+}
+
+.hub-pill-progress > b {
+  position: relative;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.hub-pulse {
+  animation: hub-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes hub-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
