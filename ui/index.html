@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VAM VAR Deduper</title>
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link
@@ -35,6 +35,11 @@
             </div>
           </div>
           <div class="header-right">
+            <button id="find-deps-toggle" class="icon-text-button" type="button"
+                    title="Paste package names or a scene's text to find and download what's missing">
+              <span class="material-symbols-outlined">content_paste_search</span>
+              <span>Find Dependencies</span>
+            </button>
             <button id="downloads-toggle" class="icon-text-button" type="button" onclick="window.__toggleDownloads && window.__toggleDownloads()">
               <span class="material-symbols-outlined">download</span>
               <span>Downloads</span>
@@ -63,7 +68,7 @@
               </a>
               <a class="sidebar-link" href="#" data-sidebar-link="build-db">
                 <span class="material-symbols-outlined">storage</span>
-                <span class="sidebar-label">Build Database</span>
+                <span class="sidebar-label">Database</span>
               </a>
               <a class="sidebar-link" href="#" data-sidebar-link="var-packages">
                 <span class="material-symbols-outlined">inventory_2</span>
@@ -133,13 +138,9 @@
                 </div>
                 <div class="path-row">
                   <span class="path-label" id="dbf-input-label"></span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">folder</span>
-                      <input id="dbf-input-dir" type="text" placeholder="D:\Vars" />
-                    </div>
-                    <button id="dbf-pick-input-button" class="ghost-button" type="button"></button>
-                  </div>
+                  <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+                  <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+                  <input id="dbf-input-dir" type="hidden" />
                 </div>
                 <div class="path-row">
                   <span class="path-label" id="dbf-additional-dirs-label"></span>
@@ -385,13 +386,26 @@
       <!-- Build Database View (hidden by default; revealed by sidebar Build Database link) -->
       <section id="build-db-view" class="app-main build-db-view hidden">
         <header class="settings-header">
-          <span class="settings-eyebrow">Indexing</span>
-          <h1 class="settings-title">Build Database</h1>
+          <span class="settings-eyebrow">Index</span>
+          <h1 class="settings-title">Database</h1>
           <p class="settings-subtitle">
-            Initialize or update the central index of your .var packages. This allows for near-instant
-            search results and advanced duplicate detection based on file hashes and content meta-data.
+            Build and update the central index of your .var packages for near-instant search and
+            hash-based duplicate detection, and browse every package the index records.
           </p>
         </header>
+
+        <div class="db-tabs mode-switch" role="tablist" aria-label="Database">
+          <button id="db-tab-build" class="mode-button active" type="button" role="tab" aria-selected="true" data-db-tab="build">
+            <span class="material-symbols-outlined">build</span>
+            <span>Build</span>
+          </button>
+          <button id="db-tab-packages" class="mode-button" type="button" role="tab" aria-selected="false" data-db-tab="packages">
+            <span class="material-symbols-outlined">database</span>
+            <span>Packages</span>
+          </button>
+        </div>
+
+        <div id="db-tab-panel-build" class="db-tab-panel">
 
         <!-- Database Status -->
         <article class="card build-db-card build-db-status-card">
@@ -437,17 +451,10 @@
           </div>
           <div class="build-db-card-body">
             <div class="build-db-field">
-              <label class="build-db-field-label" id="build-db-input-label" for="build-db-input-dir">VAR Folder</label>
-              <div class="input-with-button">
-                <div class="input-with-icon">
-                  <span class="material-symbols-outlined input-leading-icon">folder</span>
-                  <input id="build-db-input-dir" type="text" placeholder="D:\Vars" />
-                </div>
-                <button id="build-db-pick-input" class="ghost-button" type="button">
-                  <span class="material-symbols-outlined">folder_open</span>
-                  <span id="build-db-pick-input-label">Browse</span>
-                </button>
-              </div>
+              <span class="build-db-field-label" id="build-db-input-label">VAR Folder</span>
+              <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+              <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+              <input id="build-db-input-dir" type="hidden" />
             </div>
 
             <div class="build-db-actions-row">
@@ -499,7 +506,7 @@
           </div>
           <div class="build-db-card-body">
             <p class="reclaim-help">
-              Import community Pixeldrain / MediaFire mirror lists so Find Dependencies / Scan Dependencies
+              Import community Pixeldrain / MediaFire mirror lists so Find Dependencies / Download Dependencies
               can find sources for packages that aren't on the VaM Hub. Point at a <code>_Download_Links</code> folder (one
               <code>.txt</code> per creator) or a single text file of
               <code>Creator.Package.N.var&nbsp;&nbsp;https://…</code> lines.
@@ -627,17 +634,10 @@
               background and can be cancelled mid-flight.
             </p>
             <div class="build-db-field">
-              <label class="build-db-field-label" for="build-db-backfill-input">VAR Folder</label>
-              <div class="input-with-button">
-                <div class="input-with-icon">
-                  <span class="material-symbols-outlined input-leading-icon">folder</span>
-                  <input id="build-db-backfill-input" type="text" placeholder="D:\Vars" spellcheck="false" />
-                </div>
-                <button id="build-db-backfill-pick" class="ghost-button" type="button">
-                  <span class="material-symbols-outlined">folder_open</span>
-                  <span>Browse</span>
-                </button>
-              </div>
+              <span class="build-db-field-label">VAR Folder</span>
+              <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+              <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+              <input id="build-db-backfill-input" type="hidden" />
             </div>
             <div class="build-db-import-actions">
               <button id="build-db-backfill-cancel" class="ghost-button" type="button" disabled>
@@ -709,217 +709,330 @@
             </table>
           </article>
         </section>
+        </div>
+
+        <!-- Packages tab: every package row in the local database (moved here
+             from the VAR Packages page). Status = whether the indexed file is
+             still on disk. -->
+        <div id="db-tab-panel-packages" class="db-tab-panel db-pkgs hidden">
+          <article class="card db-pkgs-controls">
+            <div class="var-packages-search db-pkgs-search">
+              <span class="material-symbols-outlined input-leading-icon">search</span>
+              <input id="db-pkgs-search" type="text" placeholder="Search packages..." spellcheck="false" />
+            </div>
+            <div class="db-pkgs-filters">
+              <select id="db-pkgs-status" class="lib-select db-pkgs-select" aria-label="Status">
+                <option value="">Any status</option>
+                <option value="indexed">On disk</option>
+                <option value="unindexed">Missing on disk</option>
+              </select>
+              <select id="db-pkgs-size" class="lib-select db-pkgs-select" aria-label="Size">
+                <option value="">Any size</option>
+                <option value="sm">&lt; 100 MB</option>
+                <option value="md">100 MB – 1 GB</option>
+                <option value="lg">&gt; 1 GB</option>
+              </select>
+              <input id="db-pkgs-creator" class="lib-input db-pkgs-select" type="text" list="db-pkgs-creators" placeholder="Creator" spellcheck="false" />
+              <datalist id="db-pkgs-creators"></datalist>
+              <select id="db-pkgs-sort" class="lib-select db-pkgs-select" aria-label="Sort">
+                <option value="name">Sort: Name</option>
+                <option value="size">Sort: Size</option>
+                <option value="modified">Sort: Date modified</option>
+              </select>
+              <button id="db-pkgs-sort-dir" class="lib-icon-btn" type="button" title="Reverse order">
+                <span class="material-symbols-outlined">arrow_upward</span>
+              </button>
+              <label class="check-row db-pkgs-fav">
+                <input id="db-pkgs-fav" type="checkbox" />
+                <span>Favorites</span>
+              </label>
+              <span class="lib-spacer"></span>
+              <span class="var-packages-count" id="db-pkgs-count">0 Packages</span>
+              <button id="db-pkgs-refresh" class="primary-button" type="button">
+                <span class="material-symbols-outlined">sync</span>
+                <span>Refresh</span>
+              </button>
+            </div>
+          </article>
+
+          <article class="card var-packages-table-card">
+            <div id="db-pkgs-progress" class="var-packages-progress hidden" aria-hidden="true">
+              <div class="var-packages-progress-bar"></div>
+            </div>
+            <div class="var-packages-table-wrap">
+              <table class="var-packages-table">
+                <thead>
+                  <tr>
+                    <th class="vp-col-status">Status</th>
+                    <th class="vp-col-name">Package Name</th>
+                    <th class="vp-col-creator">Creator</th>
+                    <th class="vp-col-size">Size</th>
+                    <th class="vp-col-modified">Last Modified</th>
+                    <th class="vp-col-actions" aria-label="Actions"></th>
+                  </tr>
+                </thead>
+                <tbody id="db-pkgs-tbody">
+                  <tr class="var-packages-empty-row">
+                    <td colspan="6">Open this tab to list the packages recorded in the database.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="db-pkgs-pagination" class="var-packages-pagination hidden">
+              <span class="var-packages-pagination-summary" id="db-pkgs-pagination-summary"></span>
+              <div class="var-packages-pagination-controls" id="db-pkgs-pagination-controls"></div>
+            </div>
+          </article>
+        </div>
       </section>
 
-      <!-- VAR Packages View (hidden by default; revealed by sidebar VAR Packages link) -->
-      <section id="var-packages-view" class="app-main var-packages-view hidden">
-        <header class="var-packages-header">
-          <div class="var-packages-title-row">
-            <h1 class="var-packages-title" id="var-packages-title">VAR Packages</h1>
-            <span class="var-packages-count" id="var-packages-count">0 Packages Found</span>
-          </div>
-          <p class="var-packages-subtitle" id="var-packages-subtitle">
-            Browse every .var package in a folder. Status reflects whether the package is currently
-            indexed in your local database.
-          </p>
-          <div class="var-packages-mode-row">
-            <div class="mode-switch" role="tablist" aria-label="Source">
-              <button id="var-packages-mode-database" class="mode-button" type="button" role="tab" aria-selected="false">
-                <span class="material-symbols-outlined">database</span>
-                <span id="var-packages-mode-database-label">Database</span>
-              </button>
-              <button id="var-packages-mode-folders" class="mode-button active" type="button" role="tab" aria-selected="true">
-                <span class="material-symbols-outlined">folder</span>
-                <span id="var-packages-mode-folders-label">VAR Folders</span>
-              </button>
+      <!-- VAR Packages — library view (hidden by default; revealed by the sidebar
+           VAR Packages link). Laid out like VaM Backstage's Library, with the
+           folder controls, search and filters in two bars across the top, then the card grid / table and the details panel, and a status
+           bar underneath.
+           Everything here lists the scanned VAR folders; the database listing
+           lives on the Database page. -->
+      <section id="var-packages-view" class="app-main var-packages-view lib-view hidden">
+        <!-- Top bar: the folders being listed and Scan. The folder-wide tools
+             (Clean Duplicates, Organize by Creator, Export Scene Images) are on
+             the grid's right-click menu; Find Dependencies is in the app header. -->
+        <div class="lib-topbar" id="var-packages-folder-controls">
+          <div class="vam-source vam-source-compact" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+          <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+          <input id="var-packages-input-dir" type="hidden" />
+          <div class="lib-dd" data-lib-dd="folders">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="folders" title="Additional VAR folders">
+              <span class="material-symbols-outlined">create_new_folder</span>
+              <span id="lib-folders-label">Folders</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu lib-dd-menu-wide hidden" data-lib-dd-menu="folders">
+              <div class="additional-dirs lib-additional-dirs">
+                <span class="lib-dd-heading" id="var-packages-additional-dirs-label"></span>
+                <div id="var-packages-additional-dirs" class="additional-dirs-list"></div>
+                <button id="var-packages-add-folder-button" class="lib-link-btn" type="button"></button>
+              </div>
             </div>
           </div>
-        </header>
+          <div class="lib-seg" role="tablist" aria-label="Scan depth">
+            <button id="var-packages-depth-deep" class="lib-seg-btn active" type="button" role="tab" aria-selected="true" title="Include .var files inside subfolders">Deep</button>
+            <button id="var-packages-depth-normal" class="lib-seg-btn" type="button" role="tab" aria-selected="false" title="Only .var files directly in the folder">Normal</button>
+          </div>
+          <button id="var-packages-scan-button" class="lib-btn lib-btn-gradient lib-btn-sm" type="button">
+            <span class="material-symbols-outlined">sync</span>
+            <span id="var-packages-scan-label">Rescan</span>
+          </button>
+          <span class="lib-aside lib-depth-hint" id="var-packages-depth-hint"></span>
+        </div>
 
-        <!-- Recycling/moving packages leaves packages.file_path pointing at the
-             old location. We deliberately never write to the database from the
-             apply path, so this banner is how the staleness surfaces — a log
-             line would scroll away inside a drawer that is closed by default. -->
-        <div id="var-packages-db-stale" class="vp-db-stale hidden">
-          <span class="material-symbols-outlined">warning</span>
-          <span id="var-packages-db-stale-text"></span>
-          <button id="var-packages-db-stale-rebuild" class="ghost-button" type="button">
-            Rebuild Database
+        <!-- Filter bar: search, then one dropdown per filter, sort on the right. -->
+        <div class="lib-filterbar" id="lib-filters">
+          <div class="lib-search" id="lib-search">
+            <input id="var-packages-filter" type="text" placeholder="Search…" spellcheck="false" autocomplete="off" />
+            <button id="lib-search-clear" class="lib-search-clear hidden" type="button" aria-label="Clear search">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+            <div class="lib-search-legend" id="lib-search-legend">
+              <span><b class="tok-author">@author</b> creator</span>
+              <span><b class="tok-type">type:</b>scene</span>
+              <span><b class="tok-neg">-word</b> exclude</span>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="status">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="status">
+              <span id="lib-dd-status-label">Status</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="status">
+              <div class="lib-list" id="lib-status-list"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="type">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="type">
+              <span class="lib-type-dot hidden" id="lib-dd-type-dot"></span>
+              <span id="lib-dd-type-label">Type</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="type">
+              <div class="lib-list" id="lib-type-list"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="enabled">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="enabled">
+              <span id="lib-dd-enabled-label">Enabled</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="enabled">
+              <div class="lib-list" id="lib-enabled-list"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="author">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="author">
+              <span id="lib-dd-author-label">Author</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu lib-dd-menu-wide hidden" data-lib-dd-menu="author">
+              <div class="lib-chips-row hidden" id="lib-author-chips"></div>
+              <div class="lib-autocomplete">
+                <span class="material-symbols-outlined lib-ac-icon">person</span>
+                <input id="lib-author-input" class="lib-input lib-ac-input" type="text" placeholder="Filter by author…" spellcheck="false" autocomplete="off" />
+              </div>
+              <div class="lib-ac-list" id="lib-author-popup" role="listbox"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="size">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="size">
+              <span id="lib-dd-size-label">Size</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="size">
+              <div class="lib-list" id="lib-size-list"></div>
+            </div>
+          </div>
+
+          <div class="lib-dd" data-lib-dd="scene">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="scene">
+              <span id="lib-dd-scene-label">Scene image</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="scene">
+              <div class="lib-list" id="lib-scene-list"></div>
+            </div>
+          </div>
+
+          <span class="lib-spacer"></span>
+
+          <div class="lib-dd lib-dd-right" data-lib-dd="sort">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="sort">
+              <span class="material-symbols-outlined">sort</span>
+              <span id="lib-dd-sort-label">Sort: Type</span>
+              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="sort">
+              <div class="lib-list" id="lib-sort-list"></div>
+            </div>
+          </div>
+          <button id="lib-sort-dir" class="lib-icon-btn" type="button" title="Reverse order">
+            <span class="material-symbols-outlined">arrow_upward</span>
           </button>
         </div>
 
-        <article class="card var-packages-controls">
-          <div id="var-packages-folder-controls" class="build-db-field">
-            <label class="build-db-field-label" id="var-packages-input-label" for="var-packages-input-dir">VAR Folder</label>
-            <div class="input-with-button">
-              <div class="input-with-icon">
-                <span class="material-symbols-outlined input-leading-icon">folder</span>
-                <input id="var-packages-input-dir" type="text" placeholder="D:\Vars" />
-              </div>
-              <button id="var-packages-pick-input" class="ghost-button" type="button">
-                <span class="material-symbols-outlined">folder_open</span>
-                <span id="var-packages-pick-input-label">Browse</span>
-              </button>
-              <button id="var-packages-scan-button" class="primary-button" type="button">
-                <span class="material-symbols-outlined">sync</span>
-                <span id="var-packages-scan-label">Scan Directory</span>
-              </button>
-            </div>
-            <div class="vp-depth-row">
-              <span class="vp-depth-label">Scan depth</span>
-              <div class="mode-switch" role="tablist" aria-label="Scan depth">
-                <button id="var-packages-depth-deep" class="mode-button active" type="button" role="tab" aria-selected="true">
-                  <span class="material-symbols-outlined">account_tree</span>
-                  <span>Deep</span>
-                </button>
-                <button id="var-packages-depth-normal" class="mode-button" type="button" role="tab" aria-selected="false">
-                  <span class="material-symbols-outlined">description</span>
-                  <span>Normal</span>
-                </button>
-              </div>
-              <span class="vp-depth-hint" id="var-packages-depth-hint"></span>
-            </div>
-            <div class="build-db-field">
-              <label class="build-db-field-label" id="var-packages-additional-dirs-label"></label>
-              <div class="additional-dirs">
-                <div id="var-packages-additional-dirs" class="additional-dirs-list"></div>
-                <button id="var-packages-add-folder-button" class="ghost-button" type="button"></button>
-              </div>
-            </div>
-            <!-- Inside #var-packages-folder-controls on purpose: these are path
-                 operations, and applyVarPackagesModeUi already hides this whole
-                 container in Database mode, so they cannot be reached there. -->
-            <div class="vp-maintenance-row">
-              <button id="var-packages-clean-dupes" class="ghost-button" type="button">
-                <span class="material-symbols-outlined">content_copy</span>
-                <span>Clean Duplicates</span>
-              </button>
-              <button id="var-packages-organize" class="ghost-button" type="button">
-                <span class="material-symbols-outlined">create_new_folder</span>
-                <span>Organize by Creator</span>
-              </button>
-              <button id="var-packages-find-deps" class="ghost-button" type="button">
-                <span class="material-symbols-outlined">content_paste</span>
-                <span>Find Dependencies</span>
-              </button>
-              <button id="var-packages-export-scenes" class="ghost-button" type="button">
-                <span class="material-symbols-outlined">image</span>
-                <span id="var-packages-export-scenes-label">Export Scene Images</span>
-              </button>
-              <span class="vp-maintenance-hint">
-                Acts on the VAR Folder and any additional folders above &mdash; not on the current filter.
+        <div class="lib-layout">
+          <!-- Centre: toolbar + grid / table -->
+          <div class="lib-center">
+            <div class="lib-toolbar" id="lib-toolbar">
+              <div class="lib-toolbar-actions" id="lib-toolbar-actions"></div>
+              <span class="lib-count" id="var-packages-count">0 packages</span>
+              <span class="lib-filter-summary hidden" id="lib-filter-summary">
+                <span class="lib-dot-sep">·</span>
+                <span id="lib-filter-summary-text"></span>
+                (<button id="var-packages-filter-clear" class="lib-reset" type="button">Reset</button>)
               </span>
+              <span class="lib-hint" id="lib-select-hint">
+                <span class="lib-dot-sep">·</span>
+                <kbd>Ctrl</kbd>+click or <kbd>Shift</kbd>+click to select multiple · right-click for tools
+                <button class="lib-hint-close" id="lib-select-hint-close" type="button" aria-label="Dismiss">×</button>
+              </span>
+              <span class="lib-spacer"></span>
+              <label class="lib-size-slider" id="lib-size-slider-wrap" title="Thumbnail size">
+                <span class="material-symbols-outlined lib-size-big">landscape</span>
+                <input id="lib-size-slider" class="thumbnail-size-slider" type="range" min="120" max="420" step="10" />
+                <span class="material-symbols-outlined lib-size-small">landscape</span>
+              </label>
+              <div class="lib-view-toggle" role="tablist" aria-label="View mode">
+                <button class="lib-view-btn" type="button" data-lib-view="compact" title="Compact cards">
+                  <span class="material-symbols-outlined">grid_on</span>
+                </button>
+                <button class="lib-view-btn" type="button" data-lib-view="cards" title="Detailed cards">
+                  <span class="material-symbols-outlined">grid_view</span>
+                </button>
+                <button class="lib-view-btn" type="button" data-lib-view="table" title="Table">
+                  <span class="material-symbols-outlined">view_list</span>
+                </button>
+              </div>
             </div>
-          </div>
-          <div id="var-packages-db-controls" class="var-packages-db-controls hidden">
-            <p class="var-packages-db-hint" id="var-packages-db-hint">
-              Listing every package recorded in the local database.
-            </p>
-            <button id="var-packages-db-refresh-button" class="primary-button" type="button">
-              <span class="material-symbols-outlined">sync</span>
-              <span id="var-packages-db-refresh-label">Refresh</span>
+
+            <!-- Bulk toolbar: shown while two or more packages are selected. -->
+            <div class="vp-selection-bar lib-bulkbar hidden" id="var-packages-selection-bar">
+              <span class="vp-selection-count" id="var-packages-selection-count"></span>
+              <button id="var-packages-select-all" class="lib-btn lib-btn-xs lib-btn-outline" type="button">Select all</button>
+              <button id="var-packages-select-page" class="lib-btn lib-btn-xs lib-btn-outline" type="button">Select loaded</button>
+              <button id="var-packages-selection-clear" class="lib-btn lib-btn-xs lib-btn-outline" type="button">Deselect</button>
+              <span class="vp-selection-spacer"></span>
+              <button id="lib-bulk-disable" class="lib-btn lib-btn-xs lib-btn-outline" type="button">
+                <span class="material-symbols-outlined">power_settings_new</span><span>Disable</span>
+              </button>
+              <button id="lib-bulk-enable" class="lib-btn lib-btn-xs lib-btn-outline" type="button">
+                <span class="material-symbols-outlined">power</span><span>Enable</span>
+              </button>
+              <button id="lib-bulk-clean" class="lib-btn lib-btn-xs lib-btn-outline" type="button" title="Clean duplicates and older versions of the selected packages">
+                <span class="material-symbols-outlined">content_copy</span><span>Clean Duplicates</span>
+              </button>
+              <button id="var-packages-bulk-organize" class="lib-btn lib-btn-xs lib-btn-outline" type="button">
+                <span class="material-symbols-outlined">create_new_folder</span><span>Organize</span>
+              </button>
+              <button id="var-packages-bulk-export" class="lib-btn lib-btn-xs lib-btn-outline" type="button">
+                <span class="material-symbols-outlined">image</span><span>Export Images</span>
+              </button>
+              <button id="var-packages-bulk-delete" class="lib-btn lib-btn-xs lib-btn-destructive vp-bulk-danger" type="button">
+                <span class="material-symbols-outlined">delete</span><span>Delete</span>
+              </button>
+              <button id="lib-bulk-close" class="lib-icon-btn lib-icon-btn-sm" type="button" title="Deselect (Esc)">
+                <span class="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <!-- Recycling/moving packages leaves packages.file_path pointing at the
+                 old location. We deliberately never write to the database from the
+                 apply path, so this banner is how the staleness surfaces. -->
+            <div id="var-packages-db-stale" class="vp-db-stale lib-banner hidden">
+              <span class="material-symbols-outlined">warning</span>
+              <span id="var-packages-db-stale-text"></span>
+              <button id="var-packages-db-stale-rebuild" class="lib-link-btn" type="button">Open Database</button>
+            </div>
+
+            <div id="var-packages-progress" class="var-packages-progress lib-progress hidden" aria-hidden="true">
+              <div class="var-packages-progress-bar"></div>
+            </div>
+
+            <div class="lib-scroll" id="lib-scroll">
+              <div id="var-packages-grid" class="lib-grid"></div>
+              <div class="lib-table-wrap hidden" id="lib-table-wrap">
+                <table class="lib-table">
+                  <thead>
+                    <tr>
+                      <th class="lib-col-check" aria-label="Select"></th>
+                      <th class="lib-col-pkg">Package</th>
+                      <th class="lib-col-author">Author</th>
+                      <th class="lib-col-type">Type</th>
+                      <th class="lib-col-status">Status</th>
+                      <th class="lib-col-size">Size</th>
+                      <th class="lib-col-items">Items</th>
+                      <th class="lib-col-deps">Deps</th>
+                    </tr>
+                  </thead>
+                  <tbody id="var-packages-tbody"></tbody>
+                </table>
+              </div>
+              <div class="lib-table-wrap hidden" id="lib-missing-wrap"></div>
+              <div class="lib-load-more hidden" id="lib-load-more"></div>
+            </div>
+            <button class="lib-scroll-top hidden" id="lib-scroll-top" type="button" aria-label="Scroll to top">
+              <span class="material-symbols-outlined">arrow_upward</span>
             </button>
           </div>
-          <div class="var-packages-search">
-            <span class="material-symbols-outlined input-leading-icon">search</span>
-            <input id="var-packages-filter" type="text" placeholder="Search packages..." />
-          </div>
-        </article>
 
-        <div class="var-packages-filter-bar" id="var-packages-filter-bar">
-          <span class="vp-filter-label" id="var-packages-filter-bar-label">Filters:</span>
-          <div class="vp-filter-buttons">
-            <div class="vp-filter-dropdown" data-vp-filter="size">
-              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="size">
-                <span class="vp-filter-chip-label" id="var-packages-filter-size-label">Size: All</span>
-                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
-              </button>
-              <div class="vp-filter-menu hidden" data-vp-menu="size" role="menu"></div>
-            </div>
-            <div class="vp-filter-dropdown" data-vp-filter="creator">
-              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="creator">
-                <span class="vp-filter-chip-label" id="var-packages-filter-creator-label">Creator: All</span>
-                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
-              </button>
-              <div class="vp-filter-menu vp-filter-menu-search hidden" data-vp-menu="creator" role="menu">
-                <input type="text" class="vp-filter-menu-search-input" data-vp-menu-search="creator" placeholder="Search…" />
-                <div class="vp-filter-menu-list" data-vp-menu-list="creator"></div>
-              </div>
-            </div>
-            <div class="vp-filter-dropdown" data-vp-filter="favorites">
-              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="favorites">
-                <span class="vp-filter-chip-label" id="var-packages-filter-favorites-label">Favorites</span>
-                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
-              </button>
-              <div class="vp-filter-menu hidden" data-vp-menu="favorites" role="menu"></div>
-            </div>
-            <label class="vp-filter-chip vp-filter-check" for="var-packages-filter-scene">
-              <input type="checkbox" id="var-packages-filter-scene" />
-              <span id="var-packages-filter-scene-label">Scene image</span>
-            </label>
-            <!-- Sort is NOT a filter: it lives in state.varPackagesSort, is not
-                 counted by activeVarPackageFilterCount, and "Clear All" leaves
-                 it alone. It shares the chip markup purely for appearance. -->
-            <div class="vp-filter-dropdown" data-vp-filter="sort">
-              <button type="button" class="vp-filter-chip vp-filter-trigger" data-vp-trigger="sort">
-                <span class="vp-filter-chip-label" id="var-packages-filter-sort-label">Sort: Name</span>
-                <span class="material-symbols-outlined vp-filter-chevron">expand_more</span>
-              </button>
-              <div class="vp-filter-menu hidden" data-vp-menu="sort" role="menu"></div>
-            </div>
-            <button type="button" class="vp-filter-clear hidden" id="var-packages-filter-clear">Clear All</button>
-          </div>
+          <div class="lib-resize" data-lib-resize="detail" aria-hidden="true"></div>
+          <!-- Details / selection panel -->
+          <aside class="lib-detail" id="lib-detail"></aside>
         </div>
 
-        <div class="vp-selection-bar hidden" id="var-packages-selection-bar">
-          <span class="vp-selection-count" id="var-packages-selection-count"></span>
-          <button id="var-packages-select-all" class="ghost-button" type="button">Select all</button>
-          <button id="var-packages-select-page" class="ghost-button" type="button">Select page</button>
-          <button id="var-packages-selection-clear" class="ghost-button" type="button">Unselect all</button>
-          <span class="vp-selection-spacer"></span>
-          <button id="var-packages-bulk-delete" class="ghost-button vp-bulk-danger" type="button">
-            <span class="material-symbols-outlined">delete</span><span>Delete</span>
-          </button>
-          <button id="var-packages-bulk-organize" class="ghost-button" type="button">
-            <span class="material-symbols-outlined">create_new_folder</span><span>Organize by Creator</span>
-          </button>
-          <button id="var-packages-bulk-export" class="ghost-button" type="button">
-            <span class="material-symbols-outlined">image</span><span>Export Scene Images</span>
-          </button>
-        </div>
-
-        <article class="card var-packages-table-card">
-          <div id="var-packages-progress" class="var-packages-progress hidden" aria-hidden="true">
-            <div class="var-packages-progress-bar"></div>
-          </div>
-          <div class="var-packages-table-wrap">
-            <table class="var-packages-table">
-              <thead>
-                <tr>
-                  <th class="vp-col-select" aria-label="Select"></th>
-                  <th class="vp-col-status" id="var-packages-th-status">Status</th>
-                  <th class="vp-col-name" id="var-packages-th-name">Package Name</th>
-                  <th class="vp-col-creator" id="var-packages-th-creator">Creator</th>
-                  <th class="vp-col-size" id="var-packages-th-size">Size</th>
-                  <th class="vp-col-modified" id="var-packages-th-modified">Last Modified</th>
-                  <th class="vp-col-actions" aria-label="Actions"></th>
-                </tr>
-              </thead>
-              <tbody id="var-packages-tbody">
-                <tr class="var-packages-empty-row">
-                  <td colspan="7" id="var-packages-empty">
-                    Pick a VAR folder and click Scan Directory to list packages.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div id="var-packages-grid" class="var-packages-grid hidden"></div>
-          <div id="var-packages-pagination" class="var-packages-pagination hidden">
-            <span class="var-packages-pagination-summary" id="var-packages-pagination-summary"></span>
-            <div class="var-packages-pagination-controls" id="var-packages-pagination-controls"></div>
-          </div>
-        </article>
+        <footer class="lib-statusbar" id="lib-statusbar"></footer>
       </section>
 
       <!-- VAR Details View (hidden by default; revealed by clicking a row in VAR Packages) -->
@@ -967,17 +1080,10 @@
                 </div>
               </div>
               <div class="var-details-folder-field">
-                <label class="var-details-folder-label" for="var-details-folder-input">VAR Folder (for Scan Local)</label>
-                <div class="var-details-folder-row">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">folder</span>
-                    <input id="var-details-folder-input" type="text" placeholder="D:\Vars" spellcheck="false" />
-                  </div>
-                  <button id="var-details-folder-pick" class="ghost-button" type="button">
-                    <span class="material-symbols-outlined">folder_open</span>
-                    <span>Browse</span>
-                  </button>
-                </div>
+                <span class="var-details-folder-label">VAR Folder (for Scan Local)</span>
+                <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+                <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+                <input id="var-details-folder-input" type="hidden" />
               </div>
               <div class="var-details-folder-field">
                 <label class="var-details-folder-label" id="var-details-additional-dirs-label"></label>
@@ -997,7 +1103,7 @@
                 </button>
                 <button id="var-details-scan-deps-button" class="var-details-scan-button is-secondary" type="button">
                   <span class="material-symbols-outlined">account_tree</span>
-                  <span id="var-details-scan-deps-label">Scan Dependencies</span>
+                  <span id="var-details-scan-deps-label">Download Dependencies</span>
                 </button>
               </div>
             </div>
@@ -1261,17 +1367,10 @@
             <header class="card-eyebrow">Source Folder</header>
             <div class="var-details-action">
               <div class="var-details-folder-field">
-                <label class="var-details-folder-label" for="reclaim-folder-input">Local VAR Folder</label>
-                <div class="var-details-folder-row">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">folder</span>
-                    <input id="reclaim-folder-input" type="text" placeholder="D:\Vars" spellcheck="false" />
-                  </div>
-                  <button id="reclaim-folder-pick" class="ghost-button" type="button">
-                    <span class="material-symbols-outlined">folder_open</span>
-                    <span>Browse</span>
-                  </button>
-                </div>
+                <span class="var-details-folder-label">Local VAR Folder</span>
+                <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+                <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+                <input id="reclaim-folder-input" type="hidden" />
               </div>
               <div class="var-details-folder-field">
                 <label class="var-details-folder-label" id="reclaim-additional-dirs-label"></label>
@@ -1390,17 +1489,10 @@
             <header class="card-eyebrow">Source Folder</header>
             <div class="var-details-action">
               <div class="var-details-folder-field">
-                <label class="var-details-folder-label" for="ur-folder-input">Local VAR Folder</label>
-                <div class="var-details-folder-row">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">folder</span>
-                    <input id="ur-folder-input" type="text" placeholder="D:\Vars" spellcheck="false" />
-                  </div>
-                  <button id="ur-folder-pick" class="ghost-button" type="button">
-                    <span class="material-symbols-outlined">folder_open</span>
-                    <span>Browse</span>
-                  </button>
-                </div>
+                <span class="var-details-folder-label">Local VAR Folder</span>
+                <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+                <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+                <input id="ur-folder-input" type="hidden" />
               </div>
               <div class="var-details-folder-field">
                 <label class="var-details-folder-label" id="ur-additional-dirs-label"></label>
@@ -1682,13 +1774,9 @@
                 </div>
                 <div class="path-row">
                   <span class="path-label">VAR Folder</span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">folder</span>
-                      <input id="missing-input-dir" type="text" placeholder="D:\Vars" spellcheck="false" />
-                    </div>
-                    <button id="missing-pick-input" class="ghost-button" type="button">Browse</button>
-                  </div>
+                  <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+                  <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+                  <input id="missing-input-dir" type="hidden" />
                 </div>
               </div>
 
@@ -1914,13 +2002,9 @@
                 </div>
                 <div class="path-row">
                   <span class="path-label">VAR Folder</span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">folder</span>
-                      <input id="internalize-input-dir" type="text" placeholder="D:\Vars" spellcheck="false" />
-                    </div>
-                    <button id="internalize-pick-input" class="ghost-button" type="button">Browse</button>
-                  </div>
+                  <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
+                  <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
+                  <input id="internalize-input-dir" type="hidden" />
                 </div>
                 <div class="path-row">
                   <span class="path-label" id="internalize-additional-dirs-label"></span>
@@ -2096,19 +2180,36 @@
               <p class="settings-section-desc" id="settings-paths-desc"></p>
             </div>
             <div class="settings-section-body settings-paths-stack">
-              <div class="settings-path-card">
-                <label class="settings-path-label" id="settings-path-input-label" for="settings-input-dir"></label>
+              <!-- VaM directory, as in VaM Backstage: AddonPackages inside it is the
+                   VAR folder every page scans. -->
+              <div class="settings-path-card" id="settings-vam-card">
+                <span class="settings-path-label">VaM directory</span>
                 <div class="input-with-button">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">folder</span>
-                    <input id="settings-input-dir" type="text" placeholder="D:\Vars" />
+                  <div class="vam-dir-display" id="settings-vam-dir-display">
+                    <span class="material-symbols-outlined input-leading-icon">hard_drive</span>
+                    <span id="settings-vam-dir-text" class="vam-dir-text is-empty">Not configured</span>
                   </div>
-                  <button id="settings-pick-input" class="ghost-button" type="button">
+                  <button id="settings-pick-vam-dir" class="ghost-button" type="button">
                     <span class="material-symbols-outlined">folder_open</span>
-                    <span id="settings-pick-input-label"></span>
+                    <span>Browse</span>
                   </button>
                 </div>
-                <p class="settings-path-hint" id="settings-path-input-desc"></p>
+                <p class="settings-path-hint" id="settings-vam-dir-status">
+                  Pick the folder VaM is installed in (the one that contains AddonPackages).
+                </p>
+                <div class="additional-dirs">
+                  <label class="settings-path-label" id="settings-library-additional-dirs-label"></label>
+                  <div id="settings-library-additional-dirs" class="additional-dirs-list"></div>
+                  <button id="settings-library-add-folder-button" class="ghost-button" type="button"></button>
+                </div>
+                <p class="settings-path-hint">
+                  Every page reads packages from AddonPackages, the folder VaM itself loads. Folders added here
+                  are also checked when finding a package's dependencies and when scanning which packages use one
+                  before you delete it; each page keeps its own Add folder list for its scans.
+                </p>
+                <!-- Mirrors of AddonPackages for the code that reads these fields (see applyVamDir). -->
+                <input id="settings-input-dir" type="hidden" />
+                <input id="settings-library-folder" type="hidden" />
               </div>
 
               <div class="settings-path-card">
@@ -2142,33 +2243,11 @@
               </div>
 
               <div class="settings-path-card">
-                <label class="settings-path-label" for="settings-library-folder">VAR library folder (AddonPackages root)</label>
-                <div class="input-with-button">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">folder</span>
-                    <input id="settings-library-folder" type="text" placeholder="D:\Vars" spellcheck="false" />
-                  </div>
-                  <button id="settings-pick-library" class="ghost-button" type="button">
-                    <span class="material-symbols-outlined">folder_open</span>
-                    <span>Browse</span>
-                  </button>
-                </div>
-                <div class="additional-dirs">
-                  <label class="settings-path-label" id="settings-library-additional-dirs-label"></label>
-                  <div id="settings-library-additional-dirs" class="additional-dirs-list"></div>
-                  <button id="settings-library-add-folder-button" class="ghost-button" type="button"></button>
-                </div>
-                <p class="settings-path-hint">
-                  Your AddonPackages root(s). Checked when finding a package's dependencies (Scan Dependencies / Find Dependencies) and when scanning which packages use one before you delete it.
-                </p>
-              </div>
-
-              <div class="settings-path-card">
                 <label class="settings-path-label" for="settings-downloads-folder">Downloads folder</label>
                 <div class="input-with-button">
                   <div class="input-with-icon">
                     <span class="material-symbols-outlined input-leading-icon">download</span>
-                    <input id="settings-downloads-folder" type="text" placeholder="Defaults to your VAR library folder" spellcheck="false" />
+                    <input id="settings-downloads-folder" type="text" placeholder="Defaults to AddonPackages" spellcheck="false" />
                   </div>
                   <button id="settings-pick-downloads" class="ghost-button" type="button">
                     <span class="material-symbols-outlined">folder_open</span>
@@ -2176,8 +2255,8 @@
                   </button>
                 </div>
                 <p class="settings-path-hint">
-                  Where downloaded VARs are saved. Leave blank to use your VAR library folder; if neither
-                  is set you'll be asked to pick a folder the first time you download.
+                  Where downloaded VARs are saved. Leave blank to save them into AddonPackages; if no VaM
+                  directory is set either, you'll be asked to pick a folder the first time you download.
                 </p>
                 <label class="check-row" for="settings-organize-by-creator">
                   <input id="settings-organize-by-creator" type="checkbox" />
@@ -2307,6 +2386,15 @@
                     <div class="theme-preview-line theme-preview-line-2-3"></div>
                   </div>
                   <span class="theme-card-label" id="settings-theme-circuit-label"></span>
+                </button>
+                <button id="settings-theme-backstage" class="theme-card" type="button">
+                  <span class="theme-card-check material-symbols-outlined">check</span>
+                  <div class="theme-preview theme-preview-backstage">
+                    <div class="theme-preview-bar"></div>
+                    <div class="theme-preview-line theme-preview-line-full"></div>
+                    <div class="theme-preview-line theme-preview-line-2-3"></div>
+                  </div>
+                  <span class="theme-card-label" id="settings-theme-backstage-label"></span>
                 </button>
               </div>
             </div>
@@ -2562,7 +2650,6 @@
          so it never gets between the cursor and the card it describes. Lives
          next to the context menus because it is positioned against the
          viewport, not against the grid. -->
-    <div id="vp-hover-card" class="vp-hover-card hidden" aria-hidden="true"></div>
 
     <!-- Transient toast notifications (auto-dismiss). Visible without opening
          the console drawer. -->
@@ -2604,6 +2691,37 @@
          modal, and a download from inside this modal may call showAppConfirm —
          both have to render above it. (The Escape handler's else-if chain runs
          in the reverse of this order.) -->
+    <!-- First run: pick the VaM directory (shown on start while none is set). -->
+    <div id="vam-setup-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card vam-setup-card" role="dialog" aria-modal="true" aria-labelledby="vam-setup-title">
+        <div class="vam-setup-head">
+          <div class="vam-setup-mark" aria-hidden="true">
+            <span class="material-symbols-outlined">bolt</span>
+          </div>
+          <h3 id="vam-setup-title">Welcome to <span class="vam-setup-brand">VAM VAR Deduper</span></h3>
+        </div>
+        <p class="vam-setup-intro">
+          Point the app at your Virt-a-Mate install. Every page reads your packages from its
+          <strong>AddonPackages</strong> folder — the one VaM itself loads.
+        </p>
+        <span class="vam-setup-label">VaM directory</span>
+        <div class="vam-setup-row">
+          <span class="material-symbols-outlined">folder</span>
+          <span id="vam-setup-path" class="vam-setup-path is-empty">Not selected</span>
+          <button id="vam-setup-browse" class="ghost-button" type="button">Select</button>
+        </div>
+        <p id="vam-setup-error" class="vam-setup-error hidden"></p>
+        <div id="vam-setup-found" class="vam-setup-found hidden">
+          <span class="material-symbols-outlined">inventory_2</span>
+          <span id="vam-setup-found-text"></span>
+        </div>
+        <div class="dialog-actions">
+          <button id="vam-setup-skip" class="ghost-button" type="button">Skip for now</button>
+          <button id="vam-setup-continue" class="primary-button" type="button" disabled>Continue</button>
+        </div>
+      </div>
+    </div>
+
     <div id="dep-scan-backdrop" class="dialog-backdrop hidden">
       <div class="dialog-card dep-scan-card" role="dialog" aria-modal="true" aria-labelledby="dep-scan-title">
         <h3 id="dep-scan-title">Dependencies</h3>
@@ -2616,10 +2734,22 @@
           <button id="dep-scan-analyze-text" class="primary-button dep-scan-analyze" type="button">Analyze</button>
         </div>
         <div class="dep-scan-root-row">
-          <span class="dep-scan-root-label" id="dep-scan-root-label">Checking against</span>
+          <span class="dep-scan-root-label" id="dep-scan-root-label">Downloads folder</span>
           <button class="dep-scan-root-settings" id="dep-scan-root-settings" type="button">Change in Settings</button>
         </div>
         <div class="dep-scan-root-list" id="dep-scan-root-list"></div>
+        <label class="check-row dep-scan-organize" for="dep-scan-organize">
+          <input type="checkbox" id="dep-scan-organize" />
+          <span>Organize downloads into creator subfolders</span>
+        </label>
+        <!-- Extra folders the scan checks besides AddonPackages. Same list as
+             Settings → Additional VAR folders (shared stateKey "downloadVars"). -->
+        <div class="dep-scan-extra">
+          <span class="dep-scan-root-label">Also check these folders</span>
+          <div id="dep-scan-extra-dirs" class="additional-dirs-list"></div>
+          <button id="dep-scan-add-folder" class="ghost-button" type="button"></button>
+          <p class="dep-scan-extra-hint">Dependencies are checked against AddonPackages and these folders. Adding or removing one re-runs the scan.</p>
+        </div>
         <p id="dep-scan-summary"></p>
         <div id="dep-scan-progress" class="progress-card dep-scan-progress hidden">
           <div class="progress-track"><div class="progress-bar" id="dep-scan-bar"></div></div>
@@ -2631,25 +2761,25 @@
         </div>
         <div id="dep-scan-list" class="dep-scan-list"></div>
         <div class="dialog-actions">
-          <button id="dep-scan-collect" class="ghost-button hidden" type="button" title="Look for these dependencies in folders outside your VAM library">Find in Folders…</button>
           <button id="dep-scan-download-all" class="primary-button" type="button">Download All Missing</button>
           <button id="dep-scan-close" class="ghost-button" type="button">Close</button>
         </div>
       </div>
     </div>
 
-    <!-- VAR Packages "Collect Dependencies": finds a package's dependencies in
+    <!-- "Find Dependencies Locally" (internally: collect deps): finds a package's dependencies in
          folders outside the library and copies them into <Creator>\deps\. Sits
-         AFTER #dep-scan-backdrop so it stacks above it (Scan Dependencies opens
+         AFTER #dep-scan-backdrop so it stacks above it (Download Dependencies opens
          it over itself), and BEFORE #vp-delete-backdrop and #dialog-backdrop
          like every modal here: all .dialog-backdrops share z-index 1400, so DOM
          order decides stacking. (The Escape chain runs in the reverse order.) -->
     <div id="dep-collect-backdrop" class="dialog-backdrop hidden">
       <div class="dialog-card dep-scan-card" role="dialog" aria-modal="true" aria-labelledby="dep-collect-title">
-        <h3 id="dep-collect-title">Collect Dependencies</h3>
+        <h3 id="dep-collect-title">Find Dependencies Locally</h3>
         <p class="dep-collect-intro">
-          Finds this package's dependencies in folders outside your VAM library, then copies them into a
-          <code>deps</code> folder in the package's creator folder &mdash; moving the package and its preview image there too.
+          Finds this package's dependencies in folders outside your VaM library and copies them into
+          <strong>AddonPackages</strong> in your VaM directory &mdash; into <code>AddonPackages\&lt;Creator&gt;\deps</code>,
+          moving the package and its preview image into <code>AddonPackages\&lt;Creator&gt;</code> too.
         </p>
         <div class="dep-scan-root-row">
           <span class="dep-scan-root-label">Search folders</span>
@@ -2854,6 +2984,7 @@
             } else if (route === "build-db") {
               buildDb.classList.remove("hidden");
               if (window.__refreshBuildDbStats) window.__refreshBuildDbStats();
+              if (window.__refreshDatabasePackages) window.__refreshDatabasePackages();
             } else if (route === "var-packages") {
               varPackages.classList.remove("hidden");
               if (window.__refreshVarPackagesView) window.__refreshVarPackagesView();

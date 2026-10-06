@@ -3,7 +3,6 @@ const invoke = window.__TAURI__?.core?.invoke;
 const KEEP_ALL_VALUE = "__KEEP_ALL__";
 const TASK_POLL_MS = 300;
 const GROUP_PAGE_SIZE = 20;
-const VAR_PACKAGES_PAGE_SIZE = 20;
 const THEMES = [
   "light",
   "dark",
@@ -17,6 +16,7 @@ const THEMES = [
   "porcelain",
   "frost",
   "circuit",
+  "backstage",
 ];
 
 const state = {
@@ -105,53 +105,73 @@ const state = {
     sidePanelMeta: null,
     initialized: false,
   },
+  // Settings → VaM directory (see applyVamDir) and its last inspect_vam_dir result.
+  vamDir: "",
+  vamDirInfo: null,
+  // VAR Packages (library view). Rows loaded so far — the grid grows in chunks
+  // as it scrolls, so this is a prefix of the full matching set.
   varPackagesItems: [],
   varPackagesFilter: "",
   varPackagesLoading: false,
-  varPackagesPage: 0,
-  // Total matching rows. In folder mode this is derived from the loaded array;
-  // in database mode it is the total returned by the paginated DB query.
+  varPackagesLoadingMore: false,
+  // Total matching rows and the facet counts/totals from the last listing.
   varPackagesTotal: 0,
-  // "folders" — list .var files under a folder, status = indexed/unindexed against DB.
-  // "database" — list every package row in the local DB, status = file present/missing on disk.
-  varPackagesMode: "folders",
+  varPackagesFacets: null,
+  // True once a folder listing exists in the backend cache, so re-entering the
+  // page re-queries instead of waiting for another Scan.
+  vpHasListing: false,
   // Folder-mode scan depth switch. true = walk every subfolder (the
   // long-standing behavior); false = only .var files sitting directly in the
   // chosen folders. This is the switch POSITION — moving it does not rescan.
   varPackagesDeepScan: true,
   // The depth the listing currently on screen was actually built with. Only the
-  // Scan button copies varPackagesDeepScan into this. Pagination, filters and
+  // Scan button copies varPackagesDeepScan into this. Scrolling, filters and
   // search send this one, so they keep hitting the same backend cache entry
   // instead of silently re-walking the library after the switch is moved.
   varPackagesScannedDeep: true,
-  // Active filter selections. null/empty means "no filter".
-  // sizeBucket: "sm" | "md" | "lg" | null
-  // creator: string | null
-  // favorites: "only" | null
-  // scene: "with" | "without" | null  (has a Saves/scene preview image)
-  varPackagesFilters: { sizeBucket: null, creator: null, favorites: null, scene: null },
-  // Sort is NOT part of varPackagesFilters: "Clear All" resets that object and
-  // must not throw away the sort, and activeVarPackageFilterCount must not
-  // count a sort as an active filter. key: "name" | "size" | "modified";
-  // dir: "asc" | "desc". Defaults reproduce the pre-sort ordering exactly.
-  varPackagesSort: { key: "name", dir: "asc" },
-  // Multi-select on the VAR Packages page. Keyed by file_path (NOT package_id
-  // — the same id can legitimately live in two folders and each copy must be
-  // selectable on its own). Values are item snapshots so the selection bar can
-  // show sizes/names for items that have paged out of varPackagesItems.
+  // Filter selections; null means "no filter". `status` is the Status list
+  // (favorites | dependency | standalone | broken | missing | outdated |
+  // indexed | unindexed), `pkgType` a LIB_TYPES key, `enabled` "enabled" |
+  // "disabled", `sizeBucket` "sm" | "md" | "lg", `scene` "with" | "without".
+  varPackagesFilters: {
+    status: null,
+    pkgType: null,
+    enabled: null,
+    sizeBucket: null,
+    creator: null,
+    scene: null,
+  },
+  // Sort is NOT part of varPackagesFilters: Reset clears that object and must
+  // not throw away the sort. key: "type" | "name" | "size" | "items" | "deps" |
+  // "modified"; dir: "asc" | "desc".
+  varPackagesSort: { key: "type", dir: "asc" },
+  // Selection, keyed by file_path (NOT package_id — the same id can live in
+  // two folders and each copy must be selectable on its own). Values are item
+  // snapshots so the selection panel can describe rows that scrolled out.
+  // One entry = the package in the details panel; two or more = bulk mode.
   vpSelected: new Map(),
   // file_path of the last toggled item — the shift-click range anchor.
   vpSelAnchor: null,
+  // file_path of the keyboard lead (the card arrow keys move from).
+  vpLead: null,
+  // A package to select once the listing that contains it arrives.
+  vpRevealPath: null,
   // One bulk operation at a time; disables the selection-bar action buttons.
   vpBulkRunning: false,
-  // Cached creator names for the dropdown. Scoped to the scanned folder in
-  // folder mode, DB-wide in database mode — see loadVarPackagesFilterOptions.
+  // View preferences (persisted in localStorage by setupLibraryView).
+  vpView: "cards",
+  vpCardWidth: 220,
+  vpDetailWidth: 340,
+  // The Missing status view: { loading, items, error } from list_missing_dependencies.
+  vpMissing: null,
+  // Author suggestions: the creators of the scanned folders.
   varPackagesFilterOptions: { creators: [] },
   // Roots+depth signature the creator options above were loaded for, so a
   // folder listing only re-fetches them when it actually changed folders.
   varPackagesFilterOptionsKey: null,
-  // Local typeahead text inside the Creator dropdown (does not hit the server).
-  varPackagesCreatorMenuQuery: "",
+  // A filter/search change that arrived while a listing was in flight; it is
+  // replayed when that listing settles.
+  varPackagesRequery: false,
   // Set when a maintenance apply changed the library while a folder refresh was
   // already in flight — refreshVarPackagesFromFolder re-dispatches once from its
   // `finally`, since its early-return guard would otherwise swallow the refresh
@@ -410,6 +430,7 @@ const I18N = {
     themeButtonNord: "Nord",
     themeButtonSolarized: "Solarized",
     themeButtonMonolith: "Monolith",
+    themeButtonBackstage: "Backstage",
     themeButtonAmber: "Amber Noir",
     themeButtonEmerald: "Emerald Dark",
     themeButtonMidnight: "Midnight Blue",
@@ -647,14 +668,14 @@ Object.assign(I18N.en_US, {
   varPackagesTitle: "VAR Packages",
   varPackagesSubtitle:
     "Browse every .var package in a folder. Status reflects whether the package is currently indexed in your local database.",
-  varPackagesScan: "Scan Directory",
-  varPackagesSearchPlaceholder: "Search packages...",
+  varPackagesScan: "Rescan",
+  varPackagesSearchPlaceholder: "Search…",
   varPackagesThStatus: "Status",
   varPackagesThName: "Package Name",
   varPackagesThCreator: "Creator",
   varPackagesThSize: "Size",
   varPackagesThModified: "Last Modified",
-  varPackagesEmpty: "Pick a VAR folder and click Scan Directory to list packages.",
+  varPackagesEmpty: "Click Rescan to list the packages in AddonPackages.",
   varPackagesNoResults: "No packages match the current filter.",
   varPackagesPickFirst: "Please pick a VAR folder first.",
   varPackagesScanFailed: (error) => `Failed to list VAR packages: ${error}`,
@@ -663,8 +684,6 @@ Object.assign(I18N.en_US, {
     `Showing ${start.toLocaleString()}-${end.toLocaleString()} of ${total.toLocaleString()}`,
   varPackagesPagePrev: "Previous",
   varPackagesPageNext: "Next",
-  varPackagesModeFolders: "VAR Folders",
-  varPackagesModeDatabase: "Database",
   varPackagesDbHint: "Listing every package recorded in the local database.",
   varPackagesRefresh: "Refresh",
   varPackagesStatusMissing: "Missing",
@@ -693,7 +712,7 @@ Object.assign(I18N.en_US, {
   // navigating actions are listed first and separated from the two that leave
   // the modal (and the pending delete) intact.
   varPackagesRowOpenDetails: "Open Details",
-  varPackagesRowScanDeps: "Scan Dependencies",
+  varPackagesRowScanDeps: "Download Dependencies",
   varPackagesRowShowInExplorer: "Show in Explorer",
   varPackagesRowCopyPath: "Copy file path",
   // Hover info card on a VAR Packages card/row. The two extra status labels
@@ -781,7 +800,7 @@ Object.assign(I18N.en_US, {
   varPackagesBulkExportDone: (parts, n) => `Scene images done — ${parts} (of ${n}).`,
   varPackagesBulkOrganizeHint: (matched, selected) =>
     `${matched} of your ${selected} selected package${selected === 1 ? "" : "s"} ` +
-    `have a planned move and are pre-ticked. The rest are already filed correctly ` +
+    `have a planned change and are pre-ticked. The rest need nothing ` +
     `or were excluded (see notes).`,
   varPackagesBulkOrganizeScopeNote: (n) =>
     `The plan still scans every configured folder — only the rows matching your ` +
@@ -1304,6 +1323,13 @@ function setupDownloadsManager() {
   if (closeBtn) closeBtn.addEventListener("click", closeDownloadsPanel);
   const clearBtn = $("downloads-clear");
   if (clearBtn) clearBtn.addEventListener("click", clearFinishedDownloads);
+  // Top-bar button: opens the shared dependency modal in paste-text mode
+  // (defined in the VAR Details dep-scan block); its downloads land in this panel.
+  $("find-deps-toggle")?.addEventListener("click", () => {
+    closeDownloadsPanel();
+    depStartTextScan();
+  });
+
   const list = $("downloads-list");
   if (list) {
     list.addEventListener("click", (event) => {
@@ -2203,6 +2229,7 @@ function themeToggleLabel(theme) {
     porcelain: "themeButtonPorcelain",
     frost: "themeButtonFrost",
     circuit: "themeButtonCircuit",
+    backstage: "themeButtonBackstage",
   }[next];
   return labelKey ? t(labelKey) : "";
 }
@@ -2337,31 +2364,11 @@ function applySettingsCopy() {
   setText("build-db-bulk-idle", t("bulkImportIdleNote"));
 
   setText("sidebar-var-packages-label", t("varPackagesNav"));
-  setText("var-packages-title", t("varPackagesTitle"));
-  setText("var-packages-subtitle", t("varPackagesSubtitle"));
   setText("var-packages-input-label", t("inputLabel"));
   setText("var-packages-pick-input-label", t("browse"));
   setText("var-packages-scan-label", t("varPackagesScan"));
-  setText("var-packages-th-status", t("varPackagesThStatus"));
-  setText("var-packages-th-name", t("varPackagesThName"));
-  setText("var-packages-th-creator", t("varPackagesThCreator"));
-  setText("var-packages-th-size", t("varPackagesThSize"));
-  setText("var-packages-th-modified", t("varPackagesThModified"));
-  setText("var-packages-mode-folders-label", t("varPackagesModeFolders"));
-  setText("var-packages-mode-database-label", t("varPackagesModeDatabase"));
-  setText("var-packages-db-hint", t("varPackagesDbHint"));
-  setText("var-packages-db-refresh-label", t("varPackagesRefresh"));
   const vpFilter = $("var-packages-filter");
   if (vpFilter) vpFilter.placeholder = t("varPackagesSearchPlaceholder");
-  setText("var-packages-filter-bar-label", t("varPackagesFiltersLabel"));
-  setText("var-packages-filter-clear", t("varPackagesFilterClearAll"));
-  const vpCreatorMenuSearch = document.querySelector(
-    "[data-vp-menu-search='creator']"
-  );
-  if (vpCreatorMenuSearch) {
-    vpCreatorMenuSearch.placeholder = t("varPackagesFilterMenuSearchPlaceholder");
-  }
-  applyVarPackagesModeUi();
   renderVarPackagesFilterBar();
   renderVarPackages();
 
@@ -2380,6 +2387,7 @@ function applySettingsCopy() {
   setText("settings-theme-porcelain-label", t("themeButtonPorcelain"));
   setText("settings-theme-frost-label", t("themeButtonFrost"));
   setText("settings-theme-circuit-label", t("themeButtonCircuit"));
+  setText("settings-theme-backstage-label", t("themeButtonBackstage"));
 
   setText("settings-scan-eyebrow", t("settingsScanEyebrow"));
   setText("settings-scan-title", t("settingsScanTitle"));
@@ -2758,566 +2766,1311 @@ function formatVarModifiedMs(ms) {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 }
 
-function renderVarPackages() {
-  // Every card/row below is about to be replaced; an open hover panel would be
-  // left describing a detached node (and anchored to a stale rect).
-  vpHoverHide();
-  const tbody = $("var-packages-tbody");
-  const grid = $("var-packages-grid");
-  const tableWrap = document.querySelector(".var-packages-table-wrap");
-  const countEl = $("var-packages-count");
-  if (!tbody) return;
-
-  const progressEl = $("var-packages-progress");
-  if (progressEl) progressEl.classList.toggle("hidden", !state.varPackagesLoading);
-
-  const isDbMode = state.varPackagesMode === "database";
-  // Folder ("Local") mode renders a thumbnail grid; database mode keeps the table.
-  if (tableWrap) tableWrap.classList.toggle("hidden", !isDbMode);
-  if (grid) grid.classList.toggle("hidden", isDbMode);
-
-  // Both modes now serve already-paginated, already-filtered slices from the
-  // backend — `state.varPackagesItems` is exactly the rows for the current page.
-  const visible = state.varPackagesItems ?? [];
-  const totalCount = Math.max(0, Number(state.varPackagesTotal ?? 0));
-  const countPillTotal = totalCount;
-
-  if (countEl) countEl.textContent = t("varPackagesCount", countPillTotal);
-
-  // Render a single-line status/empty message into whichever view is active.
-  const renderMessage = (message) => {
-    if (isDbMode) {
-      tbody.innerHTML = `<tr class="var-packages-empty-row"><td colspan="7">${escapeHtml(message)}</td></tr>`;
-    } else if (grid) {
-      grid.innerHTML = `<div class="var-packages-grid-empty">${escapeHtml(message)}</div>`;
-    }
-  };
-
-  if (state.varPackagesLoading) {
-    const loadingMessage = isDbMode
-      ? t("varPackagesLoadingDb")
-      : t("varPackagesScanning");
-    renderMessage(loadingMessage);
-    if (totalCount > 0) {
-      const totalPages = Math.max(1, Math.ceil(totalCount / VAR_PACKAGES_PAGE_SIZE));
-      const currentPage = Math.min(Math.max(0, state.varPackagesPage), totalPages - 1);
-      renderVarPackagesPagination(totalCount, currentPage, totalPages);
-    } else {
-      renderVarPackagesPagination(0, 0, 0);
-    }
-    renderVpSelectionBar();
-    return;
-  }
-
-  if (totalCount === 0 || visible.length === 0) {
-    const noSearch = !String(state.varPackagesFilter ?? "").trim();
-    const noFilters = activeVarPackageFilterCount(state.varPackagesFilters) === 0;
-    const isPristine = totalCount === 0 && noSearch && noFilters;
-    const message = isPristine ? t("varPackagesEmpty") : t("varPackagesNoResults");
-    renderMessage(message);
-    renderVarPackagesPagination(0, 0, 0);
-    renderVpSelectionBar();
-    return;
-  }
-
-  const totalPages = Math.max(1, Math.ceil(totalCount / VAR_PACKAGES_PAGE_SIZE));
-  const currentPage = Math.min(Math.max(0, state.varPackagesPage), totalPages - 1);
-
-  if (isDbMode) {
-    const rows = visible.map((it) => {
-      const indexed = Boolean(it.indexed);
-      const statusClass = indexed ? "is-indexed" : "is-unindexed";
-      const statusKey = indexed ? "varPackagesStatusOnDisk" : "varPackagesStatusMissing";
-      const statusLabel = t(statusKey);
-      const sizeText = formatBytesLocal(it.size_bytes);
-      const modifiedText = formatVarModifiedMs(it.modified_ms);
-      const creator = it.creator || "—";
-      const fav = _favoritePackages.has(it.package_id);
-      const selected = state.vpSelected.has(it.file_path);
-      return `
-        <tr data-package-id="${escapeAttribute(it.package_id ?? "")}"
-            data-file-path="${escapeAttribute(it.file_path ?? "")}"
-            class="${selected ? "is-selected" : ""}">
-          <td class="vp-col-select">
-            <input type="checkbox" class="vp-select-check"
-                   data-vp-select="${escapeAttribute(it.file_path ?? "")}"
-                   ${selected ? "checked" : ""} ${indexed ? "" : "disabled"}
-                   aria-label="Select ${escapeAttribute(it.file_name ?? "")}" />
-          </td>
-          <td class="vp-col-status">
-            <span class="vp-status ${statusClass}">
-              <span class="vp-status-dot"></span>
-              <span>${escapeHtml(statusLabel)}</span>
-            </span>
-          </td>
-          <td class="vp-col-name vp-cell-name">${escapeHtml(it.file_name ?? "")}</td>
-          <td class="vp-col-creator">${escapeHtml(creator)}</td>
-          <td class="vp-col-size vp-cell-size">${escapeHtml(sizeText)}</td>
-          <td class="vp-col-modified vp-cell-modified">${escapeHtml(modifiedText)}</td>
-          <td class="vp-col-actions">
-            <button class="icon-button vp-row-fav${fav ? " is-active" : ""}" type="button"
-                    data-vp-fav="${escapeAttribute(it.package_id ?? "")}"
-                    aria-pressed="${fav ? "true" : "false"}"
-                    title="${fav ? "Remove from favorites" : "Add to favorites"}"
-                    aria-label="Toggle favorite for ${escapeAttribute(it.file_name ?? "")}">
-              <span class="material-symbols-outlined">star</span>
-            </button>
-            <button class="icon-button vp-row-images" type="button"
-                    data-vp-images="${escapeAttribute(it.file_path ?? "")}"
-                    ${indexed ? "" : "disabled"}
-                    title="${indexed ? "View images" : "The file is already gone from disk"}"
-                    aria-label="View images in ${escapeAttribute(it.file_name ?? "")}">
-              <span class="material-symbols-outlined">photo_library</span>
-            </button>
-            <button class="icon-button vp-row-delete" type="button"
-                    data-vp-delete="${escapeAttribute(it.file_path ?? "")}"
-                    ${indexed ? "" : "disabled"}
-                    title="${indexed ? "Send to Recycle Bin" : "The file is already gone from disk"}"
-                    aria-label="Send ${escapeAttribute(it.file_name ?? "")} to Recycle Bin">
-              <span class="material-symbols-outlined">delete</span>
-            </button>
-          </td>
-        </tr>`;
-    });
-    tbody.innerHTML = rows.join("");
-  } else if (grid) {
-    const cards = visible.map((it) => {
-      const fileName = it.file_name ?? "";
-      const filePath = it.file_path ?? "";
-      const fav = _favoritePackages.has(it.package_id);
-      const selected = state.vpSelected.has(filePath);
-      // The favorite badge, select checkbox, and open button are SIBLINGS of
-      // .vp-card, not children: .vp-card is itself a <button>, and nesting
-      // interactive elements is invalid HTML. Clicking the card body toggles
-      // selection; the open button (a sibling) navigates to details; delete
-      // lives in the right-click menu.
-      return `
-        <div class="vp-card-wrap${selected ? " is-selected" : ""}">
-          <button class="vp-card" type="button" data-package-id="${escapeAttribute(it.package_id ?? "")}" data-file-path="${escapeAttribute(filePath)}">
-            <div class="vp-card-thumb empty">
-              <span class="material-symbols-outlined">image_not_supported</span>
-            </div>
-            <span class="vp-card-meta">
-              <span class="vp-card-name">${escapeHtml(fileName)}</span>
-              <span class="vp-card-size">${escapeHtml(formatBytesLocal(it.size_bytes))}</span>
-            </span>
-          </button>
-          <input type="checkbox" class="vp-select-check vp-card-select"
-                 data-vp-select="${escapeAttribute(filePath)}"
-                 ${selected ? "checked" : ""}
-                 aria-label="Select ${escapeAttribute(fileName)}" />
-          <button class="icon-button vp-card-fav${fav ? " is-active" : ""}" type="button"
-                  data-vp-fav="${escapeAttribute(it.package_id ?? "")}"
-                  aria-pressed="${fav ? "true" : "false"}"
-                  title="${fav ? "Remove from favorites" : "Add to favorites"}"
-                  aria-label="Toggle favorite for ${escapeAttribute(fileName)}">
-            <span class="material-symbols-outlined">star</span>
-          </button>
-        </div>`;
-    });
-    grid.innerHTML = cards.join("");
-    loadVarPackageThumbnails();
-  }
-  renderVarPackagesPagination(totalCount, currentPage, totalPages);
-  vpSyncSelectionUi();
-}
-
 // ============================================================
-// VAR Packages — hover info card
+// VAR Packages — library view
 //
-// A package card shows a thumbnail, a name and a size; a table row shows five
-// columns. Neither has room for the one thing you most often want mid-browse:
-// where the file actually lives on disk. Hovering either pops this panel with
-// the full location plus the fields the card has no room for.
-//
-// It is purely informational — `pointer-events: none` in CSS — so it can never
-// get between the cursor and the card it describes, and it can't be hovered
-// itself. That also means it needs no dismissal affordance: leaving the card
-// is the only way to close it.
+// Laid out after VaM Backstage's Library: a filter panel (left), a card grid
+// or table (centre), a details panel (right) and a status bar. Everything
+// lists the scanned VAR folders through `list_var_packages`, which also
+// returns each package's content type, item count, dependency graph flags and
+// the facet counts the filter panel shows. Rows load in chunks as the grid
+// scrolls rather than in numbered pages. The database listing that used to be
+// this page's second mode lives on the Database page (see dbPkgs*).
 // ============================================================
 
-// Long enough that sweeping the cursor across the grid stays quiet, short
-// enough that stopping on a card feels like a direct answer.
-const VP_HOVER_DELAY_MS = 320;
-// `key` is the file_path the panel is showing (or is about to show, while
-// `timer` is pending). It's what lets re-entering the same card be a no-op
-// instead of a hide/re-show flicker as the cursor crosses the card's children.
-const VP_HOVER = { timer: null, key: null };
+// Rows fetched per request while scrolling. A refresh that must keep what is
+// on screen re-fetches up to VP_MAX_RELOAD (list_var_packages caps `limit`).
+const VP_CHUNK = 120;
+const VP_MAX_RELOAD = 1000;
+const LIB_GAP = 12;
+const LIB_PAD = 16;
 
-// `indexed` means the opposite thing per mode — see the note on the i18n keys.
-function vpHoverStatusLabel(item) {
-  if (state.varPackagesMode === "database") {
-    return item.indexed ? t("varPackagesStatusOnDisk") : t("varPackagesStatusMissing");
+const LIB_TYPES = [
+  { key: "scene", label: "Scenes", color: "#3b82f6" },
+  { key: "look", label: "Looks", color: "#ec4899" },
+  { key: "pose", label: "Poses", color: "#f97316" },
+  { key: "clothing", label: "Clothing", color: "#8b5cf6" },
+  { key: "hair", label: "Hairstyles", color: "#f59e0b" },
+  { key: "other", label: "Other", color: "#64748b" },
+];
+const LIB_TYPE_BY_KEY = Object.fromEntries(LIB_TYPES.map((type) => [type.key, type]));
+
+// Content categories in the details panel, in display order.
+const LIB_CATEGORIES = [
+  { key: "scene", label: "Scenes" },
+  { key: "subscene", label: "SubScenes" },
+  { key: "look", label: "Looks" },
+  { key: "pose", label: "Poses" },
+  { key: "clothing", label: "Clothing" },
+  { key: "hair", label: "Hairstyles" },
+];
+const LIB_TYPE_HUE = { scene: 220, subscene: 210, look: 330, pose: 25, clothing: 270, hair: 40 };
+const LIB_CONTENT_TAGS = {
+  legacyScene: { label: "Legacy", color: "#fbbf24" },
+  legacyLook: { label: "Legacy", color: "#fbbf24" },
+  legacyPose: { label: "Legacy", color: "#fbbf24" },
+  clothingPreset: { label: "Preset", color: "#7dd3fc" },
+  hairPreset: { label: "Preset", color: "#7dd3fc" },
+  skinPreset: { label: "Skin Preset", color: "#7dd3fc" },
+};
+
+// `key` is what the backend's `status` filter takes; null is "All".
+// `missing` is not a package filter: it swaps the grid for the table of
+// dependencies the scanned packages reference but the folders don't have.
+const LIB_STATUSES = [
+  { key: null, label: "All", title: "Every package in the scanned folders", count: "all" },
+  { key: "favorites", label: "Favorites" },
+  {
+    key: "dependency",
+    label: "Dependencies",
+    title: "Used by at least one other scanned package",
+  },
+  {
+    key: "standalone",
+    label: "Top-level",
+    title: "Not used by any other scanned package",
+    indent: true,
+  },
+  {
+    key: "broken",
+    label: "Broken",
+    title: "Have dependencies that are not in the scanned folders",
+  },
+  {
+    key: "missing",
+    label: "Missing",
+    title: "Dependencies referenced by your packages but not found in the scanned folders",
+  },
+  {
+    key: "outdated",
+    label: "Old versions",
+    title: "A newer version of the same package is in the scanned folders",
+  },
+  { key: "indexed", label: "In database", title: "Recorded in the local database index" },
+  { key: "unindexed", label: "Not in database", title: "Not yet indexed — run Database → Build" },
+];
+
+const LIB_STORE = {
+  view: "vp.lib.view",
+  cardWidth: "vp.lib.cardWidth",
+  detailWidth: "vp.lib.detailWidth",
+  hint: "vp.lib.selectHintDismissed",
+  category: "vp.lib.cat.",
+};
+
+function libStoreGet(key, fallback = null) {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value == null ? fallback : value;
+  } catch {
+    return fallback;
   }
-  return item.indexed ? t("varPackagesStatusInDb") : t("varPackagesStatusNotInDb");
 }
 
-// package_id is "Creator.Name.Version". Only the version is pulled out here —
-// the creator arrives as its own field and the name is the card's own label.
-// Anything without all three segments has no version to show.
-function vpPackageIdVersion(packageId) {
-  const parts = String(packageId ?? "").split(".");
-  return parts.length >= 3 ? parts[parts.length - 1] : "";
-}
-
-function vpHoverCardHtml(item) {
-  const filePath = String(item.file_path ?? "");
-  const version = vpPackageIdVersion(item.package_id);
-  const rows = [
-    [t("varPackagesThCreator"), item.creator || "—"],
-    [t("varPackagesHoverVersion"), version || "—"],
-    [t("varPackagesThSize"), formatBytesLocal(item.size_bytes)],
-    [t("varPackagesThModified"), formatVarModifiedMs(item.modified_ms)],
-    [t("varPackagesThStatus"), vpHoverStatusLabel(item)],
-  ];
-  const fields = rows
-    .map(
-      ([label, value]) =>
-        `<dt class="vp-hover-label">${escapeHtml(label)}</dt>` +
-        `<dd class="vp-hover-value">${escapeHtml(String(value))}</dd>`,
-    )
-    .join("");
-  // The path is the reason this panel exists, so it gets the full width below
-  // the field grid and is allowed to wrap rather than ellipsize — a truncated
-  // path is exactly as useless as no path.
-  // In database mode the row comes from the index, not from a directory walk,
-  // so file_path is only where the database *thinks* the file is. Recycling or
-  // moving a package leaves that row behind — see the #var-packages-db-stale
-  // banner. Showing the path unqualified there would state a location that
-  // confidently does not exist, so it gets a warning line instead. VAR Details
-  // gates its whole Path tile on the same signal.
-  const stale = state.varPackagesMode === "database" && !item.indexed;
-  const location = filePath
-    ? `<div class="vp-hover-location">
-         <span class="vp-hover-label">${escapeHtml(t("varPackagesHoverLocation"))}</span>
-         <span class="vp-hover-path">${escapeHtml(filePath)}</span>
-         ${stale ? `<span class="vp-hover-stale">${escapeHtml(t("varPackagesHoverLocationStale"))}</span>` : ""}
-       </div>`
-    : "";
-  return `
-    <p class="vp-hover-title">${escapeHtml(item.file_name ?? "")}</p>
-    <dl class="vp-hover-fields">${fields}</dl>
-    ${location}`;
-}
-
-function vpHoverHide() {
-  if (VP_HOVER.timer) {
-    clearTimeout(VP_HOVER.timer);
-    VP_HOVER.timer = null;
+function libStoreSet(key, value) {
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch {
+    /* storage unavailable — the preference just won't persist */
   }
-  VP_HOVER.key = null;
-  const el = $("vp-hover-card");
-  if (!el || el.classList.contains("hidden")) return;
-  el.classList.add("hidden");
-  el.innerHTML = "";
 }
 
-// Centred under the cursor's x and hung below the hovered element, flipping
-// above it when the bottom of the viewport is closer than the panel is tall.
-// Clamped on both axes with the same 8px margin showContextMenu uses.
-function vpHoverPlace(el, anchorRect, cursorX) {
-  el.style.left = "0px";
-  el.style.top = "0px";
-  const width = el.offsetWidth;
-  const height = el.offsetHeight;
-  const gap = 10;
-  const left = Math.max(
-    8,
-    Math.min(Math.round(cursorX - width / 2), window.innerWidth - width - 8),
+// Java-style string hash, as Backstage uses for placeholder colors.
+function libHash(text) {
+  let h = 0;
+  const s = String(text ?? "");
+  for (let i = 0; i < s.length; i++) h = (s.charCodeAt(i) + ((h << 5) - h)) | 0;
+  return h;
+}
+
+function libGradient(id) {
+  const h = libHash(id);
+  const h1 = Math.abs(h % 360);
+  const h2 = Math.abs((h * 7) % 360);
+  const h3 = Math.abs((h * 13) % 360);
+  return (
+    `radial-gradient(ellipse at 25% 75%, hsl(${h1} 45% 22%), transparent 55%), ` +
+    `radial-gradient(ellipse at 75% 25%, hsl(${h2} 50% 18%), transparent 50%), ` +
+    `linear-gradient(135deg, hsl(${h3} 25% 10%), hsl(${(h3 + 60) % 360} 20% 7%))`
   );
-  let top = anchorRect.bottom + gap;
-  if (top + height > window.innerHeight - 8) top = anchorRect.top - gap - height;
-  top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
-  el.style.left = `${left}px`;
-  el.style.top = `${top}px`;
 }
 
-function vpHoverShow(item, anchorRect, cursorX) {
-  const el = $("vp-hover-card");
-  if (!el) return;
-  el.innerHTML = vpHoverCardHtml(item);
-  // Unhide before measuring: .hidden is display:none, so offsetWidth/Height
-  // both read 0 while it is still applied.
-  el.classList.remove("hidden");
-  vpHoverPlace(el, anchorRect, cursorX);
+function libContentGradient(name, category) {
+  const h = libHash(`${name}${category}`);
+  const b = LIB_TYPE_HUE[category] ?? Math.abs(h % 360);
+  return (
+    `radial-gradient(ellipse at 30% 70%, hsl(${b} 40% 24%), transparent 60%), ` +
+    `radial-gradient(ellipse at 70% 30%, hsl(${(b + 40) % 360} 35% 16%), transparent 50%), ` +
+    `linear-gradient(160deg, hsl(${b} 20% 10%), hsl(${(b + 30) % 360} 15% 6%))`
+  );
 }
 
-// One wiring pass over both views. Both containers are stable elements whose
-// contents renderVarPackages() replaces wholesale, so every listener here is
-// delegated and survives a repaint.
-function setupVarPackagesHoverCard() {
-  const views = [
-    [$("var-packages-grid"), ".vp-card[data-file-path]"],
-    [$("var-packages-tbody"), "tr[data-file-path]"],
-  ];
+function libAuthorColor(author) {
+  return `hsl(${Math.abs(libHash(author) % 360)} 45% 35%)`;
+}
 
-  for (const [container, selector] of views) {
-    if (!container) continue;
-    const hostOf = (node) => (node?.closest ? node.closest(selector) : null);
+function libAuthorInitials(author) {
+  const text = String(author ?? "?");
+  const parts = text.split(/[-_\s]/).filter(Boolean);
+  return parts.length >= 2
+    ? (parts[0][0] + parts[1][0]).toUpperCase()
+    : text.slice(0, 2).toUpperCase();
+}
 
-    container.addEventListener("mouseover", (event) => {
-      // Row action buttons carry their own native title tooltips; stacking
-      // this panel on top of one would be two answers to the same hover. (The
-      // grid's fav button and checkbox are siblings of .vp-card rather than
-      // descendants, so they miss `selector` on their own and never get here.)
-      if (
-        event.target.closest?.(
-          "[data-vp-delete],[data-vp-fav],[data-vp-images],[data-vp-select]",
-        )
-      ) {
-        vpHoverHide();
-        return;
-      }
-      const host = hostOf(event.target);
-      const filePath = host?.getAttribute("data-file-path");
-      if (!filePath) {
-        vpHoverHide();
-        return;
-      }
-      // Crossing from the thumbnail to the name inside one card re-fires
-      // mouseover; the panel is already correct, so leave it alone.
-      if (VP_HOVER.key === filePath) return;
-      vpHoverHide();
-      VP_HOVER.key = filePath;
-      // clientX is read now because the event object is not live: by the time
-      // the timer fires the cursor has moved on, but this card is the one the
-      // user paused over.
-      const cursorX = event.clientX;
-      VP_HOVER.timer = setTimeout(() => {
-        VP_HOVER.timer = null;
-        // A background refresh can repaint the list during the delay, which
-        // detaches `host` and invalidates its rect. Drop the popup rather than
-        // point it at where the card used to be.
-        if (!host.isConnected) {
-          VP_HOVER.key = null;
-          return;
-        }
-        const item = (state.varPackagesItems ?? []).find((it) => it.file_path === filePath);
-        if (!item) {
-          VP_HOVER.key = null;
-          return;
-        }
-        vpHoverShow(item, host.getBoundingClientRect(), cursorX);
-      }, VP_HOVER_DELAY_MS);
-    });
-
-    container.addEventListener("mouseout", (event) => {
-      // mouseout also fires moving *between children of the same card*. Only
-      // actually leaving the card counts.
-      const from = hostOf(event.target);
-      if (from && from === hostOf(event.relatedTarget)) return;
-      vpHoverHide();
-    });
-
-    // Any press starts something that outranks a tooltip — selecting the card,
-    // or opening the right-click menu on top of it.
-    container.addEventListener("mousedown", vpHoverHide);
+// "Creator.Package_Name.12" -> "Package Name". The creator is shown on its
+// own line and the version as a "v12" suffix, so the title drops both.
+function libTitle(item) {
+  const id = String(item?.package_id ?? "");
+  const parts = id.split(".");
+  let core;
+  if (parts.length >= 3 && /^\d+$/.test(parts[parts.length - 1])) {
+    core = parts.slice(1, -1).join(".");
+  } else if (parts.length >= 2) {
+    core = parts.slice(1).join(".");
+  } else {
+    core = id;
   }
-
-  // The panel is position:fixed against a rect measured once, so any scroll
-  // leaves it pointing at whatever slid into that spot. Capture phase so the
-  // grid's own scroll container counts, not just the window.
-  window.addEventListener("scroll", vpHoverHide, true);
-  // A resize re-flows the grid, so the measured rect no longer describes the
-  // hovered card. Same reason the context menu hides on resize.
-  window.addEventListener("resize", vpHoverHide);
-  window.addEventListener("blur", vpHoverHide);
+  return (core || item?.file_name || id).replaceAll("_", " ");
 }
 
-// Lazily fetch each visible Local package's scene preview image and fill its
-// card thumbnail. Folder-mode items from `list_var_packages` carry no image
-// data, so we pull it per-file via `get_var_file_stats` (same source VAR
-// Details uses) and cache by file path so paging back is instant. Sequential
-// to avoid opening 20 zip archives at once.
+function libVersion(item) {
+  const parts = String(item?.package_id ?? "").split(".");
+  const last = parts.length >= 3 ? parts[parts.length - 1] : "";
+  return /^\d+$/.test(last) ? last : "";
+}
+
+function libCreator(item) {
+  return item?.creator || deriveCreatorFromPackageId(item?.package_id) || "—";
+}
+
+function libType(item) {
+  return LIB_TYPE_BY_KEY[item?.pkg_type] ?? LIB_TYPE_BY_KEY.other;
+}
+
+// Inactive packages are drawn dimmed, like Backstage's disabled/offloaded ones.
+function libIsDim(item) {
+  return Boolean(item?.disabled);
+}
+
+function libFindItem(filePath) {
+  if (!filePath) return null;
+  return (
+    (state.varPackagesItems ?? []).find((it) => it.file_path === filePath) ??
+    state.vpSelected.get(filePath) ??
+    null
+  );
+}
+
+function libIsMissingView() {
+  return state.varPackagesFilters?.status === "missing";
+}
+
+// ---- Thumbnails ------------------------------------------------------------
+
+// file_path (or `${file_path}::${entry}` for content rows) -> data URL | null.
+// Also read by ensureVarDetailsPreview, so VAR Details opens with the image the
+// card already showed.
 const varPackageThumbCache = new Map();
-let varPackageThumbToken = 0;
-async function loadVarPackageThumbnails() {
-  const grid = $("var-packages-grid");
-  if (!grid || !invoke) return;
-  const token = ++varPackageThumbToken;
-  const pageAtStart = state.varPackagesPage;
+const VP_THUMB_CACHE_MAX = 900;
+const LIB_THUMB = { observer: null, queue: [], active: 0, token: 0 };
 
-  const fill = (thumb, dataUrl) => {
-    if (!thumb || !dataUrl) return;
-    thumb.innerHTML = `<img alt="Scene preview" src="${escapeAttribute(dataUrl)}" />`;
-    thumb.classList.remove("empty");
-  };
+function libThumbCacheSet(key, value) {
+  if (varPackageThumbCache.size >= VP_THUMB_CACHE_MAX) {
+    // Maps iterate in insertion order: drop the oldest entry.
+    const oldest = varPackageThumbCache.keys().next().value;
+    varPackageThumbCache.delete(oldest);
+  }
+  varPackageThumbCache.set(key, value);
+}
 
-  // Iterate the rendered cards directly so we never have to build (and escape)
-  // an attribute selector from a package id.
-  const cards = Array.from(grid.querySelectorAll(".vp-card"));
-  for (const card of cards) {
-    // Bail if the user switched tabs or paged away mid-load.
-    if (token !== varPackageThumbToken) return;
-    if (state.varPackagesMode !== "folders" || state.varPackagesPage !== pageAtStart) return;
-    const filePath = card.getAttribute("data-file-path");
-    if (!filePath) continue;
-    const thumb = card.querySelector(".vp-card-thumb");
-    if (varPackageThumbCache.has(filePath)) {
-      fill(thumb, varPackageThumbCache.get(filePath));
+function libThumbPaint(el, url) {
+  if (!el || !url || el.querySelector("img")) return;
+  const img = document.createElement("img");
+  img.alt = "";
+  img.decoding = "async";
+  img.src = url;
+  el.prepend(img);
+}
+
+function libThumbObserver() {
+  if (LIB_THUMB.observer || typeof IntersectionObserver !== "function") {
+    return LIB_THUMB.observer;
+  }
+  LIB_THUMB.observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        LIB_THUMB.observer.unobserve(entry.target);
+        LIB_THUMB.queue.push(entry.target);
+      }
+      libThumbPump();
+    },
+    { rootMargin: "400px 0px" },
+  );
+  return LIB_THUMB.observer;
+}
+
+// Lazily fills every [data-thumb] placeholder inside `root` as it nears the
+// viewport. Cached images paint synchronously.
+function libThumbWatch(root) {
+  if (!root) return;
+  const observer = libThumbObserver();
+  root.querySelectorAll("[data-thumb]").forEach((el) => {
+    const key = libThumbKey(el);
+    if (varPackageThumbCache.has(key)) {
+      libThumbPaint(el, varPackageThumbCache.get(key));
+      return;
+    }
+    if (observer) observer.observe(el);
+    else LIB_THUMB.queue.push(el);
+  });
+  if (!observer) libThumbPump();
+}
+
+function libThumbKey(el) {
+  const file = el.getAttribute("data-thumb") || "";
+  const entry = el.getAttribute("data-thumb-entry") || "";
+  return entry ? `${file}::${entry}` : file;
+}
+
+// Four at a time: each request opens an archive on a backend worker thread.
+async function libThumbPump() {
+  if (!invoke) return;
+  while (LIB_THUMB.active < 4 && LIB_THUMB.queue.length) {
+    const el = LIB_THUMB.queue.shift();
+    if (!el.isConnected) continue;
+    const key = libThumbKey(el);
+    if (varPackageThumbCache.has(key)) {
+      libThumbPaint(el, varPackageThumbCache.get(key));
       continue;
     }
-    try {
-      const stats = await invoke("get_var_file_stats", { packagePath: filePath });
-      const dataUrl = stats?.scene_image_data ?? null;
-      varPackageThumbCache.set(filePath, dataUrl);
-      if (token !== varPackageThumbToken) return;
-      fill(thumb, dataUrl);
-    } catch {
-      varPackageThumbCache.set(filePath, null);
-    }
+    LIB_THUMB.active += 1;
+    const filePath = el.getAttribute("data-thumb");
+    const entry = el.getAttribute("data-thumb-entry") || null;
+    invoke("get_var_image", { filePath, entry })
+      .then((url) => {
+        libThumbCacheSet(key, url || null);
+        // The element may have been re-rendered; paint every live copy.
+        document.querySelectorAll("[data-thumb]").forEach((node) => {
+          if (libThumbKey(node) === key) libThumbPaint(node, url);
+        });
+      })
+      .catch(() => libThumbCacheSet(key, null))
+      .finally(() => {
+        LIB_THUMB.active -= 1;
+        libThumbPump();
+      });
   }
 }
 
-function renderVarPackagesPagination(totalFiltered, currentPage, totalPages) {
-  const pagination = $("var-packages-pagination");
-  const summary = $("var-packages-pagination-summary");
-  const controls = $("var-packages-pagination-controls");
-  if (!pagination || !summary || !controls) return;
+function libThumbHtml(filePath, gradientSeed, cls, entry = "") {
+  const key = entry ? `${filePath}::${entry}` : filePath;
+  const cached = varPackageThumbCache.get(key);
+  const img = cached ? `<img alt="" decoding="async" src="${escapeAttribute(cached)}" />` : "";
+  return `<div class="${cls}" style="--lib-thumb-bg:${escapeAttribute(gradientSeed)}"
+      data-thumb="${escapeAttribute(filePath)}"${
+        entry ? ` data-thumb-entry="${escapeAttribute(entry)}"` : ""
+      }>${img}`;
+}
 
-  if (totalFiltered === 0) {
-    pagination.classList.add("hidden");
-    summary.textContent = "";
-    controls.innerHTML = "";
+// ---- Layout: columns, slider, panes ---------------------------------------
+
+function libAvailWidth() {
+  const scroll = $("lib-scroll");
+  return Math.max(0, (scroll?.clientWidth ?? 0) - LIB_PAD * 2);
+}
+
+function libColumnsFor(width) {
+  const avail = libAvailWidth();
+  return Math.max(1, Math.floor((avail + LIB_GAP) / (width + LIB_GAP)));
+}
+
+// Applies the card width as a column count (cards stretch to fill a row, as in
+// Backstage) and keeps the size slider's range in step with the pane width.
+function libApplyLayout() {
+  const grid = $("var-packages-grid");
+  const slider = $("lib-size-slider");
+  const sliderWrap = $("lib-size-slider-wrap");
+  const avail = libAvailWidth();
+  if (!grid || avail <= 0) return;
+  const width = Math.min(500, Math.max(100, Number(state.vpCardWidth) || 220));
+  const cols = libColumnsFor(width);
+  grid.style.setProperty("--lib-cols", String(cols));
+  if (slider && sliderWrap) {
+    const minCols = Math.max(1, Math.ceil((avail + LIB_GAP) / (500 + LIB_GAP)));
+    const maxCols = Math.max(minCols, Math.floor((avail + LIB_GAP) / (100 + LIB_GAP)));
+    slider.min = String(minCols);
+    slider.max = String(maxCols);
+    slider.step = "1";
+    slider.value = String(Math.min(maxCols, Math.max(minCols, cols)));
+    const hide = state.vpView === "table" || libIsMissingView() || maxCols <= minCols;
+    sliderWrap.classList.toggle("hidden", hide);
+  }
+}
+
+function libSetColumns(cols) {
+  const avail = libAvailWidth();
+  const n = Math.max(1, Number(cols) || 1);
+  state.vpCardWidth = Math.floor((avail - (n - 1) * LIB_GAP) / n);
+  libStoreSet(LIB_STORE.cardWidth, state.vpCardWidth);
+  libApplyLayout();
+}
+
+function libSetView(view) {
+  if (!["compact", "cards", "table"].includes(view) || state.vpView === view) return;
+  state.vpView = view;
+  libStoreSet(LIB_STORE.view, view);
+  renderVarPackages();
+}
+
+function libApplyPaneWidths() {
+  const view = $("var-packages-view");
+  if (!view) return;
+  view.style.setProperty("--lib-detail-w", `${state.vpDetailWidth}px`);
+}
+
+// The details panel's left edge drags to resize it (260–500px, remembered).
+function setupLibResizeHandles() {
+  document.querySelectorAll("[data-lib-resize]").forEach((handle) => {
+    handle.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const start = state.vpDetailWidth;
+      document.body.classList.add("lib-resizing");
+      const onMove = (e) => {
+        state.vpDetailWidth = Math.min(500, Math.max(260, start - (e.clientX - startX)));
+        libApplyPaneWidths();
+        libApplyLayout();
+      };
+      const onUp = () => {
+        document.body.classList.remove("lib-resizing");
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        libStoreSet(LIB_STORE.detailWidth, state.vpDetailWidth);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    });
+  });
+}
+
+// ---- Rendering ---------------------------------------------------------------
+
+function libCardHtml(it, idx) {
+  const compact = state.vpView === "compact";
+  const fp = it.file_path ?? "";
+  const pid = it.package_id ?? "";
+  const type = libType(it);
+  const title = libTitle(it);
+  const version = libVersion(it);
+  const creator = libCreator(it);
+  const picked = state.vpSelected.has(fp);
+  const fav = _favoritePackages.has(pid);
+
+  const chips = [];
+  if (!state.varPackagesFilters?.pkgType) {
+    chips.push(
+      `<span class="lib-chip lib-chip-type" style="background:${type.color}cc">${escapeHtml(type.label)}</span>`,
+    );
+  }
+  if (it.used_by_count > 0) {
+    chips.push(
+      `<span class="lib-chip lib-chip-dep" title="Used by ${it.used_by_count} scanned package${it.used_by_count === 1 ? "" : "s"}">Dep</span>`,
+    );
+  }
+  if (it.newer_version) {
+    chips.push(
+      `<span class="lib-chip lib-chip-old" title="A newer version of this package is in the scanned folders">Old</span>`,
+    );
+  }
+  if (compact && it.missing_dep_count > 0) {
+    chips.push(
+      `<span class="lib-chip lib-chip-warn" title="${it.missing_dep_count} missing dependencies"><span class="material-symbols-outlined">warning</span>${it.missing_dep_count}</span>`,
+    );
+  }
+
+  const icons = [];
+  if (it.disabled) {
+    icons.push(
+      `<span class="lib-thumb-glyph" title="Disabled — VaM will not load it"><span class="material-symbols-outlined">power_settings_new</span></span>`,
+    );
+  }
+  if (!it.readable) {
+    icons.push(
+      `<span class="lib-chip lib-chip-error" title="The archive or its meta.json could not be read">Corrupted</span>`,
+    );
+  }
+  icons.push(
+    `<button type="button" class="lib-thumb-glyph lib-fav${fav ? " is-active" : ""}" data-vp-fav="${escapeAttribute(pid)}" aria-pressed="${fav}" title="${fav ? "Remove from favorites" : "Add to favorites"}"><span class="material-symbols-outlined">star</span></button>`,
+  );
+
+  const author = `<button type="button" class="lib-author-link" data-lib-author="${escapeAttribute(creator)}" title="Filter by ${escapeAttribute(creator)}">${escapeHtml(creator)}</button>`;
+  const footer = compact
+    ? `<div class="lib-card-scrim">
+         <div class="lib-card-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</div>
+         <span class="lib-by">by ${author}</span>
+       </div>`
+    : "";
+  const stats = compact
+    ? ""
+    : `<div class="lib-card-footer">
+         <div class="lib-card-row">
+           <span class="lib-avatar" style="background:${libAuthorColor(creator)}">${escapeHtml(libAuthorInitials(creator))}</span>
+           <div class="lib-card-text">
+             <div class="lib-title-line">
+               <span class="lib-card-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</span>
+               ${version ? `<span class="lib-ver">v${escapeHtml(version)}</span>` : ""}
+             </div>
+             <span class="lib-by">by ${author}</span>
+           </div>
+         </div>
+         <div class="lib-card-stats">
+           <span class="lib-stat"><span class="material-symbols-outlined">hard_drive</span>${escapeHtml(formatBytesLocal(it.size_bytes))}</span>
+           <span class="lib-stat lib-stat-items"><span class="material-symbols-outlined">layers</span>${Number(it.item_count) || 0}<span class="lib-stat-word"> items</span></span>
+           ${
+             it.missing_dep_count > 0
+               ? `<span class="lib-stat lib-stat-warn" title="${it.missing_dep_count} dependencies are not in the scanned folders"><span class="material-symbols-outlined">warning</span>${it.missing_dep_count} missing</span>`
+               : ""
+           }
+         </div>
+       </div>`;
+
+  return `
+    <div class="lib-card${picked ? " is-picked" : ""}${picked && state.vpSelected.size > 1 ? " is-checked" : ""}${libIsDim(it) ? " is-dim" : ""}${state.vpSelected.size > 1 && state.vpLead === fp ? " is-lead" : ""}"
+         role="option" tabindex="-1" aria-selected="${picked}"
+         data-file-path="${escapeAttribute(fp)}" data-package-id="${escapeAttribute(pid)}" data-idx="${idx}">
+      ${libThumbHtml(fp, libGradient(it.file_name || pid), "lib-thumb")}
+        <div class="lib-thumb-shade"></div>
+        <div class="lib-thumb-chips">${chips.join("")}</div>
+        <div class="lib-thumb-icons">${icons.join("")}</div>
+        <button type="button" class="lib-check" data-vp-select="${escapeAttribute(fp)}" aria-label="Select ${escapeAttribute(title)}"><span class="material-symbols-outlined">check</span></button>
+        ${footer}
+      </div>
+      ${stats}
+    </div>`;
+}
+
+function libStatusCellHtml(it) {
+  const parts = [];
+  if (!it.readable) parts.push(`<span class="lib-status-err">Corrupted</span>`);
+  else if (it.disabled) parts.push(`<span class="lib-status-warn">Disabled</span>`);
+  else if (it.used_by_count > 0) parts.push(`<span class="lib-status-dep">Dep</span>`);
+  else parts.push(`<span class="lib-status-ok">Top-level</span>`);
+  if (it.newer_version) parts.push(`<span class="lib-status-warn">Old</span>`);
+  if (!it.indexed) parts.push(`<span class="lib-status-muted">Not in DB</span>`);
+  return `<span class="lib-status-text">${parts.join(" · ")}</span>`;
+}
+
+function libRowHtml(it, idx) {
+  const fp = it.file_path ?? "";
+  const pid = it.package_id ?? "";
+  const type = libType(it);
+  const title = libTitle(it);
+  const version = libVersion(it);
+  const creator = libCreator(it);
+  const picked = state.vpSelected.has(fp);
+  const fav = _favoritePackages.has(pid);
+  return `
+    <tr class="${picked ? "is-picked" : ""}${libIsDim(it) ? " is-dim" : ""}"
+        data-file-path="${escapeAttribute(fp)}" data-package-id="${escapeAttribute(pid)}" data-idx="${idx}">
+      <td class="lib-check-cell">
+        <input type="checkbox" data-vp-select="${escapeAttribute(fp)}" ${picked ? "checked" : ""}
+               aria-label="Select ${escapeAttribute(title)}" />
+      </td>
+      <td>
+        <div class="lib-pkg-cell">
+          ${libThumbHtml(fp, libGradient(it.file_name || pid), "lib-pkg-thumb")}</div>
+          <div class="lib-pkg-text">
+            <span class="lib-pkg-name" title="${escapeAttribute(title)}">${escapeHtml(title)}
+              ${version ? `<span class="lib-ver">v${escapeHtml(version)}</span>` : ""}</span>
+            <span class="lib-pkg-file" title="${escapeAttribute(fp)}">${escapeHtml(it.file_name ?? "")}</span>
+          </div>
+        </div>
+      </td>
+      <td><button type="button" class="lib-author-link" data-lib-author="${escapeAttribute(creator)}">${escapeHtml(creator)}</button></td>
+      <td><span class="lib-type-chip" style="--dot:${type.color}">${escapeHtml(type.label)}</span></td>
+      <td>${libStatusCellHtml(it)}</td>
+      <td class="lib-mono">${escapeHtml(formatBytesLocal(it.size_bytes))}</td>
+      <td>${fav ? `<span class="material-symbols-outlined" style="color:#fbbf24;font-variation-settings:'FILL' 1">star</span> ` : ""}${Number(it.item_count) || 0}</td>
+      <td>${
+        it.missing_dep_count > 0
+          ? `<span class="lib-status-warn" title="${it.missing_dep_count} missing">⚠ ${it.missing_dep_count}</span>`
+          : `<span class="lib-status-muted">${Number(it.dep_count) || 0}</span>`
+      }</td>
+    </tr>`;
+}
+
+function libEmptyHtml() {
+  if (state.varPackagesLoading) {
+    return `<div class="lib-empty">${escapeHtml(t("varPackagesScanning"))}</div>`;
+  }
+  const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
+  const hasQuery =
+    String(state.varPackagesFilter ?? "").trim() ||
+    activeVarPackageFilterCount(state.varPackagesFilters) > 0 ||
+    state.varPackagesFilters?.status;
+  if (total === 0 && !hasQuery && !state.vpHasListing) {
+    const dir = vpResolveInputDir();
+    if (!dir) {
+      return `<div class="lib-empty">Set your VaM directory to list the packages in AddonPackages.
+        <span class="lib-empty-sub"><button type="button" class="lib-btn lib-btn-gradient lib-btn-sm" data-vam-settings>
+          <span class="material-symbols-outlined">settings</span>Open Settings</button></span></div>`;
+    }
+    return `<div class="lib-empty">${escapeHtml(t("varPackagesEmpty"))}
+      <span class="lib-empty-sub"><button type="button" class="lib-btn lib-btn-gradient lib-btn-sm" data-lib-action="scan">
+        <span class="material-symbols-outlined">sync</span>Scan ${escapeHtml(dir)}</button></span></div>`;
+  }
+  return `<div class="lib-empty">No items found<span class="lib-empty-sub">${escapeHtml(
+    t("varPackagesNoResults"),
+  )}</span></div>`;
+}
+
+function renderVarPackages() {
+  const grid = $("var-packages-grid");
+  const tableWrap = $("lib-table-wrap");
+  const tbody = $("var-packages-tbody");
+  const missingWrap = $("lib-missing-wrap");
+  if (!grid || !tbody) return;
+
+  $("var-packages-progress")?.classList.toggle(
+    "hidden",
+    !(state.varPackagesLoading || state.varPackagesLoadingMore || state.vpMissing?.loading),
+  );
+  document.querySelectorAll("[data-lib-view]").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-lib-view") === state.vpView);
+  });
+
+  const missingView = libIsMissingView();
+  const table = state.vpView === "table";
+  const items = state.varPackagesItems ?? [];
+
+  grid.classList.toggle("hidden", missingView || table);
+  tableWrap?.classList.toggle("hidden", missingView || !table);
+  missingWrap?.classList.toggle("hidden", !missingView);
+  $("lib-detail")?.classList.toggle("hidden", missingView);
+  document
+    .querySelector("[data-lib-resize='detail']")
+    ?.classList.toggle("hidden", missingView);
+
+  libRenderToolbar();
+  libRenderStatusBar();
+
+  if (missingView) {
+    libRenderMissing();
+    libRenderLoadMore();
+    libApplyLayout();
     return;
   }
 
-  pagination.classList.remove("hidden");
-  const start = currentPage * VAR_PACKAGES_PAGE_SIZE + 1;
-  const end = Math.min(totalFiltered, (currentPage + 1) * VAR_PACKAGES_PAGE_SIZE);
-  summary.textContent = t("varPackagesPageSummary", start, end, totalFiltered);
-
-  if (totalPages <= 1) {
-    controls.innerHTML = "";
-    return;
-  }
-
-  const pages = buildPageNumbers(totalPages, currentPage);
-  controls.innerHTML = `
-    <button class="page-nav-button" data-vp-action="prev" type="button" ${currentPage === 0 ? "disabled" : ""}>
-      <span class="material-symbols-outlined">chevron_left</span>
-      ${escapeHtml(t("varPackagesPagePrev"))}
-    </button>
-    <div class="page-numbers">
-      ${pages
-        .map((p) =>
-          p === "ellipsis"
-            ? `<span class="page-ellipsis">…</span>`
-            : `<button class="page-button ${p === currentPage ? "active" : ""}" data-vp-jump="${p}" type="button">${p + 1}</button>`
-        )
-        .join("")}
-    </div>
-    <button class="page-nav-button" data-vp-action="next" type="button" ${currentPage >= totalPages - 1 ? "disabled" : ""}>
-      ${escapeHtml(t("varPackagesPageNext"))}
-      <span class="material-symbols-outlined">chevron_right</span>
-    </button>
-  `;
-
-  const onPageChanged = () => {
-    if (state.varPackagesMode === "database") {
-      refreshVarPackagesFromDb();
+  if (items.length === 0) {
+    if (table) {
+      tbody.innerHTML = `<tr><td colspan="8">${libEmptyHtml()}</td></tr>`;
     } else {
-      refreshVarPackagesFromFolder({ forceRescan: false });
+      grid.innerHTML = libEmptyHtml();
     }
-  };
-  controls.querySelectorAll("[data-vp-action]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const action = button.dataset.vpAction;
-      if (action === "prev") state.varPackagesPage = Math.max(0, state.varPackagesPage - 1);
-      if (action === "next") state.varPackagesPage = Math.min(totalPages - 1, state.varPackagesPage + 1);
-      onPageChanged();
-    });
-  });
-  controls.querySelectorAll("[data-vp-jump]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.varPackagesPage = Number(button.dataset.vpJump) || 0;
-      onPageChanged();
-    });
-  });
+  } else if (table) {
+    tbody.innerHTML = items.map((it, i) => libRowHtml(it, i)).join("");
+    libThumbWatch(tbody);
+  } else {
+    grid.classList.toggle("is-bulk", state.vpSelected.size > 1);
+    grid.innerHTML = items.map((it, i) => libCardHtml(it, i)).join("");
+    libThumbWatch(grid);
+  }
+  libRenderLoadMore();
+  libApplyLayout();
+  renderVpSelectionBar();
+  libRenderDetail();
 }
 
-// Called on sidebar entry to the page. Auto-fetches in database mode (cheap)
-// but does NOT auto-scan in folders mode — folder scans are only triggered by
-// the explicit Scan Directory button.
+function libRenderLoadMore() {
+  const el = $("lib-load-more");
+  if (!el) return;
+  const loaded = (state.varPackagesItems ?? []).length;
+  const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
+  const show = !libIsMissingView() && loaded > 0 && (loaded < total || state.varPackagesLoadingMore);
+  el.classList.toggle("hidden", !show);
+  el.textContent = state.varPackagesLoadingMore
+    ? "Loading more…"
+    : `Showing ${loaded.toLocaleString()} of ${total.toLocaleString()} — scroll for more`;
+}
+
+function libRenderToolbar() {
+  const count = $("var-packages-count");
+  const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
+  if (count) {
+    if (libIsMissingView()) {
+      const n = state.vpMissing?.items?.length ?? 0;
+      count.textContent = state.vpMissing?.loading
+        ? "… missing dependencies"
+        : `${n.toLocaleString()} missing ${n === 1 ? "dependency" : "dependencies"}`;
+    } else {
+      count.textContent = state.varPackagesLoading && total === 0 ? "… packages" : t("varPackagesCount", total);
+    }
+  }
+
+  const nFilters = activeVarPackageFilterCount(state.varPackagesFilters);
+  $("lib-filter-summary")?.classList.toggle("hidden", nFilters === 0);
+  vpSetText("lib-filter-summary-text", `${nFilters} filter${nFilters === 1 ? "" : "s"}`);
+
+  const hintDismissed = libStoreGet(LIB_STORE.hint) === "1";
+  $("lib-select-hint")?.classList.toggle(
+    "hidden",
+    hintDismissed || libIsMissingView() || (state.varPackagesItems ?? []).length < 2,
+  );
+  // The Missing table has no cards, so no size or view mode either.
+  document.querySelector(".lib-view-toggle")?.classList.toggle("hidden", libIsMissingView());
+
+  // Contextual actions for the selected status, as in Backstage's toolbar.
+  const actions = $("lib-toolbar-actions");
+  if (!actions) return;
+  const status = state.varPackagesFilters?.status ?? null;
+  if (status === "broken") {
+    actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-outline" data-lib-action="view-missing">View Missing Packages</button>`;
+  } else if (status === "missing") {
+    const want = (state.vpMissing?.items ?? []).filter((m) => m.status === "missing").length;
+    actions.innerHTML = `
+      <button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-action="find-missing" ${want ? "" : "disabled"}>
+        <span class="material-symbols-outlined">download</span>Find &amp; Download All (${want})
+      </button>
+      <button type="button" class="lib-icon-btn lib-icon-btn-sm" data-lib-action="refresh-missing" title="Refresh">
+        <span class="material-symbols-outlined">refresh</span>
+      </button>`;
+  } else if (status === "outdated" && total > 0) {
+    actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-destructive" data-lib-action="clean-old">
+        <span class="material-symbols-outlined">delete_sweep</span>Clean Old Versions…</button>`;
+  } else {
+    actions.innerHTML = "";
+  }
+}
+
+function libRenderStatusBar() {
+  const bar = $("lib-statusbar");
+  if (!bar) return;
+  const f = state.varPackagesFacets;
+  if (!f) {
+    bar.innerHTML = `<span class="lib-sb-item">${escapeHtml(
+      vpResolveInputDir() ? "Not scanned yet" : "VaM directory not set",
+    )}</span>`;
+    return;
+  }
+  const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
+  const sep = `<span class="lib-sb-sep">·</span>`;
+  const dir = vpResolveInputDir();
+  const extra = getAdditionalDirs("varPackages").length;
+  bar.innerHTML = `
+    <span class="lib-sb-item" title="Packages matching the current filters"><span class="material-symbols-outlined">inventory_2</span>${total.toLocaleString()} packages</span>${sep}
+    <span class="lib-sb-item" title="Of those, packages another scanned package depends on"><span class="material-symbols-outlined">account_tree</span>${Number(f.total_deps || 0).toLocaleString()} deps</span>${sep}
+    <span class="lib-sb-item" title="Content items (scenes, looks, poses, clothing, hair)"><span class="material-symbols-outlined">layers</span>${Number(f.total_items || 0).toLocaleString()} items</span>${sep}
+    <span class="lib-sb-item" title="Total size"><span class="material-symbols-outlined">hard_drive</span>${escapeHtml(formatBytesLocal(f.total_bytes || 0))}</span>
+    <span class="lib-sb-right" title="${escapeAttribute(dir)}">${escapeHtml(dir)}${
+      extra ? ` +${extra} folder${extra === 1 ? "" : "s"}` : ""
+    } · ${Number(f.library_count || 0).toLocaleString()} packages · ${escapeHtml(
+      formatBytesLocal(f.library_bytes || 0),
+    )}</span>`;
+}
+
+// ---- Missing dependencies view -------------------------------------------------
+
+async function libLoadMissing() {
+  if (!invoke) return;
+  state.vpMissing = { ...(state.vpMissing ?? {}), loading: true };
+  renderVarPackages();
+  try {
+    const rows = await invoke("list_missing_dependencies");
+    state.vpMissing = { loading: false, items: Array.isArray(rows) ? rows : [], error: null };
+  } catch (err) {
+    state.vpMissing = { loading: false, items: [], error: String(err) };
+    addLog(`Missing dependencies: ${String(err)}`);
+  }
+  renderVarPackages();
+}
+
+function libDepVersionLabel(id) {
+  const last = String(id).split(".").pop() ?? "";
+  if (/^latest$/i.test(last)) return "any";
+  const min = /^min(\d+)$/i.exec(last);
+  if (min) return `v${min[1]}+`;
+  return /^\d+$/.test(last) ? `v${last}` : "any";
+}
+
+function libRenderMissing() {
+  const wrap = $("lib-missing-wrap");
+  if (!wrap) return;
+  const m = state.vpMissing ?? {};
+  if (m.loading && !(m.items ?? []).length) {
+    wrap.innerHTML = `<div class="lib-empty">Resolving dependencies…</div>`;
+    return;
+  }
+  const rows = m.items ?? [];
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="lib-empty">Nothing missing<span class="lib-empty-sub">Every dependency the scanned packages declare is in the scanned folders.</span></div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <table class="lib-table lib-missing-table">
+      <thead><tr>
+        <th style="width:34%">Package</th><th style="width:16%">Version</th>
+        <th style="width:16%">Author</th><th>Needed by</th><th style="width:96px">Status</th>
+      </tr></thead>
+      <tbody>${rows
+        .map((row) => {
+          const id = String(row.id ?? "");
+          const base = id.split(".").slice(0, -1).join(".") || id;
+          const have = row.have_id ? ` — have v${escapeHtml(String(row.have_id).split(".").pop())}` : "";
+          const users = (row.needed_by ?? [])
+            .slice(0, 3)
+            .map(
+              (u) =>
+                `<button type="button" class="lib-link" data-lib-reveal="${escapeAttribute(u.file_path)}">${escapeHtml(libTitle(u))}</button>`,
+            )
+            .join("");
+          const more = (row.needed_by?.length ?? 0) > 3 ? ` <span class="lib-status-muted">+${row.needed_by.length - 3}</span>` : "";
+          const pill =
+            row.status === "other_version"
+              ? `<span class="lib-pill lib-pill-warn" title="Another version is present; VaM may fall back to it">Fallback</span>`
+              : row.indexed
+                ? `<span class="lib-pill lib-pill-info" title="Not in the scanned folders, but the database index knows this package">In database</span>`
+                : `<span class="lib-pill lib-pill-err">Missing</span>`;
+          return `<tr>
+            <td title="${escapeAttribute(id)}"><span class="lib-pkg-name">${escapeHtml(base)}</span></td>
+            <td class="lib-mono">${escapeHtml(libDepVersionLabel(id))}${have}</td>
+            <td>${escapeHtml(deriveCreatorFromPackageId(id) ?? "—")}</td>
+            <td>${users}${more}</td>
+            <td>${pill}</td>
+          </tr>`;
+        })
+        .join("")}</tbody>
+    </table>`;
+}
+
+// Hands the missing package ids to the Find Dependencies dialog, which looks
+// them up on the Hub and in the imported download links.
+function libFindMissing(ids) {
+  const list = (ids ?? []).filter(Boolean);
+  if (!list.length) return;
+  depStartTextScan();
+  const input = $("dep-scan-text-input");
+  if (!input) return;
+  input.value = list.join("\n");
+  depAnalyzeText().catch((e) => addLog(`Find Dependencies: ${String(e)}`));
+}
+
+// Shows one package in the grid: leaves the Missing view and searches for it.
+function libRevealPackage(filePath, packageId) {
+  const loaded = (state.varPackagesItems ?? []).find((it) => it.file_path === filePath);
+  if (loaded && !libIsMissingView()) {
+    vpSelectOnly(loaded);
+    libScrollIntoView(filePath);
+    return;
+  }
+  const id = packageId || String(filePath).split(/[\\/]/).pop()?.replace(/\.var$/i, "") || "";
+  state.vpRevealPath = filePath;
+  state.varPackagesFilters = { ...state.varPackagesFilters, status: null };
+  state.varPackagesFilter = id;
+  const input = $("var-packages-filter");
+  if (input) input.value = id;
+  renderVarPackagesFilterBar();
+  refreshVarPackagesFromFolder({ forceRescan: false });
+}
+
+function libScrollIntoView(filePath) {
+  const node = document.querySelector(
+    `#lib-scroll [data-file-path="${CSS.escape(String(filePath))}"]`,
+  );
+  node?.scrollIntoView({ block: "nearest" });
+}
+
+// ---- Details panel -----------------------------------------------------------
+
+const LIB_DETAILS = { cache: new Map(), pending: new Map(), expanded: new Set() };
+
+function libDetailsKey(item) {
+  return `${item.file_path}|${item.size_bytes}|${item.modified_ms}`;
+}
+
+function libLoadDetails(item) {
+  const key = libDetailsKey(item);
+  if (LIB_DETAILS.cache.has(key)) return Promise.resolve(LIB_DETAILS.cache.get(key));
+  if (LIB_DETAILS.pending.has(key)) return LIB_DETAILS.pending.get(key);
+  const p = invoke("get_var_package_details", { filePath: item.file_path })
+    .then((details) => {
+      if (LIB_DETAILS.cache.size > 60) LIB_DETAILS.cache.delete(LIB_DETAILS.cache.keys().next().value);
+      LIB_DETAILS.cache.set(key, details);
+      return details;
+    })
+    .catch((err) => {
+      const failed = { error: String(err) };
+      LIB_DETAILS.cache.set(key, failed);
+      return failed;
+    })
+    .finally(() => LIB_DETAILS.pending.delete(key));
+  LIB_DETAILS.pending.set(key, p);
+  return p;
+}
+
+function libLicenseHtml(license) {
+  if (!license) return "";
+  const text = String(license);
+  const upper = text.toUpperCase();
+  let cls = "";
+  let title = "License";
+  if (/\bNC\b/.test(upper) || ["PC", "PC EA", "QUESTIONABLE"].includes(upper)) {
+    cls = " is-restricted";
+    title = "Commercial use not allowed";
+  } else if (["CC BY", "CC BY-SA", "CC BY-ND", "PD", "PUBLIC DOMAIN"].includes(upper)) {
+    cls = " is-commercial";
+    title = "Commercial use allowed";
+  }
+  return `<span class="lib-chip lib-license${cls}" title="${escapeAttribute(title)}">${escapeHtml(text)}</span>`;
+}
+
+function libDepRank(status) {
+  return { missing: 95, indexed: 80, other_version: 72, found: 0 }[status] ?? 50;
+}
+
+function libDepPill(dep) {
+  switch (dep.status) {
+    case "found":
+      return `<span class="lib-pill lib-pill-ok">Present</span>`;
+    case "other_version":
+      return `<span class="lib-pill lib-pill-warn" title="Only ${escapeAttribute(dep.resolved_id ?? "another version")} is present">Fallback</span>`;
+    case "indexed":
+      return `<span class="lib-pill lib-pill-info" title="Not in the scanned folders; the database index knows ${escapeAttribute(dep.resolved_id ?? "")}">In database</span>`;
+    default:
+      return `<span class="lib-pill lib-pill-err">Missing</span>`;
+  }
+}
+
+function libCollapsible(rows, key, total) {
+  const expanded = LIB_DETAILS.expanded.has(key);
+  if (rows.length <= 4 || expanded) {
+    const less =
+      rows.length > 4
+        ? `<button type="button" class="lib-more" data-lib-expand="${escapeAttribute(key)}">Show less</button>`
+        : "";
+    return rows.join("") + less;
+  }
+  return (
+    rows.slice(0, 3).join("") +
+    `<button type="button" class="lib-more" data-lib-expand="${escapeAttribute(key)}">+ ${total - 3} more</button>`
+  );
+}
+
+function libDepsSectionHtml(item, details) {
+  const deps = [...(details.dependencies ?? [])].sort(
+    (a, b) => libDepRank(b.status) - libDepRank(a.status) || a.id.localeCompare(b.id),
+  );
+  const missing = deps.filter((d) => d.status === "missing");
+  const issue = missing.length
+    ? `<button type="button" class="lib-issue lib-small-link" data-lib-action="find-deps" title="${missing.length} dependencies are not in the scanned folders — look them up on the Hub">
+         <span class="material-symbols-outlined">warning</span>${missing.length} missing</button>`
+    : "";
+  const fallback = deps.filter((d) => d.status === "other_version").length;
+  const fallbackChip = fallback
+    ? `<span class="lib-issue" title="Only another version of these is present"><span class="material-symbols-outlined">swap_horiz</span>${fallback} fallback</span>`
+    : "";
+  const rows = deps.map((dep) => {
+    const resolved = dep.status === "found" || dep.status === "other_version";
+    const ref = resolved
+      ? `<button type="button" class="lib-dep-ref is-resolved" data-lib-reveal="${escapeAttribute(dep.file_path ?? "")}" data-lib-reveal-id="${escapeAttribute(dep.resolved_id ?? "")}" title="${escapeAttribute(dep.id)}">${escapeHtml(dep.id)}</button>`
+      : `<span class="lib-dep-ref" title="${escapeAttribute(dep.id)}">${escapeHtml(dep.id)}</span>`;
+    const size = dep.size_bytes != null ? `<span class="lib-dep-size">${escapeHtml(formatBytesLocal(dep.size_bytes))}</span>` : "";
+    return `<div class="lib-dep-row">${ref}${size}${libDepPill(dep)}</div>`;
+  });
+  const body = rows.length
+    ? `<div class="lib-box">${libCollapsible(rows, `deps:${item.file_path}`, rows.length)}</div>`
+    : `<p class="lib-aside">Declares no dependencies.</p>`;
+  return `
+    <section class="lib-ds">
+      <div class="lib-group-head">
+        <span class="lib-group-title">Dependencies <small>(${deps.length})</small></span>
+        <span class="lib-group-tools">${fallbackChip}${issue}</span>
+      </div>
+      ${body}
+    </section>`;
+}
+
+function libUsedBySectionHtml(item, details) {
+  const users = details.used_by ?? [];
+  if (!users.length) return "";
+  const rows = users.map(
+    (u) => `<button type="button" class="lib-user-row" data-lib-reveal="${escapeAttribute(u.file_path)}" data-lib-reveal-id="${escapeAttribute(u.package_id)}">
+        <span class="lib-user-name">${escapeHtml(libTitle(u))}</span>
+        <span class="lib-user-by">by ${escapeHtml(deriveCreatorFromPackageId(u.package_id) ?? "—")}</span>
+      </button>`,
+  );
+  return `
+    <section class="lib-ds">
+      <div class="lib-group-head"><span class="lib-group-title">Used by <small>(${users.length})</small></span></div>
+      <div class="lib-box">${libCollapsible(rows, `users:${item.file_path}`, rows.length)}</div>
+    </section>`;
+}
+
+function libContentSectionHtml(item, details) {
+  const content = details.content ?? [];
+  const groups = LIB_CATEGORIES.map((cat) => ({
+    ...cat,
+    rows: content.filter((c) => c.category === cat.key),
+  })).filter((g) => g.rows.length);
+  const count = Number(details.item_count) || content.length;
+  const head = `
+    <div class="lib-group-head">
+      <span class="lib-group-title">Content ${count ? `<small>(${count})</small>` : "<small>(none detected)</small>"}</span>
+      <span class="lib-group-tools">
+        <button type="button" class="lib-small-link is-quiet" data-lib-action="browse-files" title="Open in VAR Details"><span class="material-symbols-outlined">account_tree</span>Browse files</button>
+        <button type="button" class="lib-small-link" data-lib-action="images" title="Every image in the package"><span class="material-symbols-outlined">grid_view</span>View images</button>
+      </span>
+    </div>`;
+  const body = groups
+    .map((g) => {
+      const collapsed = libStoreGet(LIB_STORE.category + g.key) === "0";
+      const limitKey = `cat:${item.file_path}:${g.key}`;
+      const showAll = LIB_DETAILS.expanded.has(limitKey);
+      const visible = showAll ? g.rows : g.rows.slice(0, 60);
+      const rows = visible
+        .map((c) => {
+          const tag = LIB_CONTENT_TAGS[c.fine];
+          const gradient = libContentGradient(c.name, c.category);
+          // Only rows with their own image get a loader — without an entry the
+          // key would be the package's, and every row would show the package art.
+          const thumb = c.thumb
+            ? `${libThumbHtml(item.file_path, gradient, "lib-content-thumb", c.thumb)}</div>`
+            : `<div class="lib-content-thumb" style="--lib-thumb-bg:${escapeAttribute(gradient)}"></div>`;
+          return `<div class="lib-content-row" title="${escapeAttribute(c.path)}">
+            ${thumb}
+            <span class="lib-content-name">${escapeHtml(c.name)}${
+              tag ? `<span class="lib-content-tag" style="color:${tag.color}bb">${escapeHtml(tag.label)}</span>` : ""
+            }</span>
+          </div>`;
+        })
+        .join("");
+      const more =
+        g.rows.length > visible.length
+          ? `<button type="button" class="lib-more" data-lib-expand="${escapeAttribute(limitKey)}">+ ${g.rows.length - visible.length} more</button>`
+          : "";
+      return `<div class="lib-cat">
+          <button type="button" class="lib-cat-head" data-lib-cat="${g.key}">
+            <span class="material-symbols-outlined">${collapsed ? "chevron_right" : "expand_more"}</span>
+            ${escapeHtml(g.label)} <small>(${g.rows.length})</small>
+          </button>
+          ${collapsed ? "" : `<div class="lib-box">${rows}${more}</div>`}
+        </div>`;
+    })
+    .join("");
+  const truncated = details.content_truncated
+    ? `<p class="lib-aside" style="margin-top:6px">Showing the first ${content.length.toLocaleString()} items.</p>`
+    : "";
+  return `<section class="lib-ds">${head}${body}${truncated}</section>`;
+}
+
+function libDetailHeaderHtml(item, details) {
+  const type = LIB_TYPE_BY_KEY[details?.pkg_type || item.pkg_type] ?? libType(item);
+  const title = details?.title ? String(details.title).replaceAll("_", " ") : libTitle(item);
+  const version = libVersion(item);
+  const creator = libCreator(item);
+  const fav = _favoritePackages.has(item.package_id);
+  const chips = [
+    `<span class="lib-chip lib-chip-type" style="background:${type.color}cc">${escapeHtml(type.label)}</span>`,
+  ];
+  if (item.used_by_count > 0) chips.push(`<span class="lib-chip lib-chip-depchip">Dep</span>`);
+  if (item.newer_version) chips.push(`<span class="lib-chip lib-chip-storage">Old</span>`);
+  if (item.disabled) {
+    chips.push(
+      `<span class="lib-chip lib-chip-storage"><span class="material-symbols-outlined">power_settings_new</span>Disabled</span>`,
+    );
+  }
+  if (!item.readable && !(details && details.readable)) chips.push(`<span class="lib-chip lib-chip-error">Corrupted</span>`);
+  if (!item.indexed) chips.push(`<span class="lib-chip lib-chip-muted" title="Not recorded in the database index">Not in DB</span>`);
+  chips.push(libLicenseHtml(details?.license ?? item.license));
+  if (details?.morph_count > 0) {
+    chips.push(
+      `<span class="lib-chip lib-chip-plain"><span class="material-symbols-outlined">blur_on</span>${details.morph_count} morph${details.morph_count === 1 ? "" : "s"}</span>`,
+    );
+  }
+  const support = details?.promotional_link
+    ? `<button type="button" class="lib-link lib-support" data-lib-url="${escapeAttribute(details.promotional_link)}"><span class="material-symbols-outlined">favorite</span>Support</button>`
+    : "";
+
+  const users = details?.used_by ?? [];
+  const usedLine = item.used_by_count > 0
+    ? `Used by ${users
+        .slice(0, 2)
+        .map((u) => escapeHtml(libTitle(u)))
+        .join(", ")}${item.used_by_count > 2 ? ` +${item.used_by_count - 2}` : ""}. Deleting it breaks ${item.used_by_count === 1 ? "that package" : "those packages"}.`
+    : `Frees ${escapeHtml(formatBytesLocal(item.size_bytes))}.`;
+
+  return `
+    <section class="lib-ds">
+      <div class="lib-dh">
+        <button type="button" class="lib-dh-thumb" data-lib-action="images" title="View images"
+                style="--lib-thumb-bg:${escapeAttribute(libGradient(item.file_name || item.package_id))}"
+                data-thumb="${escapeAttribute(item.file_path)}">${
+                  varPackageThumbCache.get(item.file_path)
+                    ? `<img alt="" src="${escapeAttribute(varPackageThumbCache.get(item.file_path))}" />`
+                    : ""
+                }</button>
+        <div class="lib-dh-text">
+          <div class="lib-title-line">
+            <span class="lib-dh-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</span>
+            ${version ? `<span class="lib-ver">v${escapeHtml(version)}</span>` : ""}
+          </div>
+          <div class="lib-dh-by">
+            <span class="lib-avatar is-sm" style="background:${libAuthorColor(creator)}">${escapeHtml(libAuthorInitials(creator))}</span>
+            <span class="lib-by">by <button type="button" class="lib-author-link" data-lib-author="${escapeAttribute(creator)}">${escapeHtml(creator)}</button></span>
+            ${support}
+          </div>
+          <div class="lib-dh-chips">${chips.join("")}</div>
+        </div>
+      </div>
+      <div class="lib-actions">
+        <button type="button" class="lib-btn lib-btn-accent lib-btn-full" data-lib-action="open-details">
+          <span class="material-symbols-outlined">open_in_new</span>Open in VAR Details
+        </button>
+        <div class="lib-actions-row">
+          <button type="button" class="lib-btn lib-btn-destructive" data-lib-action="delete">
+            <span class="material-symbols-outlined">delete</span>Delete · ${escapeHtml(formatBytesLocal(item.size_bytes))}
+          </button>
+          <button type="button" class="lib-btn lib-btn-quiet${item.disabled ? " is-warn" : ""}" data-lib-action="toggle-disabled"
+                  title="${item.disabled ? "Remove the .disabled marker so VaM loads it again" : "Add a .disabled marker so VaM skips it"}">
+            <span class="material-symbols-outlined">${item.disabled ? "power" : "power_settings_new"}</span>${item.disabled ? "Enable" : "Disable"}
+          </button>
+          <button type="button" class="lib-icon-btn${fav ? " lib-btn-quiet is-on" : ""}" data-vp-fav="${escapeAttribute(item.package_id)}" title="${fav ? "Remove from favorites" : "Add to favorites"}">
+            <span class="material-symbols-outlined" ${fav ? `style="font-variation-settings:'FILL' 1"` : ""}>star</span>
+          </button>
+          <button type="button" class="lib-icon-btn" data-lib-action="explorer" title="Show in Explorer">
+            <span class="material-symbols-outlined">folder_open</span>
+          </button>
+        </div>
+        <p class="lib-aside">${usedLine}</p>
+        <p class="lib-path" title="${escapeAttribute(item.file_path)}">${escapeHtml(item.file_path)}</p>
+      </div>
+    </section>`;
+}
+
+function libRenderDetail() {
+  const host = $("lib-detail");
+  if (!host || libIsMissingView()) return;
+  const n = state.vpSelected.size;
+  if (n > 1) {
+    host.innerHTML = libSelectionPanelHtml();
+    return;
+  }
+  const fp = n === 1 ? state.vpSelected.keys().next().value : null;
+  const item = libFindItem(fp);
+  if (!item) {
+    host.innerHTML = `<div class="lib-detail-empty"><span class="material-symbols-outlined">touch_app</span>Select a package to see its details</div>`;
+    return;
+  }
+  const key = libDetailsKey(item);
+  const details = LIB_DETAILS.cache.get(key);
+  if (!details) {
+    host.innerHTML =
+      libDetailHeaderHtml(item, null) +
+      `<section class="lib-ds"><div class="lib-skeleton" style="width:60%"></div>
+         <div class="lib-skeleton" style="width:90%;margin-top:8px"></div>
+         <div class="lib-skeleton" style="width:75%;margin-top:8px"></div></section>`;
+    libThumbWatch(host);
+    if (invoke && item.file_path) {
+      libLoadDetails(item).then(() => {
+        const current = state.vpSelected.size === 1 ? state.vpSelected.keys().next().value : null;
+        if (current === item.file_path) libRenderDetail();
+      });
+    }
+    return;
+  }
+  if (details.error) {
+    host.innerHTML =
+      libDetailHeaderHtml(item, null) +
+      `<section class="lib-ds"><p class="lib-desc">Could not read this package: ${escapeHtml(details.error)}</p></section>`;
+    libThumbWatch(host);
+    return;
+  }
+  const desc = details.description
+    ? `<section class="lib-ds lib-ds-tight"><p class="lib-desc">${escapeHtml(
+        details.description.length > 300 ? `${details.description.slice(0, 300)}…` : details.description,
+      )}</p></section>`
+    : "";
+  host.innerHTML =
+    libDetailHeaderHtml(item, details) +
+    desc +
+    libDepsSectionHtml(item, details) +
+    libUsedBySectionHtml(item, details) +
+    libContentSectionHtml(item, details);
+  libThumbWatch(host);
+}
+
+function libSelectionPanelHtml() {
+  const snaps = [...state.vpSelected.values()];
+  const bytes = snaps.reduce((sum, s) => sum + (Number(s.size_bytes) || 0), 0);
+  const disabled = snaps.filter((s) => s.disabled).length;
+  const broken = snaps.filter((s) => s.missing_dep_count > 0).length;
+  const rows = snaps
+    .slice(0, 200)
+    .map(
+      (s) => `<div class="lib-sel-row">
+        <span class="lib-type-chip" style="--dot:${libType(s).color}">${escapeHtml(libType(s).label)}</span>
+        <span class="lib-content-name">${escapeHtml(libTitle(s))}</span>
+        <span class="lib-dep-size">${escapeHtml(formatBytesLocal(s.size_bytes))}</span>
+      </div>`,
+    )
+    .join("");
+  return `
+    <section class="lib-ds">
+      <div class="lib-dh-title">${snaps.length.toLocaleString()} packages selected</div>
+      <p class="lib-aside" style="margin-top:4px">${escapeHtml(formatBytesLocal(bytes))}${
+        disabled ? ` · ${disabled} disabled` : ""
+      }${broken ? ` · ${broken} with missing dependencies` : ""}</p>
+      <div class="lib-actions">
+        <div class="lib-actions-row">
+          <button type="button" class="lib-btn lib-btn-destructive" data-lib-action="bulk-delete">
+            <span class="material-symbols-outlined">delete</span>Delete · ${escapeHtml(formatBytesLocal(bytes))}
+          </button>
+        </div>
+        <div class="lib-actions-row">
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-disable"><span class="material-symbols-outlined">power_settings_new</span>Disable</button>
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-enable"><span class="material-symbols-outlined">power</span>Enable</button>
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-favorite"><span class="material-symbols-outlined">star</span>Favorite</button>
+        </div>
+        <div class="lib-actions-row">
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-clean"><span class="material-symbols-outlined">content_copy</span>Clean Duplicates</button>
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-organize"><span class="material-symbols-outlined">create_new_folder</span>Organize</button>
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-export"><span class="material-symbols-outlined">image</span>Export images</button>
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-clear">Deselect</button>
+        </div>
+      </div>
+    </section>
+    <section class="lib-ds"><div class="lib-box lib-sel-list">${rows}</div></section>`;
+}
+
+// ---- Data loading ------------------------------------------------------------
+
+// Called on sidebar entry to the page. AddonPackages comes from the VaM
+// directory, so the first visit loads it straight away (no Scan click); later
+// visits re-query the backend's cached scan, which is cheap. Rescan re-walks.
 async function refreshVarPackagesView() {
-  if (state.varPackagesLoading || !invoke) return;
-  // Scoped to the active mode: the scanned folder's creators in folder mode,
-  // the DB's in database mode.
-  loadVarPackagesFilterOptions();
-  if (state.varPackagesMode === "database") {
-    await refreshVarPackagesFromDb();
+  libApplyPaneWidths();
+  if (!invoke) return;
+  if (state.vpHasListing) {
+    await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true });
+  } else if (vpResolveInputDir()) {
+    state.varPackagesScannedDeep = state.varPackagesDeepScan;
+    await refreshVarPackagesFromFolder({ forceRescan: true, reset: true });
   } else {
     renderVarPackages();
+    renderVarPackagesFilterBar();
   }
 }
 
-async function refreshVarPackagesFromFolder({ forceRescan = true } = {}) {
-  if (state.varPackagesLoading || !invoke) return;
-  const inputField = $("var-packages-input-dir");
-  const mainInput = $("input-dir");
-  if (inputField && !inputField.value && mainInput && mainInput.value) {
-    inputField.value = mainInput.value;
+// A new VaM directory is a different library: drop the listing so the page
+// reloads from the new AddonPackages (now if it is on screen, else on entry).
+function libOnVamDirChanged() {
+  state.vpHasListing = false;
+  state.varPackagesItems = [];
+  state.varPackagesTotal = 0;
+  state.varPackagesFacets = null;
+  state.vpMissing = null;
+  state.vpSelected.clear();
+  state.vpSelAnchor = null;
+  LIB_DETAILS.cache.clear();
+  const view = $("var-packages-view");
+  if (view && !view.classList.contains("hidden")) refreshVarPackagesView();
+  else renderVarPackages();
+}
+
+// Fetches a slice of the folder listing.
+//   forceRescan — re-walk the folders (otherwise served from the backend cache)
+//   append      — load the next chunk below what is shown (infinite scroll)
+//   keepLoaded  — refetch as many rows as are shown, so a refresh after a
+//                 delete/move doesn't throw the user back to the top
+//   reset       — clear the grid first (the Scan button)
+async function refreshVarPackagesFromFolder({
+  forceRescan = true,
+  append = false,
+  keepLoaded = false,
+  reset = false,
+} = {}) {
+  if (!invoke) return;
+  if (state.varPackagesLoading || state.varPackagesLoadingMore) {
+    // Never drop a request: a scan or filter change that arrives mid-flight is
+    // replayed once the current one settles (see the finally below).
+    if (append) return;
+    if (forceRescan) state.varPackagesDirty = true;
+    else state.varPackagesRequery = true;
+    return;
   }
-  const inputDir = inputField ? inputField.value.trim() : "";
+  const inputDir = vpResolveInputDir();
   if (!inputDir) {
     if (forceRescan) addLog(t("varPackagesPickFirst"));
+    renderVarPackages();
     return;
   }
 
-  state.varPackagesLoading = true;
-  if (forceRescan) {
+  const loaded = (state.varPackagesItems ?? []).length;
+  const offset = append ? loaded : 0;
+  const limit = append
+    ? VP_CHUNK
+    : keepLoaded
+      ? Math.min(VP_MAX_RELOAD, Math.max(VP_CHUNK, loaded))
+      : VP_CHUNK;
+
+  if (append) state.varPackagesLoadingMore = true;
+  else state.varPackagesLoading = true;
+  if (reset) {
     state.varPackagesItems = [];
     state.varPackagesTotal = 0;
-    state.varPackagesPage = 0;
+    state.varPackagesFacets = null;
   }
+  if (forceRescan) LIB_DETAILS.cache.clear();
   renderVarPackages();
   const scanBtn = $("var-packages-scan-button");
   if (scanBtn) scanBtn.disabled = true;
+
   let listed = false;
   try {
-    const offset = Math.max(0, state.varPackagesPage) * VAR_PACKAGES_PAGE_SIZE;
-    const search = String(state.varPackagesFilter ?? "").trim() || null;
     const page = await invoke("list_var_packages", {
       inputDir,
       additionalInputDirs: getAdditionalDirs("varPackages"),
       offset,
-      limit: VAR_PACKAGES_PAGE_SIZE,
-      search,
+      limit,
+      search: String(state.varPackagesFilter ?? "").trim() || null,
       filters: serializeVarPackageFilters(state.varPackagesFilters),
       ...varPackagesSortArgs(),
       forceRescan,
       // The committed depth, never the switch position — see varPackagesScannedDeep.
       deepScan: state.varPackagesScannedDeep !== false,
     });
-    state.varPackagesItems = Array.isArray(page?.items) ? page.items : [];
+    const items = Array.isArray(page?.items) ? page.items : [];
+    state.varPackagesItems = append ? [...(state.varPackagesItems ?? []), ...items] : items;
     state.varPackagesTotal = Math.max(0, Number(page?.total ?? 0));
-    const totalPages = Math.max(1, Math.ceil(state.varPackagesTotal / VAR_PACKAGES_PAGE_SIZE));
-    if (state.varPackagesPage >= totalPages) state.varPackagesPage = totalPages - 1;
-    if (state.varPackagesPage < 0) state.varPackagesPage = 0;
+    if (page?.facets) state.varPackagesFacets = page.facets;
+    state.vpHasListing = true;
     listed = true;
   } catch (error) {
-    state.varPackagesItems = [];
-    state.varPackagesTotal = 0;
+    if (!append) {
+      state.varPackagesItems = [];
+      state.varPackagesTotal = 0;
+      state.varPackagesFacets = null;
+    }
     addLog(t("varPackagesScanFailed", String(error)));
   } finally {
     state.varPackagesLoading = false;
+    state.varPackagesLoadingMore = false;
     if (scanBtn) scanBtn.disabled = false;
+
+    if (listed && !append) {
+      libAfterFreshListing({ keepScroll: keepLoaded });
+    }
+    renderVarPackagesFilterBar();
     renderVarPackages();
-    // The Creator menu is derived from the folder cache this call just left in
-    // place, so it has to be reloaded whenever that cache may have changed —
-    // NOT only on forceRescan. list_var_packages re-walks whenever its cache is
-    // empty or keyed to different roots/depth, so an ordinary paging, search or
-    // filter call can replace it too: on a fresh start that would leave the menu
-    // empty while the grid is full, and after editing the folder path it would
-    // leave the menu offering the previous folder's creators.
-    if (listed) {
+
+    if (listed && !append) {
+      // The Author suggestions come from the folder cache this call just left
+      // in place, so reload them whenever the scanned roots or depth changed.
       const optionsKey = [
         inputDir,
         getAdditionalDirs("varPackages").join("|"),
         state.varPackagesScannedDeep !== false ? "deep" : "top",
-      ].join(" ");
-      // The empty check also recovers from a failed options load, which would
-      // otherwise leave the key set and the menu permanently blank.
+      ].join(" ");
       const menuEmpty = (state.varPackagesFilterOptions?.creators?.length ?? 0) === 0;
       if (forceRescan || menuEmpty || state.varPackagesFilterOptionsKey !== optionsKey) {
         state.varPackagesFilterOptionsKey = optionsKey;
@@ -3325,23 +4078,695 @@ async function refreshVarPackagesFromFolder({ forceRescan = true } = {}) {
           addLog(t("varPackagesFilterOptionsFailed", String(err))),
         );
       }
+      if (libIsMissingView() || forceRescan) state.vpMissing = null;
+      if (libIsMissingView()) libLoadMissing();
     }
-    // A completed scan resolves any "click Scan to apply" state, and a scan that
-    // returned nothing removes the listing the hint was contrasting against.
     applyVarPackagesDepthUi();
-    // This function opens with `if (state.varPackagesLoading) return;` and then
-    // returns undefined silently, so a refresh requested while one was already
-    // running is simply lost — which would leave the grid rendering files that
-    // are now in the Recycle Bin. Callers that mutate the library set
-    // varPackagesDirty instead of fire-and-forgetting, and we re-dispatch once
-    // here. Clear the flag first so this can't loop.
+
     if (state.varPackagesDirty) {
       state.varPackagesDirty = false;
-      refreshVarPackagesFromFolder({ forceRescan: true }).catch((err) =>
+      state.varPackagesRequery = false;
+      refreshVarPackagesFromFolder({ forceRescan: true, keepLoaded: true }).catch((err) =>
+        addLog(`VAR Packages: ${String(err)}`),
+      );
+    } else if (state.varPackagesRequery) {
+      state.varPackagesRequery = false;
+      refreshVarPackagesFromFolder({ forceRescan: false }).catch((err) =>
         addLog(`VAR Packages: ${String(err)}`),
       );
     }
   }
+}
+
+// After a fresh listing: refresh selection snapshots, follow a pending reveal,
+// and — like Backstage — keep exactly one package in the details panel.
+function libAfterFreshListing({ keepScroll }) {
+  const items = state.varPackagesItems ?? [];
+  const byPath = new Map(items.map((it) => [it.file_path, it]));
+  for (const [fp, snap] of state.vpSelected) {
+    const fresh = byPath.get(fp);
+    if (fresh) state.vpSelected.set(fp, vpSnapshotItem(fresh));
+    else if (snap && state.vpSelected.size === 1) state.vpSelected.delete(fp);
+  }
+  if (state.vpRevealPath && byPath.has(state.vpRevealPath)) {
+    vpSelectOnly(byPath.get(state.vpRevealPath), { render: false });
+    const target = state.vpRevealPath;
+    state.vpRevealPath = null;
+    requestAnimationFrame(() => libScrollIntoView(target));
+  } else if (state.vpSelected.size === 0 && items.length) {
+    vpSelectOnly(items[0], { render: false });
+  }
+  if (!keepScroll) {
+    const scroll = $("lib-scroll");
+    if (scroll) scroll.scrollTop = 0;
+  }
+}
+
+// Every library mutation (delete, move, organize, collect) refreshes through
+// here: the folder listing if one is on screen, and the Database page's
+// package table if that is what the user is looking at.
+async function vpRefreshAfterMutation() {
+  LIB_DETAILS.cache.clear();
+  if (state.vpHasListing) {
+    if (state.varPackagesLoading) {
+      state.varPackagesDirty = true;
+    } else {
+      await refreshVarPackagesFromFolder({ forceRescan: true, keepLoaded: true });
+    }
+  }
+  if (typeof dbPkgsRefreshIfVisible === "function") dbPkgsRefreshIfVisible();
+}
+
+// ---- Enable / disable --------------------------------------------------------
+
+async function libSetDisabled(snaps, disabled) {
+  if (!invoke) return;
+  const targets = snaps.filter((s) => s?.file_path && Boolean(s.disabled) !== disabled);
+  if (!targets.length) return;
+  let failed = 0;
+  for (const s of targets) {
+    try {
+      await invoke("set_var_package_disabled", { filePath: s.file_path, disabled });
+      s.disabled = disabled;
+      const live = (state.varPackagesItems ?? []).find((it) => it.file_path === s.file_path);
+      if (live) live.disabled = disabled;
+      const sel = state.vpSelected.get(s.file_path);
+      if (sel) sel.disabled = disabled;
+    } catch (err) {
+      failed += 1;
+      addLog(`${disabled ? "Disable" : "Enable"} ${s.file_name ?? s.file_path}: ${String(err)}`);
+    }
+  }
+  const done = targets.length - failed;
+  if (done) {
+    showToast(
+      `${disabled ? "Disabled" : "Enabled"} ${done} package${done === 1 ? "" : "s"}`,
+      failed ? "error" : "success",
+    );
+  } else if (failed) {
+    showToast(`Could not ${disabled ? "disable" : "enable"} the package — see Console`, "error");
+  }
+  // The backend patched its cache, so a requery just refreshes the facets and
+  // drops rows that no longer match an Enabled filter.
+  await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true });
+}
+
+// ---- Selection ---------------------------------------------------------------
+
+function vpSelectOnly(item, { render = true } = {}) {
+  if (!vpSelectableItem(item)) return;
+  state.vpSelected.clear();
+  state.vpSelected.set(item.file_path, vpSnapshotItem(item));
+  state.vpSelAnchor = item.file_path;
+  state.vpLead = item.file_path;
+  if (render) vpSyncSelectionUi();
+}
+
+function libItemAt(index) {
+  const items = state.varPackagesItems ?? [];
+  return items[Math.max(0, Math.min(items.length - 1, index))] ?? null;
+}
+
+function libLeadIndex() {
+  const items = state.varPackagesItems ?? [];
+  const lead = state.vpLead ?? state.vpSelAnchor;
+  const idx = items.findIndex((it) => it.file_path === lead);
+  return idx;
+}
+
+function libColumns() {
+  if (state.vpView === "table") return 1;
+  const grid = $("var-packages-grid");
+  return Math.max(1, Number(grid?.style.getPropertyValue("--lib-cols")) || 1);
+}
+
+// Grid-aware keyboard navigation, after Backstage's: arrows/Home/End move the
+// selection, Shift extends it, Ctrl/Cmd+A selects every match, Esc collapses a
+// multi-selection, Enter opens VAR Details, Delete recycles.
+function libOnKeyDown(event) {
+  const view = $("var-packages-view");
+  if (!view || view.classList.contains("hidden") || libIsMissingView()) return;
+  const tag = event.target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable) return;
+  if (document.querySelector(".modal-backdrop:not(.hidden), dialog[open]")) return;
+  const items = state.varPackagesItems ?? [];
+  if (!items.length) return;
+  const mod = event.ctrlKey || event.metaKey;
+
+  if (mod && (event.key === "a" || event.key === "A")) {
+    event.preventDefault();
+    vpSelectAll().catch((e) => addLog(`Select all: ${String(e)}`));
+    return;
+  }
+  if (event.key === "Escape") {
+    if (state.vpSelected.size > 1) {
+      const lead = libFindItem(state.vpLead);
+      if (lead) vpSelectOnly(lead);
+      else vpClearSelection();
+    }
+    return;
+  }
+  if (event.key === "Enter") {
+    const item = libFindItem(state.vpLead ?? state.vpSelAnchor);
+    if (item) openVarDetailsView(item, "folder");
+    return;
+  }
+  if (event.key === "Delete") {
+    event.preventDefault();
+    if (state.vpSelected.size > 1) vpBulkDelete().catch((e) => addLog(`Bulk delete: ${String(e)}`));
+    else if (state.vpSelected.size === 1) {
+      vpDeleteOne(state.vpSelected.keys().next().value, null).catch((e) => addLog(`VAR Packages: ${String(e)}`));
+    }
+    return;
+  }
+
+  const cols = libColumns();
+  const deltas = {
+    ArrowLeft: -1,
+    ArrowRight: 1,
+    ArrowUp: -cols,
+    ArrowDown: cols,
+  };
+  let target = null;
+  const current = libLeadIndex();
+  if (event.key in deltas) {
+    if (state.vpView === "table" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) return;
+    target = current < 0 ? 0 : current + deltas[event.key];
+    if (target < 0 || target >= items.length) {
+      // At the bottom edge of what is loaded: pull the next chunk.
+      if (target >= items.length) libMaybeLoadMore(true);
+      return;
+    }
+  } else if (event.key === "Home") {
+    target = 0;
+  } else if (event.key === "End") {
+    target = items.length - 1;
+  } else if (event.key === " ") {
+    const lead = libFindItem(state.vpLead);
+    if (lead) {
+      event.preventDefault();
+      vpToggleSelect(lead);
+    }
+    return;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  const item = libItemAt(target);
+  if (!item) return;
+  if (event.shiftKey) {
+    vpSelectRangeTo(item);
+    state.vpLead = item.file_path;
+    vpSyncSelectionUi();
+  } else if (mod) {
+    state.vpLead = item.file_path;
+    vpSyncSelectionUi();
+  } else {
+    vpSelectOnly(item);
+  }
+  libScrollIntoView(item.file_path);
+}
+
+function libMaybeLoadMore(force = false) {
+  if (libIsMissingView()) return;
+  const scroll = $("lib-scroll");
+  const loaded = (state.varPackagesItems ?? []).length;
+  const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
+  if (!scroll || loaded >= total || state.varPackagesLoading || state.varPackagesLoadingMore) return;
+  const nearBottom = scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 600;
+  if (force || nearBottom) {
+    refreshVarPackagesFromFolder({ forceRescan: false, append: true }).catch((e) =>
+      addLog(`VAR Packages: ${String(e)}`),
+    );
+  }
+}
+
+// ---- Wiring ------------------------------------------------------------------
+
+function libSelectedSnaps() {
+  return [...state.vpSelected.values()];
+}
+
+function libCurrentItem() {
+  if (state.vpSelected.size !== 1) return null;
+  return libFindItem(state.vpSelected.keys().next().value);
+}
+
+function libRunAction(action, trigger) {
+  const item = libCurrentItem();
+  switch (action) {
+    case "scan":
+      $("var-packages-scan-button")?.click();
+      break;
+    case "view-missing":
+      setVarPackagesFilter("status", "missing");
+      break;
+    case "find-missing":
+      libFindMissing(
+        (state.vpMissing?.items ?? []).filter((m) => m.status === "missing").map((m) => m.id),
+      );
+      break;
+    case "refresh-missing":
+      libLoadMissing();
+      break;
+    case "clean-old":
+      vpStartPlan("clean_duplicates").catch((e) => addLog(`VAR Packages: ${String(e)}`));
+      break;
+    case "open-details":
+    case "browse-files":
+      if (item) openVarDetailsView(item, "folder");
+      break;
+    case "delete":
+      if (item) vpDeleteOne(item.file_path, trigger).catch((e) => addLog(`VAR Packages: ${String(e)}`));
+      break;
+    case "toggle-disabled":
+      if (item) libSetDisabled([libFindItem(item.file_path) ?? item], !item.disabled);
+      break;
+    case "explorer":
+      if (item && invoke) {
+        invoke("show_in_explorer", { path: item.file_path }).catch((e) => addLog(`VAR Packages: ${String(e)}`));
+      }
+      break;
+    case "images":
+      if (item) vpImagesOpen(item.file_path);
+      break;
+    case "find-deps": {
+      const details = item ? LIB_DETAILS.cache.get(libDetailsKey(item)) : null;
+      libFindMissing((details?.dependencies ?? []).filter((d) => d.status === "missing").map((d) => d.id));
+      break;
+    }
+    case "bulk-delete":
+      vpBulkDelete().catch((e) => addLog(`Bulk delete: ${String(e)}`));
+      break;
+    case "bulk-disable":
+      libSetDisabled(libSelectedSnaps(), true);
+      break;
+    case "bulk-enable":
+      libSetDisabled(libSelectedSnaps(), false);
+      break;
+    case "bulk-favorite":
+      (async () => {
+        for (const s of libSelectedSnaps()) {
+          if (s.package_id && !_favoritePackages.has(s.package_id)) await togglePackageFavorite(s.package_id);
+        }
+      })().catch((e) => addLog(`Favorites: ${String(e)}`));
+      break;
+    case "bulk-clean":
+      vpBulkClean().catch((e) => addLog(`Clean Duplicates: ${String(e)}`));
+      break;
+    case "bulk-organize":
+      vpBulkOrganize().catch((e) => addLog(`Bulk organize: ${String(e)}`));
+      break;
+    case "bulk-export":
+      vpBulkExportImages().catch((e) => addLog(`Bulk export: ${String(e)}`));
+      break;
+    case "bulk-clear": {
+      const lead = libFindItem(state.vpLead);
+      if (lead) vpSelectOnly(lead);
+      else vpClearSelection();
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function libSelectAllItem() {
+  const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
+  return {
+    label: `Select all (${total.toLocaleString()})`,
+    action: () => vpSelectAll(),
+  };
+}
+
+// Right-click on empty space in the grid. The folder tools (Clean Duplicates,
+// Organize, Export) live on the bulk toolbar and the selection panel; Find
+// Dependencies (paste text) is in the app's top bar.
+function libBackgroundMenu(event) {
+  const hasItems = (state.varPackagesItems ?? []).length > 0 && !libIsMissingView();
+  const items = [];
+  if (hasItems) {
+    items.push(libSelectAllItem());
+    if (state.vpSelected.size > 1) items.push({ label: "Deselect", action: () => libRunAction("bulk-clear") });
+    items.push({ separator: true });
+  }
+  items.push({ label: "Rescan AddonPackages", action: () => $("var-packages-scan-button")?.click() });
+  showContextMenu(event.clientX, event.clientY, items);
+}
+
+function libContextMenu(event, item) {
+  const filePath = item.file_path;
+  const packageId = item.package_id;
+  const fav = _favoritePackages.has(packageId);
+  const multi = state.vpSelected.size > 1 && state.vpSelected.has(filePath);
+  const items = multi
+    ? [
+        { label: `Disable ${state.vpSelected.size} packages`, action: () => libRunAction("bulk-disable") },
+        { label: `Enable ${state.vpSelected.size} packages`, action: () => libRunAction("bulk-enable") },
+        { label: "Add to favorites", action: () => libRunAction("bulk-favorite") },
+        { separator: true },
+        { label: "Clean Duplicates of selected…", action: () => libRunAction("bulk-clean") },
+        { label: "Organize selected by Creator…", action: () => libRunAction("bulk-organize") },
+        { label: "Export selected Scene Images", action: () => libRunAction("bulk-export") },
+        { separator: true },
+        libSelectAllItem(),
+        { label: "Deselect", action: () => libRunAction("bulk-clear") },
+        { separator: true },
+        {
+          label: `Delete ${state.vpSelected.size} packages (Recycle Bin)`,
+          danger: true,
+          action: () => libRunAction("bulk-delete"),
+        },
+      ]
+    : [
+        { label: "Open Details", action: () => openVarDetailsView(item, "folder") },
+        {
+          label: "Show in Explorer",
+          action: () =>
+            invoke("show_in_explorer", { path: filePath }).catch((e) => addLog(`VAR Packages: ${String(e)}`)),
+        },
+        {
+          label: fav ? "Remove from favorites" : "Add to favorites",
+          action: () => togglePackageFavorite(packageId),
+        },
+        {
+          label: item.disabled ? "Enable" : "Disable",
+          action: () => libSetDisabled([item], !item.disabled),
+        },
+        { separator: true },
+        {
+          label: "Download Dependencies…",
+          action: () =>
+            depStartScan({ filePath, packageId }).catch((e) => addLog(`Download Dependencies: ${String(e)}`)),
+        },
+        { label: "Find Dependencies Locally…", action: () => dcOpen({ filePath, packageId }) },
+        { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
+        {
+          label: "Move to creator folder",
+          action: () =>
+            vpMoveToCreatorFolder(filePath).catch((e) => addLog(`Move to creator folder: ${String(e)}`)),
+        },
+        {
+          label: "Send to",
+          submenu: [
+            { label: "Clean VARs", action: () => sendVarToTargetPage("db-find", filePath) },
+            { label: "Missing Resources", action: () => sendVarToTargetPage("missing-resources", filePath) },
+            { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", filePath) },
+          ],
+        },
+        { separator: true },
+        { label: t("varPackagesImagesOpen"), action: () => vpImagesOpen(filePath) },
+        { separator: true },
+        libSelectAllItem(),
+        { separator: true },
+        {
+          label: "Delete (Recycle Bin)",
+          danger: true,
+          action: () => vpDeleteOne(filePath, null).catch((e) => addLog(`VAR Packages: ${String(e)}`)),
+        },
+      ];
+  showContextMenu(event.clientX, event.clientY, items);
+}
+
+// Clicks shared by the grid, the table, the Missing table and the details
+// panel: author links, package reveals, actions, expanders.
+function libHandleSharedClick(event) {
+  const target = event.target;
+  const author = target.closest?.("[data-lib-author]");
+  if (author) {
+    event.stopPropagation();
+    setVarPackagesFilter("creator", author.getAttribute("data-lib-author"));
+    return true;
+  }
+  const reveal = target.closest?.("[data-lib-reveal]");
+  if (reveal) {
+    const fp = reveal.getAttribute("data-lib-reveal");
+    if (fp) libRevealPackage(fp, reveal.getAttribute("data-lib-reveal-id"));
+    return true;
+  }
+  const expand = target.closest?.("[data-lib-expand]");
+  if (expand) {
+    const key = expand.getAttribute("data-lib-expand");
+    if (LIB_DETAILS.expanded.has(key)) LIB_DETAILS.expanded.delete(key);
+    else LIB_DETAILS.expanded.add(key);
+    libRenderDetail();
+    return true;
+  }
+  const cat = target.closest?.("[data-lib-cat]");
+  if (cat) {
+    const key = LIB_STORE.category + cat.getAttribute("data-lib-cat");
+    libStoreSet(key, libStoreGet(key) === "0" ? "1" : "0");
+    libRenderDetail();
+    return true;
+  }
+  const url = target.closest?.("[data-lib-url]");
+  if (url) {
+    const href = url.getAttribute("data-lib-url");
+    if (href && invoke) invoke("open_url", { url: href }).catch((e) => addLog(`Open link: ${String(e)}`));
+    return true;
+  }
+  const action = target.closest?.("[data-lib-action]");
+  if (action) {
+    libRunAction(action.getAttribute("data-lib-action"), action);
+    return true;
+  }
+  return false;
+}
+
+function setupLibraryView() {
+  const clamp = (v, lo, hi, d) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.min(hi, Math.max(lo, n)) : d;
+  };
+  const storedView = libStoreGet(LIB_STORE.view, "cards");
+  state.vpView = ["compact", "cards", "table"].includes(storedView) ? storedView : "cards";
+  state.vpCardWidth = clamp(libStoreGet(LIB_STORE.cardWidth), 100, 500, 220);
+  state.vpDetailWidth = clamp(libStoreGet(LIB_STORE.detailWidth), 260, 500, 340);
+  libApplyPaneWidths();
+  setupLibResizeHandles();
+
+  // --- Folder source --------------------------------------------------------
+  // The folder is AddonPackages under Settings → VaM directory (applyVamDir);
+  // only the extra folders and the scan depth are chosen here.
+  $("var-packages-scan-button")?.addEventListener("click", () => {
+    if (!vpResolveInputDir()) {
+      openVamDirSettings();
+      return;
+    }
+    // The only place the depth switch takes effect. Everything else (scrolling,
+    // filters, post-delete refreshes) keeps whatever depth this listing used.
+    state.varPackagesScannedDeep = state.varPackagesDeepScan;
+    // A rescan is the commit point for root/depth changes; old selected paths
+    // may fall out of scope.
+    state.vpSelected.clear();
+    state.vpSelAnchor = null;
+    refreshVarPackagesFromFolder({ forceRescan: true, reset: true });
+  });
+  $("var-packages-depth-deep")?.addEventListener("click", () => setVarPackagesDeepScan(true));
+  $("var-packages-depth-normal")?.addEventListener("click", () => setVarPackagesDeepScan(false));
+  applyVarPackagesDepthUi();
+
+  // --- Search ---------------------------------------------------------------
+  const search = $("var-packages-filter");
+  let searchTimer = null;
+  search?.addEventListener("input", () => {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const next = search.value;
+      if (state.varPackagesFilter === next) return;
+      state.varPackagesFilter = next;
+      renderVarPackagesFilterBar();
+      refreshVarPackagesFromFolder({ forceRescan: false });
+    }, 180);
+  });
+  search?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && search.value) {
+      search.value = "";
+      search.dispatchEvent(new Event("input"));
+    }
+  });
+  $("lib-search-clear")?.addEventListener("click", () => {
+    if (!search) return;
+    search.value = "";
+    search.dispatchEvent(new Event("input"));
+    search.focus();
+  });
+
+  // --- Filter bar dropdowns ----------------------------------------------------
+  document.querySelectorAll("[data-lib-dd-trigger]").forEach((trigger) => {
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      libToggleDropdown(trigger.getAttribute("data-lib-dd-trigger"));
+    });
+  });
+  // Clicks inside a menu stay in it; anywhere else closes whatever is open.
+  document.querySelectorAll("[data-lib-dd-menu]").forEach((menu) => {
+    menu.addEventListener("click", (event) => event.stopPropagation());
+  });
+  document.addEventListener("click", () => libCloseDropdowns());
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.querySelector("[data-lib-dd-menu]:not(.hidden)")) {
+      libCloseDropdowns();
+    }
+  });
+
+  const listField = {
+    "lib-status-list": "status",
+    "lib-type-list": "pkgType",
+    "lib-enabled-list": "enabled",
+    "lib-size-list": "sizeBucket",
+    "lib-scene-list": "scene",
+  };
+  for (const [id, field] of Object.entries(listField)) {
+    $(id)?.addEventListener("click", (event) => {
+      const row = event.target.closest("[data-lib-value]");
+      if (!row) return;
+      let value = row.getAttribute("data-lib-value") || null;
+      // Clicking the sole selected type again clears it, as in Backstage.
+      if (field === "pkgType" && value && state.varPackagesFilters?.pkgType === value) value = null;
+      libCloseDropdowns();
+      setVarPackagesFilter(field, value);
+    });
+  }
+  $("lib-sort-list")?.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-lib-value]");
+    if (!row) return;
+    libCloseDropdowns();
+    setVarPackagesSort(row.getAttribute("data-lib-value"));
+  });
+  $("lib-sort-dir")?.addEventListener("click", () =>
+    setVarPackagesSort(state.varPackagesSort?.key ?? "type", { flip: true }),
+  );
+
+  // --- Author ---------------------------------------------------------------
+  const authorInput = $("lib-author-input");
+  authorInput?.addEventListener("input", () => {
+    LIB_AC.active = -1;
+    libRenderAuthorPopup();
+  });
+  authorInput?.addEventListener("keydown", (event) => {
+    const n = LIB_AC.matches.length;
+    if (event.key === "ArrowDown" && n) {
+      event.preventDefault();
+      LIB_AC.active = (LIB_AC.active + 1) % n;
+      libRenderAuthorPopup();
+    } else if (event.key === "ArrowUp" && n) {
+      event.preventDefault();
+      LIB_AC.active = (LIB_AC.active - 1 + n) % n;
+      libRenderAuthorPopup();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const exact = (state.varPackagesFilterOptions?.creators ?? []).find(
+        (c) => c.toLowerCase() === authorInput.value.trim().toLowerCase(),
+      );
+      const pick = LIB_AC.matches[LIB_AC.active] ?? exact ?? LIB_AC.matches[0];
+      if (pick) libPickAuthor(pick);
+    }
+  });
+  $("lib-author-popup")?.addEventListener("click", (event) => {
+    const opt = event.target.closest("[data-lib-author-pick]");
+    if (opt) libPickAuthor(opt.getAttribute("data-lib-author-pick"));
+  });
+  $("lib-author-chips")?.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-lib-clear-author]")) return;
+    libCloseDropdowns();
+    setVarPackagesFilter("creator", null);
+  });
+
+  // --- Toolbar ----------------------------------------------------------------
+  $("var-packages-filter-clear")?.addEventListener("click", clearVarPackagesFilters);
+  document.querySelectorAll("[data-lib-view]").forEach((btn) => {
+    btn.addEventListener("click", () => libSetView(btn.getAttribute("data-lib-view")));
+  });
+  $("lib-size-slider")?.addEventListener("input", (e) => libSetColumns(e.target.value));
+  $("lib-select-hint-close")?.addEventListener("click", () => {
+    libStoreSet(LIB_STORE.hint, "1");
+    libRenderToolbar();
+  });
+  $("lib-toolbar-actions")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-lib-action]");
+    if (btn && !btn.disabled) libRunAction(btn.getAttribute("data-lib-action"), btn);
+  });
+  $("lib-bulk-disable")?.addEventListener("click", () => libRunAction("bulk-disable"));
+  $("lib-bulk-clean")?.addEventListener("click", () => libRunAction("bulk-clean"));
+  $("lib-bulk-enable")?.addEventListener("click", () => libRunAction("bulk-enable"));
+  $("lib-bulk-close")?.addEventListener("click", () => libRunAction("bulk-clear"));
+
+  // --- Grid / table -----------------------------------------------------------
+  const scroll = $("lib-scroll");
+  const hostItem = (target) => {
+    const host = target.closest?.("[data-file-path][data-idx]");
+    if (!host) return null;
+    const fp = host.getAttribute("data-file-path");
+    return (state.varPackagesItems ?? []).find((it) => it.file_path === fp) ?? null;
+  };
+  scroll?.addEventListener("click", (event) => {
+    // Favorite / checkbox / delete / images are handled by their own delegated
+    // listeners (setupVarPackagesMaintenance, setupVarPackagesSelection).
+    if (event.target.closest("[data-vp-fav],[data-vp-select],[data-vp-delete],[data-vp-images]")) return;
+    if (libHandleSharedClick(event)) return;
+    const item = hostItem(event.target);
+    if (!item) return;
+    const mod = event.ctrlKey || event.metaKey;
+    state.vpLead = item.file_path;
+    if (event.shiftKey) {
+      // Shift replaces the selection with the range; Ctrl+Shift adds to it.
+      // The anchor survives the clear, so the range starts where it should.
+      if (!mod) state.vpSelected.clear();
+      vpSelectRangeTo(item);
+    } else if (mod) {
+      vpToggleSelect(item);
+    } else {
+      vpSelectOnly(item);
+    }
+  });
+  scroll?.addEventListener("dblclick", (event) => {
+    if (event.target.closest("button, input, [data-lib-author]")) return;
+    const item = hostItem(event.target);
+    if (item) openVarDetailsView(item, "folder");
+  });
+  scroll?.addEventListener("contextmenu", (event) => {
+    const item = hostItem(event.target);
+    if (!item) {
+      if (event.target.closest("a, input, textarea")) return;
+      event.preventDefault();
+      libBackgroundMenu(event);
+      return;
+    }
+    event.preventDefault();
+    if (!state.vpSelected.has(item.file_path)) vpSelectOnly(item);
+    libContextMenu(event, item);
+  });
+  scroll?.addEventListener("mousedown", (event) => {
+    // Shift-click would otherwise smear a text selection across cards.
+    if (event.shiftKey) event.preventDefault();
+  });
+  scroll?.addEventListener(
+    "scroll",
+    () => {
+      libMaybeLoadMore();
+      $("lib-scroll-top")?.classList.toggle("hidden", scroll.scrollTop <= scroll.clientHeight);
+    },
+    { passive: true },
+  );
+  $("lib-scroll-top")?.addEventListener("click", () => scroll?.scrollTo({ top: 0, behavior: "smooth" }));
+  if (scroll && typeof ResizeObserver === "function") {
+    new ResizeObserver(() => libApplyLayout()).observe(scroll);
+  }
+
+  // --- Details panel ------------------------------------------------------------
+  $("lib-detail")?.addEventListener("click", (event) => {
+    const fav = event.target.closest("[data-vp-fav]");
+    if (fav) {
+      togglePackageFavorite(fav.getAttribute("data-vp-fav"));
+      return;
+    }
+    libHandleSharedClick(event);
+  });
+
+  document.addEventListener("keydown", libOnKeyDown);
+  renderVarPackagesFilterBar();
+  renderVarPackages();
 }
 
 // ===========================================================================
@@ -3413,8 +4838,6 @@ function vpRoots() {
 function vpBusy(busy) {
   VP_PLAN.running = busy;
   for (const id of [
-    "var-packages-clean-dupes",
-    "var-packages-organize",
     "var-packages-scan-button",
     "var-packages-pick-input",
   ]) {
@@ -4315,7 +5738,7 @@ function vpDdepRefreshEffective() {
 /// this one) on demand. The Recycle Bin is what makes a wrong click recoverable.
 ///
 /// Resolves the paths actually recycled (empty when cancelled or failed). The
-/// grid callers ignore it; the Scan Dependencies modal needs it to know which
+/// grid callers ignore it; the Download Dependencies modal needs it to know which
 /// rows to flip, and can't re-derive the list because the modal may also recycle
 /// the dependencies the user ticked.
 async function vpDeleteOne(filePath, trigger) {
@@ -4334,11 +5757,7 @@ async function vpDeleteOne(filePath, trigger) {
       // A deleted file can't stay multi-selected.
       vpPruneSelection([filePath]);
       // The backend already dropped its folder cache; this repopulates the grid.
-      if (state.varPackagesLoading) {
-        state.varPackagesDirty = true;
-      } else {
-        await refreshVarPackagesFromFolder({ forceRescan: true });
-      }
+      await vpRefreshAfterMutation();
       return [filePath];
     } catch (err) {
       // Re-enable so a failure (locked file, no Recycle Bin on the volume) can be
@@ -4375,11 +5794,7 @@ async function vpDeleteOne(filePath, trigger) {
   }
   toast.dismiss(6000);
   vpPruneSelection(removed.map((r) => r.file_path));
-  if (state.varPackagesLoading) {
-    state.varPackagesDirty = true;
-  } else {
-    await refreshVarPackagesFromFolder({ forceRescan: true });
-  }
+  await vpRefreshAfterMutation();
   return removed.map((r) => r.file_path);
 }
 
@@ -4400,11 +5815,7 @@ async function vpMoveToCreatorFolder(filePath) {
     showToast(t("varPackagesMoveDone", destName), "success");
     addLog(`Moved ${fileName} → ${dest}`);
     vpPruneSelection([filePath]);
-    if (state.varPackagesLoading) {
-      state.varPackagesDirty = true;
-    } else {
-      await refreshVarPackagesFromFolder({ forceRescan: true });
-    }
+    await vpRefreshAfterMutation();
   } catch (err) {
     showToast(`Move failed: ${String(err)}`, "error");
     addLog(`Move to creator folder (${fileName}): ${String(err)}`);
@@ -4439,86 +5850,6 @@ async function exportOneSceneImage(filePath, packageId) {
     }
   } catch (err) {
     showToast(`Export failed: ${String(err)}`, "error");
-  }
-}
-
-/// Batch over the scanned folder(s), at the page's committed scan depth. A
-/// sticky toast shows live progress and then turns into the result summary, so
-/// there's a clear "working…" → "done" signal.
-async function exportAllSceneImages() {
-  if (!invoke) return;
-  const { inputDir, additionalInputDirs } = vpRoots();
-  if (!inputDir) {
-    const field = $("var-packages-input-dir");
-    field?.focus();
-    showToast("Pick a VAR folder first, then Scan Directory.", "info");
-    return;
-  }
-
-  const btn = $("var-packages-export-scenes");
-  if (btn) btn.disabled = true;
-  const toast = showToast("Exporting scene images…", "info", 0); // sticky until done
-
-  let taskId = null;
-  let result = null;
-  let failed = false;
-  try {
-    const handle = await invoke("start_export_scene_images_task", {
-      inputDir,
-      additionalInputDirs,
-      // The committed depth, so the batch matches the listed set.
-      deepScan: state.varPackagesScannedDeep !== false,
-      overwrite: false,
-    });
-    taskId = handle?.id ?? null;
-    if (taskId == null) throw new Error("task did not start");
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 300));
-      const payload = await invoke("get_task_progress", { taskId });
-      if (!payload) break;
-      const pct = Math.round(Math.max(0, Math.min(1, Number(payload.progress ?? 0))) * 100);
-      // Backend message is "Exporting images (x/y)".
-      toast.update(`${payload.message || "Exporting scene images…"} · ${pct}%`);
-      if (payload.error) throw new Error(String(payload.error));
-      if (payload.done) {
-        result = payload.export_scenes_result ?? null;
-        break;
-      }
-    }
-  } catch (err) {
-    failed = true;
-    toast.update(`Scene image export failed: ${String(err)}`, "error");
-    toast.dismiss(5000);
-  } finally {
-    if (taskId != null) {
-      try {
-        await invoke("clear_task", { taskId });
-      } catch (_e) {
-        /* task may already be gone */
-      }
-    }
-    if (btn) btn.disabled = false;
-  }
-
-  if (result) {
-    const parts = [`${result.exported} exported`];
-    if (result.skipped_exists) parts.push(`${result.skipped_exists} already existed`);
-    if (result.no_image) parts.push(`${result.no_image} had no scene image`);
-    if (result.failed) parts.push(`${result.failed} failed`);
-    const summary = `Scene images ${result.was_cancelled ? "cancelled" : "done"} — ${parts.join(
-      ", ",
-    )} (of ${result.scanned}).`;
-    // Green when everything usable was written; yellow if some had no image or
-    // failed; the per-file failures still go to the log for the record.
-    const kind = result.failed ? "error" : result.no_image ? "info" : "success";
-    toast.update(summary, kind);
-    toast.dismiss(6000);
-    if (result.notes && result.notes.length) {
-      result.notes.forEach((n) => addLog(`Export Scene Images: ${n}`));
-    }
-  } else if (!failed) {
-    // No result and no error (e.g. cancelled task cleared) — clear the sticky toast.
-    toast.dismiss(0);
   }
 }
 
@@ -4606,21 +5937,14 @@ async function vpBulkDelete() {
   }
   toast.dismiss(6000);
 
-  if (state.varPackagesMode === "database") {
-    await refreshVarPackagesFromDb();
-  } else if (state.varPackagesLoading) {
-    state.varPackagesDirty = true;
-  } else {
-    await refreshVarPackagesFromFolder({ forceRescan: true });
-  }
-  // In DB mode the refresh above re-queries the DB, which now shows the rows
-  // as Missing — the stale banner is a folder-mode concern.
+  await vpRefreshAfterMutation();
+  // Deleted rows that were indexed leave stale paths in the database.
   const stale = removed.filter((r) => r.indexed).length;
-  if (stale && state.varPackagesMode !== "database") showVarPackagesDbStale(stale);
+  if (stale) showVarPackagesDbStale(stale);
 }
 
 /// Exports the preview image of every selected package (skips existing
-/// sidecars). No confirm — non-destructive, matching exportAllSceneImages.
+/// sidecars). No confirm — non-destructive.
 async function vpBulkExportImages() {
   if (!invoke || state.vpBulkRunning || state.vpSelected.size === 0) return;
   const targets = [...state.vpSelected.values()];
@@ -4671,9 +5995,19 @@ async function vpBulkExportImages() {
 
 /// Organize only the selected packages: runs the normal whole-folder plan,
 /// with only the rows matching the selection pre-ticked for review.
+// Clean Duplicates over the selection: the plan still covers every folder,
+// but only the selected packages' rows start ticked (same as bulk Organize).
+async function vpBulkClean() {
+  if (state.vpBulkRunning || state.vpSelected.size === 0) return;
+  const limitPaths = new Set([...state.vpSelected.keys()].map((p) => p.toLowerCase()));
+  await vpStartPlan("clean_duplicates", {
+    limitPaths,
+    deepOverride: state.varPackagesScannedDeep !== false,
+  });
+}
+
 async function vpBulkOrganize() {
   if (state.vpBulkRunning || state.vpSelected.size === 0) return;
-  if (state.varPackagesMode === "database") return; // organize is folder-mode only
   const limitPaths = new Set([...state.vpSelected.keys()].map((p) => p.toLowerCase()));
   await vpStartPlan("organize_by_creator", {
     limitPaths,
@@ -4692,20 +6026,13 @@ async function vpBulkOrganize() {
 // =====================================================================
 
 function vpSelectableItem(item) {
-  if (!item?.file_path) return false;
-  // DB-mode "Missing" rows have no file on disk — nothing bulk-actionable.
-  if (state.varPackagesMode === "database" && !item.indexed) return false;
-  return true;
+  return Boolean(item?.file_path);
 }
 
+// A full copy: the details and selection panels describe selected packages
+// even after they scroll out of the loaded rows.
 function vpSnapshotItem(item) {
-  return {
-    file_path: item.file_path,
-    file_name: item.file_name,
-    package_id: item.package_id,
-    size_bytes: Number(item.size_bytes) || 0,
-    indexed: Boolean(item.indexed),
-  };
+  return { ...item, size_bytes: Number(item.size_bytes) || 0, indexed: Boolean(item.indexed) };
 }
 
 function vpToggleSelect(item) {
@@ -4754,36 +6081,24 @@ async function vpFetchAllMatchingItems() {
   if (total === 0) return [];
   const search = String(state.varPackagesFilter ?? "").trim() || null;
   const filters = serializeVarPackageFilters(state.varPackagesFilters);
-  const isDb = state.varPackagesMode === "database";
   const PAGE = 1000;
   const out = [];
+  const { inputDir, additionalInputDirs } = vpRoots();
+  if (!inputDir) return out;
   for (let offset = 0; offset < total; offset += PAGE) {
-    let page;
-    if (isDb) {
-      // Same sort as the visible grid: this walks the matching set in pages, so
-      // a different ordering here would page over a differently-ordered list.
-      page = await invoke("list_var_packages_from_db", {
-        offset,
-        limit: PAGE,
-        search,
-        filters,
-        ...varPackagesSortArgs(),
-      });
-    } else {
-      const { inputDir, additionalInputDirs } = vpRoots();
-      if (!inputDir) break;
-      page = await invoke("list_var_packages", {
-        inputDir,
-        additionalInputDirs,
-        offset,
-        limit: PAGE,
-        search,
-        filters,
-        ...varPackagesSortArgs(),
-        forceRescan: false,
-        deepScan: state.varPackagesScannedDeep !== false,
-      });
-    }
+    // Same sort as the visible grid: this walks the matching set in pages, so
+    // a different ordering here would page over a differently-ordered list.
+    const page = await invoke("list_var_packages", {
+      inputDir,
+      additionalInputDirs,
+      offset,
+      limit: PAGE,
+      search,
+      filters,
+      ...varPackagesSortArgs(),
+      forceRescan: false,
+      deepScan: state.varPackagesScannedDeep !== false,
+    });
     const items = Array.isArray(page?.items) ? page.items : [];
     out.push(...items);
     if (items.length < PAGE) break; // last (or only) page
@@ -4829,42 +6144,29 @@ function vpPruneSelection(paths) {
   vpSyncSelectionUi();
 }
 
+// The bulk toolbar: only while two or more packages are selected (one is
+// simply the package in the details panel, as in Backstage).
 function renderVpSelectionBar() {
   const bar = $("var-packages-selection-bar");
   if (!bar) return;
   const n = state.vpSelected.size;
-  const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
-  // Persistent whenever there are packages to act on, so "Select all" is
-  // reachable before anything is selected.
-  bar.classList.toggle("hidden", total === 0);
-  if (total === 0) return;
+  bar.classList.toggle("hidden", n < 2);
+  if (n < 2) return;
 
   let totalBytes = 0;
-  for (const snap of state.vpSelected.values()) totalBytes += snap.size_bytes;
-  const countEl = $("var-packages-selection-count");
-  if (countEl) {
-    countEl.textContent = n === 0
-      ? t("varPackagesSelNone")
-      : t("varPackagesSelCount", n, formatBytesLocal(totalBytes));
-  }
-  // Organize plans are scoped to the folder-mode roots; DB paths may lie
-  // outside them, so the button only shows in folder mode.
-  const organizeBtn = $("var-packages-bulk-organize");
-  if (organizeBtn) organizeBtn.classList.toggle("hidden", state.varPackagesMode === "database");
-
-  // Bulk actions and Unselect need a selection; Select all / Select page only
-  // need packages to exist.
-  const hasSel = n > 0;
+  for (const snap of state.vpSelected.values()) totalBytes += Number(snap.size_bytes) || 0;
+  vpSetText("var-packages-selection-count", t("varPackagesSelCount", n, formatBytesLocal(totalBytes)));
   for (const id of [
     "var-packages-bulk-delete",
     "var-packages-bulk-organize",
     "var-packages-bulk-export",
     "var-packages-selection-clear",
+    "lib-bulk-disable",
+    "lib-bulk-enable",
+    "lib-bulk-clean",
+    "var-packages-select-all",
+    "var-packages-select-page",
   ]) {
-    const btn = $(id);
-    if (btn) btn.disabled = state.vpBulkRunning || !hasSel;
-  }
-  for (const id of ["var-packages-select-all", "var-packages-select-page"]) {
     const btn = $(id);
     if (btn) btn.disabled = state.vpBulkRunning;
   }
@@ -4874,27 +6176,29 @@ function renderVpSelectionBar() {
 // after every list render and after every selection mutation).
 function vpSyncSelectionUi() {
   renderVpSelectionBar();
+  const n = state.vpSelected.size;
   const grid = $("var-packages-grid");
   if (grid) {
-    grid.classList.toggle("has-selection", state.vpSelected.size > 0);
-    grid.querySelectorAll(".vp-card-wrap").forEach((wrap) => {
-      const box = wrap.querySelector("[data-vp-select]");
-      if (!box) return;
-      const selected = state.vpSelected.has(box.getAttribute("data-vp-select"));
-      box.checked = selected;
-      wrap.classList.toggle("is-selected", selected);
+    grid.classList.toggle("is-bulk", n > 1);
+    grid.querySelectorAll(".lib-card[data-file-path]").forEach((card) => {
+      const fp = card.getAttribute("data-file-path");
+      const picked = state.vpSelected.has(fp);
+      card.classList.toggle("is-picked", picked);
+      card.classList.toggle("is-checked", picked && n > 1);
+      card.classList.toggle("is-lead", n > 1 && state.vpLead === fp);
+      card.setAttribute("aria-selected", String(picked));
     });
   }
   const tbody = $("var-packages-tbody");
   if (tbody) {
     tbody.querySelectorAll("tr[data-file-path]").forEach((row) => {
+      const picked = state.vpSelected.has(row.getAttribute("data-file-path"));
+      row.classList.toggle("is-picked", picked);
       const box = row.querySelector("[data-vp-select]");
-      if (!box) return;
-      const selected = state.vpSelected.has(box.getAttribute("data-vp-select"));
-      box.checked = selected;
-      row.classList.toggle("is-selected", selected);
+      if (box) box.checked = picked;
     });
   }
+  libRenderDetail();
 }
 
 function setupVarPackagesSelection() {
@@ -5116,7 +6420,7 @@ function vpImagesEnqueue(tile) {
   vpImagesDrain().catch((e) => addLog(`View images: ${String(e)}`));
 }
 
-// Sequential (concurrency 1), matching loadVarPackageThumbnails' "avoid opening
+// Sequential (concurrency 1), matching the library thumbnails' "avoid opening
 // 20 zip archives at once" rule. One failed entry must not stall the rest.
 async function vpImagesDrain() {
   if (VP_IMAGES.draining) return;
@@ -5247,7 +6551,7 @@ function vpDeleteRowMenuItems(packageId, filePath) {
         if (VP_DELETE.running) return;
         vpDeleteModalClose(false);
         depStartScan({ filePath: path, packageId: pkg }).catch((e) =>
-          addLog(`Scan Dependencies: ${String(e)}`),
+          addLog(`Download Dependencies: ${String(e)}`),
         );
       },
     },
@@ -5395,18 +6699,6 @@ function setupVarPackagesMaintenance() {
     });
   }
 
-  $("var-packages-clean-dupes")?.addEventListener("click", () => {
-    vpStartPlan("clean_duplicates").catch((e) => addLog(`VAR Packages: ${String(e)}`));
-  });
-  $("var-packages-organize")?.addEventListener("click", () => {
-    vpStartPlan("organize_by_creator").catch((e) => addLog(`VAR Packages: ${String(e)}`));
-  });
-  // Opens the shared dependency modal in paste-text mode (defined in the
-  // VAR Details dep-scan block).
-  $("var-packages-find-deps")?.addEventListener("click", () => depStartTextScan());
-  $("var-packages-export-scenes")?.addEventListener("click", () => {
-    exportAllSceneImages().catch((e) => addLog(`Export Scene Images: ${String(e)}`));
-  });
   $("vp-plan-apply")?.addEventListener("click", () => {
     vpApplyPlan().catch((e) => addLog(`VAR Packages: ${String(e)}`));
   });
@@ -5446,47 +6738,15 @@ function setupVarPackagesMaintenance() {
   });
 }
 
-/// Sends the user to Build Database, where the rebuild actually lives, rather
-/// than duplicating the scan wiring here.
+/// Sends the user to the Database page's Build tab, where the rebuild actually
+/// lives, rather than duplicating the scan wiring here.
 function switchToBuildDatabase() {
+  setDatabaseTab("build");
   const link = document.querySelector('[data-sidebar-link="build-db"]');
   if (link) {
     link.click();
   } else {
-    addLog("VAR Packages: open Build Database and re-scan to refresh package paths.");
-  }
-}
-
-async function refreshVarPackagesFromDb() {
-  if (state.varPackagesLoading || !invoke) return;
-  state.varPackagesLoading = true;
-  state.varPackagesItems = [];
-  renderVarPackages();
-  const refreshBtn = $("var-packages-db-refresh-button");
-  if (refreshBtn) refreshBtn.disabled = true;
-  try {
-    const offset = Math.max(0, state.varPackagesPage) * VAR_PACKAGES_PAGE_SIZE;
-    const search = String(state.varPackagesFilter ?? "").trim() || null;
-    const page = await invoke("list_var_packages_from_db", {
-      offset,
-      limit: VAR_PACKAGES_PAGE_SIZE,
-      search,
-      filters: serializeVarPackageFilters(state.varPackagesFilters),
-      ...varPackagesSortArgs(),
-    });
-    state.varPackagesItems = Array.isArray(page?.items) ? page.items : [];
-    state.varPackagesTotal = Math.max(0, Number(page?.total ?? 0));
-    const totalPages = Math.max(1, Math.ceil(state.varPackagesTotal / VAR_PACKAGES_PAGE_SIZE));
-    if (state.varPackagesPage >= totalPages) state.varPackagesPage = totalPages - 1;
-    if (state.varPackagesPage < 0) state.varPackagesPage = 0;
-  } catch (error) {
-    state.varPackagesItems = [];
-    state.varPackagesTotal = 0;
-    addLog(t("varPackagesDbFailed", String(error)));
-  } finally {
-    state.varPackagesLoading = false;
-    if (refreshBtn) refreshBtn.disabled = false;
-    renderVarPackages();
+    addLog("VAR Packages: open Database → Build and re-scan to refresh package paths.");
   }
 }
 
@@ -5669,8 +6929,7 @@ function openCandidatePackageInVarDetails(packageId, packageFile) {
   }
   const cached = (state.varPackagesItems ?? []).find((it) => it.package_id === packageId);
   if (cached) {
-    const source = state.varPackagesMode === "database" ? "db" : "folder";
-    openVarDetailsView(cached, source);
+    openVarDetailsView(cached, "folder");
     return;
   }
   const fileName = packageFile ? String(packageFile).split(/[\\/]/).pop() : `${packageId}.var`;
@@ -5690,7 +6949,7 @@ function openCandidatePackageInVarDetails(packageId, packageFile) {
 // cached on state. Never auto-fetches resources — the user must trigger a
 // scan explicitly. View toggling is handled by index.html's switch.
 // ===========================================================================
-// VAR Details — Scan Dependencies.
+// VAR Details — Download Dependencies.
 //
 // Reads the current VAR's recursive meta.json dependency tree, checks each dep
 // against the VAR library folder (Settings), and lists them all in a modal
@@ -5702,7 +6961,7 @@ function openCandidatePackageInVarDetails(packageId, packageFile) {
 // ===========================================================================
 
 // `target` is the .var a file-mode scan read ({ filePath, packageId }); null in
-// text mode. "Find in Folders…" hands it to the Collect Dependencies modal.
+// text mode. "Find Dependencies Locally…" hands it to the collect-deps modal.
 const DEP_SCAN = { items: [], response: null, taskId: null, running: false, filter: "all", target: null };
 
 const DEP_STATUS_LABEL = { found: "Found", missing: "Missing", unknown: "Unknown" };
@@ -5731,11 +6990,22 @@ function depLibraryDirs() {
   ].filter(Boolean);
 }
 
+// Re-runs the open Download Dependencies scan after its folder list changed.
+function depRescanAfterFolderChange() {
+  const backdrop = $("dep-scan-backdrop");
+  if (!backdrop || backdrop.classList.contains("hidden") || DEP_SCAN.running) return;
+  if (DEP_SCAN.target) {
+    depStartScan(DEP_SCAN.target).catch((e) => addLog(`Download Dependencies: ${String(e)}`));
+  } else if (($("dep-scan-text-input")?.value || "").trim()) {
+    depAnalyzeText().catch((e) => addLog(`Find Dependencies: ${String(e)}`));
+  }
+}
+
 function depScanBusy(busy) {
   DEP_SCAN.running = busy;
   // Every entry point into this modal is disabled while a task runs, so a second
   // one can't start mid-flight.
-  for (const id of ["var-details-scan-deps-button", "var-packages-find-deps", "dep-scan-analyze-text", "dep-scan-text-input", "dep-scan-root-settings", "dep-scan-collect"]) {
+  for (const id of ["var-details-scan-deps-button", "find-deps-toggle", "dep-scan-analyze-text", "dep-scan-organize", "dep-scan-text-input", "dep-scan-root-settings", "dep-scan-add-folder"]) {
     const el = $(id);
     if (el) el.disabled = busy;
   }
@@ -5809,23 +7079,23 @@ function depMapItems(res) {
   }));
 }
 
-// Mirrors the delete modal's root row (vpDeleteRenderRoot): lists every library
-// folder this scan resolves dependencies against, read-only, with the empty
-// state pointing at Settings — the "Change in Settings" link navigates there.
-function depScanRenderScope(libraryDirs) {
+// The dialog's folder row: where its downloads are saved (Settings → Downloads
+// folder, else AddonPackages), with the organize-by-creator switch beside it.
+// The folders a dependency is CHECKED against (AddonPackages + extra folders)
+// are an implementation detail and no longer listed here.
+function depScanRenderScope() {
   const listEl = $("dep-scan-root-list");
-  if (!listEl) return;
-  if (!libraryDirs.length) {
-    listEl.innerHTML =
-      '<div class="dep-scan-root-empty">No library folder set — dependencies show as unknown. Set the VAR library folder in Settings to check availability.</div>';
-    return;
+  if (listEl) {
+    const dir = configuredDownloadsDir();
+    const custom = Boolean(($("settings-downloads-folder")?.value || "").trim());
+    listEl.innerHTML = dir
+      ? `<div class="dep-scan-root-item" title="${escapeAttribute(dir)}">${escapeHtml(dir)}${
+          custom ? "" : ' <span class="dep-scan-root-note">(default)</span>'
+        }</div>`
+      : '<div class="dep-scan-root-empty">No downloads folder — set your VaM directory in Settings, or you will be asked to pick a folder on the first download.</div>';
   }
-  listEl.innerHTML = libraryDirs
-    .map(
-      (dir) =>
-        `<div class="dep-scan-root-item" title="${escapeAttribute(dir)}">${escapeHtml(dir)}</div>`,
-    )
-    .join("");
+  const organize = $("dep-scan-organize");
+  if (organize) organize.checked = Boolean($("settings-organize-by-creator")?.checked);
 }
 
 // `target` names the .var to scan: { filePath, packageId }. Omitted (the VAR
@@ -5833,28 +7103,28 @@ function depScanRenderScope(libraryDirs) {
 // the VAR Packages grid right-click menu scan any card without opening it first.
 async function depStartScan(target) {
   if (!invoke || DEP_SCAN.running) return;
+  depHubResetFailures();
   const filePath = target?.filePath || state.varDetails?.item?.file_path || "";
   const packageId = target?.packageId || state.varDetails?.item?.package_id || "";
   if (!filePath) {
-    addLog("Scan Dependencies: no .var file on disk to scan.");
+    addLog("Download Dependencies: no .var file on disk to scan.");
     return;
   }
 
   // File mode: the paste box belongs to the text entry point only.
   $("dep-scan-text-region")?.classList.add("hidden");
   DEP_SCAN.target = { filePath, packageId };
-  $("dep-scan-collect")?.classList.remove("hidden");
 
   DEP_SCAN.items = [];
   DEP_SCAN.response = null;
   DEP_SCAN.filter = "all";
   depApplyFilterUi();
-  depScanSetText("dep-scan-title", `Dependencies · ${packageId || depFileName(filePath)}`);
+  depScanSetText("dep-scan-title", `Download Dependencies · ${packageId || depFileName(filePath)}`);
   depScanSetText("dep-scan-summary", "");
   $("dep-scan-list").innerHTML = "";
 
   const libraryDirs = depLibraryDirs();
-  depScanRenderScope(libraryDirs);
+  depScanRenderScope();
 
   depScanOpen();
   depScanBusy(true);
@@ -5867,12 +7137,12 @@ async function depStartScan(target) {
     DEP_SCAN.items = depMapItems(res);
     // Surface per-file problems (bad archive, no meta.json).
     (res?.sources || []).forEach((s) => {
-      if (s && s.error) addLog(`Scan Dependencies: ${depFileName(s.file_path)} — ${s.error}`);
+      if (s && s.error) addLog(`Download Dependencies: ${depFileName(s.file_path)} — ${s.error}`);
     });
     depRenderList();
   } catch (err) {
     depScanSetText("dep-scan-summary", `Failed: ${String(err)}`);
-    addLog(`Scan Dependencies: ${String(err)}`);
+    addLog(`Download Dependencies: ${String(err)}`);
   } finally {
     depScanBusy(false);
   }
@@ -5885,7 +7155,6 @@ function depStartTextScan() {
   if (!invoke || DEP_SCAN.running) return;
   $("dep-scan-text-region")?.classList.remove("hidden");
   DEP_SCAN.target = null;
-  $("dep-scan-collect")?.classList.add("hidden");
 
   DEP_SCAN.items = [];
   DEP_SCAN.response = null;
@@ -5893,7 +7162,7 @@ function depStartTextScan() {
   depApplyFilterUi();
   depScanSetText("dep-scan-title", "Find Dependencies");
   $("dep-scan-list").innerHTML = "";
-  depScanRenderScope(depLibraryDirs());
+  depScanRenderScope();
   depRenderList(); // reset the Download-All button label/state
   // After depRenderList: with no items and no response it blanks the summary,
   // which used to swallow this hint before it was ever painted.
@@ -5915,7 +7184,7 @@ async function depAnalyzeText() {
   }
 
   const libraryDirs = depLibraryDirs();
-  depScanRenderScope(libraryDirs);
+  depScanRenderScope();
   DEP_SCAN.filter = "all";
   depApplyFilterUi();
 
@@ -5952,6 +7221,132 @@ function depApplyFilterUi() {
   });
 }
 
+// ============================================================
+// Package cards in dependency lists
+//
+// Rows in Download Dependencies and Find Dependencies Locally show a
+// thumbnail, title, author, size, license and type: read from the .var when
+// it is on disk (get_var_image, the library's thumbnail loader), else looked
+// up on the VaM Hub (get_hub_package_meta, cached per package family).
+// Hub answers patch the card in place so a row's buttons never re-render
+// under the cursor.
+// ============================================================
+
+const DEP_HUB = { meta: new Map(), pending: new Set(), failed: new Set(), queue: [], active: 0 };
+
+function depFamilyKey(pkg) {
+  return String(pkg ?? "")
+    .trim()
+    .replace(/\.(\d+|latest|min\d+)$/i, "")
+    .toLowerCase();
+}
+
+// What a card needs, from either list's item shape.
+function depCardItem(list, it) {
+  if (list === "collect") {
+    return {
+      pkg: it.package_id,
+      creator: it.creator,
+      version: it.version,
+      size: it.size,
+      localPath: it.path || "",
+    };
+  }
+  return { pkg: it.pkg, creator: it.creator, version: it.version, size: it.size, localPath: it.localPath || "" };
+}
+
+function depCardHtml(list, it, extraLines = "") {
+  const card = depCardItem(list, it);
+  const key = depFamilyKey(card.pkg);
+  const hub = card.localPath ? null : DEP_HUB.meta.get(key);
+  const gradient = libGradient(card.pkg);
+  const thumb = card.localPath
+    ? `${libThumbHtml(card.localPath, gradient, "dep-thumb")}</div>`
+    : `<span class="dep-thumb" style="--lib-thumb-bg:${escapeAttribute(gradient)}">${
+        hub?.image_data ? `<img alt="" src="${escapeAttribute(hub.image_data)}" />` : ""
+      }</span>`;
+  const title = hub?.title || libTitle({ package_id: card.pkg });
+  const version = /^\d+$/.test(String(card.version ?? "")) ? `v${card.version}` : card.version || "";
+  const author = hub?.username || card.creator || "";
+  const size = Number(card.size) || Number(hub?.file_size) || 0;
+  const meta = [author && `by ${author}`, size ? formatBytesLocal(size) : ""].filter(Boolean).join(" · ");
+  const chips = [
+    hub?.resource_type ? `<span class="dep-card-chip">${escapeHtml(hub.resource_type)}</span>` : "",
+    hub?.category === "Paid" ? `<span class="dep-card-chip is-paid">Paid</span>` : "",
+    hub?.license ? `<span class="dep-card-chip">${escapeHtml(hub.license)}</span>` : "",
+    hub?.hub_url
+      ? `<button type="button" class="dep-card-hub" data-dep-hub-url="${escapeAttribute(hub.hub_url)}" title="Open on the VaM Hub"><span class="material-symbols-outlined">open_in_new</span>Hub</button>`
+      : "",
+  ].join("");
+  return `<span class="dep-card" data-dep-card="${escapeAttribute(key)}">
+    ${thumb}
+    <span class="dep-scan-main">
+      <span class="dep-card-title-line">
+        <span class="dep-scan-name" title="${escapeAttribute(title)}">${escapeHtml(title)}</span>
+        ${version ? `<span class="dep-card-ver">${escapeHtml(version)}</span>` : ""}
+      </span>
+      ${meta || chips ? `<span class="dep-scan-meta">${escapeHtml(meta)}${chips}</span>` : ""}
+      <span class="dep-card-id" title="${escapeAttribute(card.pkg)}">${escapeHtml(card.pkg)}</span>
+      ${extraLines}
+    </span>
+  </span>`;
+}
+
+// After a list renders: start local thumbnails, and queue Hub lookups for the
+// rows whose package isn't on disk.
+function depCardsActivate(listEl, list, items) {
+  if (!listEl) return;
+  libThumbWatch(listEl);
+  if (!invoke) return;
+  for (const it of items) {
+    const card = depCardItem(list, it);
+    if (card.localPath || !card.pkg) continue;
+    const key = depFamilyKey(card.pkg);
+    if (DEP_HUB.meta.has(key) || DEP_HUB.pending.has(key) || DEP_HUB.failed.has(key)) continue;
+    DEP_HUB.pending.add(key);
+    DEP_HUB.queue.push(card.pkg);
+  }
+  depHubPump();
+}
+
+function depHubPump() {
+  while (DEP_HUB.active < 3 && DEP_HUB.queue.length) {
+    const pkg = DEP_HUB.queue.shift();
+    const key = depFamilyKey(pkg);
+    DEP_HUB.active += 1;
+    invoke("get_hub_package_meta", { packageId: pkg })
+      .then((meta) => {
+        if (meta?.error) DEP_HUB.failed.add(key);
+        else DEP_HUB.meta.set(key, meta ?? { found: false });
+      })
+      .catch(() => DEP_HUB.failed.add(key))
+      .finally(() => {
+        DEP_HUB.pending.delete(key);
+        DEP_HUB.active -= 1;
+        depCardsRefresh(key);
+        depHubPump();
+      });
+  }
+}
+
+// Re-renders just the cards for one package family, in whichever list shows it.
+function depCardsRefresh(key) {
+  document.querySelectorAll(`.dep-scan-row[data-dep-list] [data-dep-card="${CSS.escape(key)}"]`).forEach((cardEl) => {
+    const row = cardEl.closest(".dep-scan-row");
+    const list = row.getAttribute("data-dep-list");
+    const idx = Number(row.getAttribute("data-dep-idx"));
+    const it = (list === "collect" ? DEP_COLLECT.items : DEP_SCAN.items)[idx];
+    if (!it) return;
+    const extra = list === "collect" ? dcRowExtraLines(it) : "";
+    cardEl.outerHTML = depCardHtml(list, it, extra);
+  });
+}
+
+// A new scan may come back online: retry families whose lookup failed.
+function depHubResetFailures() {
+  DEP_HUB.failed.clear();
+}
+
 function depRenderList() {
   const res = DEP_SCAN.response;
   const total = DEP_SCAN.items.length;
@@ -5975,9 +7370,6 @@ function depRenderList() {
     .filter((it) => DEP_SCAN.filter !== "missing" || it.status === "missing")
     .map((it) => {
       const i = DEP_SCAN.items.indexOf(it);
-      const meta = [it.creator, it.version && `v${it.version}`, it.size && formatBytesLocal(it.size)]
-        .filter(Boolean)
-        .join(" · ");
       let action = "";
       const activeJob = it.status === "missing" ? findDownloadJob(it.pkg) : null;
       if (it.deleted) {
@@ -6008,11 +7400,8 @@ function depRenderList() {
         // Say so rather than leave a blank slot.
         action = `<span class="dep-scan-act-note">No source</span>`;
       }
-      return `<div class="dep-scan-row" data-dep-idx="${i}">
-  <span class="dep-scan-main">
-    <span class="dep-scan-name">${escapeHtml(it.pkg)}</span>
-    <span class="dep-scan-meta">${escapeHtml(meta)}</span>
-  </span>
+      return `<div class="dep-scan-row" data-dep-idx="${i}" data-dep-list="scan">
+  ${depCardHtml("scan", it)}
   <span class="chip dep-scan-${escapeHtml(it.status)}">${escapeHtml(DEP_STATUS_LABEL[it.status] ?? it.status)}</span>
   <span class="dep-scan-act">${action}</span>
 </div>`;
@@ -6020,6 +7409,7 @@ function depRenderList() {
     .join("");
   $("dep-scan-list").innerHTML =
     rows || `<div class="dep-scan-empty">${escapeHtml(DEP_SCAN.filter === "missing" ? "No missing dependencies." : "Nothing to show.")}</div>`;
+  depCardsActivate($("dep-scan-list"), "scan", DEP_SCAN.items);
 
   const all = $("dep-scan-download-all");
   const downloadable = depMissingDownloadable();
@@ -6060,7 +7450,7 @@ async function depDownloadOne(pkg, dest) {
   if (findDownloadJob(pkg)) return; // already queued/downloading
   const destDir = dest || (await ensureDownloadsDir());
   if (!destDir) {
-    addLog("Scan Dependencies: no downloads folder selected.");
+    addLog("Download Dependencies: no downloads folder selected.");
     return;
   }
   queueDownload({
@@ -6139,12 +7529,12 @@ async function depDeleteOne(pkg) {
 async function depDownloadAllMissing() {
   const queue = depMissingDownloadable().filter((it) => !findDownloadJob(it.pkg));
   if (queue.length === 0) {
-    addLog("Scan Dependencies: nothing to auto-download (Hub/Pixeldrain only; MediaFire is manual).");
+    addLog("Download Dependencies: nothing to auto-download (Hub/Pixeldrain only; MediaFire is manual).");
     return;
   }
   const dest = await ensureDownloadsDir();
   if (!dest) {
-    addLog("Scan Dependencies: no downloads folder selected.");
+    addLog("Download Dependencies: no downloads folder selected.");
     return;
   }
   for (const it of queue) await depDownloadOne(it.pkg, dest);
@@ -6152,7 +7542,7 @@ async function depDownloadAllMissing() {
 
 function setupVarDetailsDeps() {
   $("var-details-scan-deps-button")?.addEventListener("click", () => {
-    depStartScan().catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
+    depStartScan().catch((e) => addLog(`Download Dependencies: ${String(e)}`));
   });
 
   $("dep-scan-analyze-text")?.addEventListener("click", () => {
@@ -6160,18 +7550,25 @@ function setupVarDetailsDeps() {
   });
 
   $("dep-scan-download-all")?.addEventListener("click", () => {
-    depDownloadAllMissing().catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
-  });
-
-  // Opens Collect Dependencies OVER this modal (it sits after it in the DOM);
-  // closing it re-runs this scan if anything was copied or moved.
-  $("dep-scan-collect")?.addEventListener("click", () => {
-    if (DEP_SCAN.running || !DEP_SCAN.target) return;
-    dcOpen(DEP_SCAN.target, { fromDepScan: true });
+    depDownloadAllMissing().catch((e) => addLog(`Download Dependencies: ${String(e)}`));
   });
 
   // "Change in Settings" — close the modal and jump to the Settings page to edit
   // the VAR library folders. Blocked while a scan runs (Close is Cancel then).
+  // Same setting as Settings → "Organize downloads into creator subfolders".
+  $("dep-scan-organize")?.addEventListener("change", (event) => {
+    const settingsBox = $("settings-organize-by-creator");
+    if (settingsBox) settingsBox.checked = event.target.checked;
+    persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
+  });
+  for (const id of ["dep-scan-list", "dep-collect-list"]) {
+    $(id)?.addEventListener("click", (event) => {
+      const link = event.target.closest?.("[data-dep-hub-url]");
+      if (!link || !invoke) return;
+      event.stopPropagation();
+      invoke("open_url", { url: link.getAttribute("data-dep-hub-url") }).catch((e) => addLog(`Open link: ${String(e)}`));
+    });
+  }
   $("dep-scan-root-settings")?.addEventListener("click", () => {
     if (DEP_SCAN.running) return;
     depScanClose();
@@ -6184,7 +7581,7 @@ function setupVarDetailsDeps() {
       // task registers one. Keep the modal open until the poll reports done.
       if (DEP_SCAN.taskId != null) {
         invoke("cancel_task", { taskId: DEP_SCAN.taskId }).catch((e) =>
-          addLog(`Scan Dependencies: ${String(e)}`),
+          addLog(`Download Dependencies: ${String(e)}`),
         );
       }
       return;
@@ -6205,26 +7602,26 @@ function setupVarDetailsDeps() {
     const dl = event.target.closest?.("[data-dep-download]");
     if (dl) {
       depDownloadOne(dl.getAttribute("data-dep-download")).catch((e) =>
-        addLog(`Scan Dependencies: ${String(e)}`),
+        addLog(`Download Dependencies: ${String(e)}`),
       );
       return;
     }
     const open = event.target.closest?.("[data-dep-open]");
     if (open) {
       const it = DEP_SCAN.items.find((x) => x.pkg === open.getAttribute("data-dep-open"));
-      if (it?.url) invoke("open_url", { url: it.url }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
+      if (it?.url) invoke("open_url", { url: it.url }).catch((e) => addLog(`Download Dependencies: ${String(e)}`));
       return;
     }
     const reveal = event.target.closest?.("[data-dep-reveal]");
     if (reveal) {
       const it = DEP_SCAN.items.find((x) => x.pkg === reveal.getAttribute("data-dep-reveal"));
-      if (it?.localPath) invoke("show_in_explorer", { path: it.localPath }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
+      if (it?.localPath) invoke("show_in_explorer", { path: it.localPath }).catch((e) => addLog(`Download Dependencies: ${String(e)}`));
       return;
     }
     const del = event.target.closest?.("[data-dep-delete]");
     if (del) {
       depDeleteOne(del.getAttribute("data-dep-delete")).catch((e) =>
-        addLog(`Scan Dependencies: ${String(e)}`),
+        addLog(`Download Dependencies: ${String(e)}`),
       );
       return;
     }
@@ -6250,7 +7647,7 @@ function setupVarDetailsDeps() {
 // ===========================================================================
 // VAR Packages — Collect Dependencies.
 //
-// Scan Dependencies only looks in the VAM library, so a dependency sitting in a
+// Download Dependencies only looks in the VAM library, so a dependency sitting in a
 // download folder elsewhere shows up there as "missing" with a Hub link. This
 // modal searches folders the user picks (subfolders included) and copies what
 // it finds into <library>\<Creator>\deps\, moving the package itself and its
@@ -6272,7 +7669,7 @@ const DEP_COLLECT = {
   running: false, // false | "scan" | "copy"
   copying: null, // lowercased source paths in the running copy
   filter: "all",
-  fromDepScan: false, // opened over the Scan Dependencies modal
+  fromDepScan: false, // opened over the Download Dependencies modal
   changed: false, // something was moved or copied since the modal opened
 };
 
@@ -6288,8 +7685,9 @@ const DC_CHIP = {
 
 const DC_PICK_HINT = "Click Browse… and pick the folders where you keep downloaded VARs.";
 
+// Collect Dependencies always copies into AddonPackages of the VaM directory.
 function dcLibraryRoot() {
-  return ($("settings-library-folder")?.value || "").trim();
+  return vamAddonPackagesDir() || ($("settings-library-folder")?.value || "").trim();
 }
 
 /// What a row shows: what the last copy did to it, else what the scan found. A
@@ -6462,6 +7860,21 @@ function dcRenderSummary() {
   depScanSetText("dep-collect-summary", parts.join(" · "));
 }
 
+// The lines under a Find Dependencies Locally card: who needs it, where the
+// file is, and what the last copy (or the scan) had to say about it.
+function dcRowExtraLines(it) {
+  const st = dcRowState(it);
+  const where = dcRowWhere(it);
+  const detail = it.copy && (st === "failed" || st === "skipped") ? it.copy.detail : it.note;
+  return [
+    it.via ? `<span class="dep-scan-meta">needed by ${escapeHtml(it.via)}</span>` : "",
+    where
+      ? `<span class="dep-scan-meta dep-collect-path" title="${escapeAttribute(where)}">${escapeHtml(where)}</span>`
+      : "",
+    detail ? `<span class="dep-collect-note">${escapeHtml(detail)}</span>` : "",
+  ].join("");
+}
+
 function dcRenderList() {
   const listEl = $("dep-collect-list");
   if (!listEl) return;
@@ -6473,16 +7886,7 @@ function dcRenderList() {
     .filter(({ it }) => DEP_COLLECT.filter !== "copy" || dcCanCopyRow(it))
     .map(({ it, i, st }) => {
       const chip = DC_CHIP[st] || { label: st, cls: "dep-scan-unknown" };
-      const meta = [
-        it.creator,
-        it.version && `v${it.version}`,
-        it.size && formatBytesLocal(it.size),
-        it.via && `needed by ${it.via}`,
-      ]
-        .filter(Boolean)
-        .join(" · ");
       const where = dcRowWhere(it);
-      const detail = it.copy && (st === "failed" || st === "skipped") ? it.copy.detail : it.note;
       let action = "";
       if (copying && it.path && copying.has(String(it.path).toLowerCase())) {
         action = `<button class="ghost-button dep-scan-action" type="button" disabled>Copying…</button>`;
@@ -6492,13 +7896,8 @@ function dcRenderList() {
       if (where) {
         action += `<button class="icon-button" type="button" data-dc-reveal="${i}" title="Show in Explorer"><span class="material-symbols-outlined">folder_open</span></button>`;
       }
-      return `<div class="dep-scan-row">
-  <span class="dep-scan-main">
-    <span class="dep-scan-name">${escapeHtml(it.package_id)}</span>
-    ${meta ? `<span class="dep-scan-meta">${escapeHtml(meta)}</span>` : ""}
-    ${where ? `<span class="dep-scan-meta dep-collect-path" title="${escapeAttribute(where)}">${escapeHtml(where)}</span>` : ""}
-    ${detail ? `<span class="dep-collect-note">${escapeHtml(detail)}</span>` : ""}
-  </span>
+      return `<div class="dep-scan-row" data-dep-idx="${i}" data-dep-list="collect">
+  ${depCardHtml("collect", it, dcRowExtraLines(it))}
   <span class="chip ${chip.cls}">${escapeHtml(chip.label)}</span>
   <span class="dep-scan-act">${action}</span>
 </div>`;
@@ -6509,6 +7908,7 @@ function dcRenderList() {
     (res && DEP_COLLECT.items.length
       ? `<div class="dep-scan-empty">Nothing left to copy.</div>`
       : "");
+  depCardsActivate(listEl, "collect", DEP_COLLECT.items);
 
   const all = $("dep-collect-copy-all");
   const pending = dcCopyablePaths().length;
@@ -6520,9 +7920,10 @@ function dcRenderList() {
 }
 
 /// Opens the modal for one package. `fromDepScan` means it was opened over the
-/// Scan Dependencies modal, which gets re-run on close if anything changed.
+/// Download Dependencies modal, which gets re-run on close if anything changed.
 function dcOpen(target, { fromDepScan = false } = {}) {
   if (!invoke || !target?.filePath) return;
+  depHubResetFailures();
   // One modal, one package: re-targeting it mid-task would orphan the task.
   if (DEP_COLLECT.running) return;
   const filePath = String(target.filePath);
@@ -6536,7 +7937,7 @@ function dcOpen(target, { fromDepScan = false } = {}) {
   DEP_COLLECT.response = null;
   DEP_COLLECT.filter = "all";
   dcApplyFilterUi();
-  depScanSetText("dep-collect-title", `Collect Dependencies · ${DEP_COLLECT.target.packageId}`);
+  depScanSetText("dep-collect-title", `Find Dependencies Locally · ${DEP_COLLECT.target.packageId}`);
   const remember = $("dep-collect-remember");
   if (remember) remember.checked = DEP_COLLECT.remember;
   depScanSetText("dep-collect-summary", "");
@@ -6547,7 +7948,7 @@ function dcOpen(target, { fromDepScan = false } = {}) {
   $("dep-collect-backdrop")?.classList.remove("hidden");
   // Remembered (or earlier-this-session) folders: search straight away.
   if (DEP_COLLECT.dirs.length) {
-    dcScan().catch((e) => addLog(`Collect Dependencies: ${String(e)}`));
+    dcScan().catch((e) => addLog(`Find Dependencies Locally: ${String(e)}`));
   } else {
     depScanSetText("dep-collect-summary", DC_PICK_HINT);
   }
@@ -6559,7 +7960,7 @@ function dcClose() {
   const { changed, fromDepScan, target } = DEP_COLLECT;
   DEP_COLLECT.items = [];
   DEP_COLLECT.response = null;
-  // The Scan Dependencies modal underneath still shows the statuses (and maybe
+  // The Download Dependencies modal underneath still shows the statuses (and maybe
   // the package path) from before the copy, so re-run it to tell the truth.
   if (
     changed &&
@@ -6569,7 +7970,7 @@ function dcClose() {
     !DEP_SCAN.running
   ) {
     depStartScan({ filePath: target.filePath, packageId: target.packageId }).catch((e) =>
-      addLog(`Scan Dependencies: ${String(e)}`),
+      addLog(`Download Dependencies: ${String(e)}`),
     );
   }
 }
@@ -6601,7 +8002,7 @@ async function dcScan() {
     dcRenderNotes(res.notes);
   } catch (err) {
     depScanSetText("dep-collect-summary", `Failed: ${String(err)}`);
-    addLog(`Collect Dependencies: ${String(err)}`);
+    addLog(`Find Dependencies Locally: ${String(err)}`);
   } finally {
     dcBusy(false);
     dcRenderDest();
@@ -6630,7 +8031,7 @@ async function dcCopy(paths) {
     );
   } catch (err) {
     showToast(`Copy failed: ${String(err)}`, "error", 6000);
-    addLog(`Collect Dependencies: ${String(err)}`);
+    addLog(`Find Dependencies Locally: ${String(err)}`);
   } finally {
     DEP_COLLECT.copying = null;
     dcBusy(false);
@@ -6659,12 +8060,12 @@ function dcApplyCopyResult(out, fromPath) {
   for (const r of results) {
     if (r.status === "copied") addLog(`Copied ${depFileName(r.source_path)} → ${r.dest_path}`);
     else if (r.status === "failed" || r.status === "skipped") {
-      addLog(`Collect Dependencies: ${depFileName(r.source_path)} — ${r.detail}`);
+      addLog(`Find Dependencies Locally: ${depFileName(r.source_path)} — ${r.detail}`);
     }
   }
   // Set without a move means the move itself failed; with one, a sidecar stayed.
   const moveFailed = !moved && Boolean(out.var_note);
-  if (out.var_note) addLog(`Collect Dependencies: ${depFileName(fromPath)} — ${out.var_note}`);
+  if (out.var_note) addLog(`Find Dependencies Locally: ${depFileName(fromPath)} — ${out.var_note}`);
 
   const failed = results.filter((r) => r.status === "failed").length;
   const already = results.filter((r) => r.status === "exists").length;
@@ -6695,15 +8096,7 @@ function dcApplyCopyResult(out, fromPath) {
 /// files in deps\. Same refresh vpMoveToCreatorFolder does, but only for a
 /// folder listing that exists — this modal is also reachable from VAR Details.
 function dcRefreshVarPackages() {
-  if (state.varPackagesMode === "database") return;
-  if (!($("var-packages-input-dir")?.value || "").trim()) return;
-  if (state.varPackagesLoading) {
-    state.varPackagesDirty = true;
-  } else {
-    refreshVarPackagesFromFolder({ forceRescan: true }).catch((e) =>
-      addLog(`VAR Packages: ${String(e)}`),
-    );
-  }
+  vpRefreshAfterMutation().catch((e) => addLog(`VAR Packages: ${String(e)}`));
 }
 
 async function dcPersistDirs() {
@@ -6749,7 +8142,7 @@ async function dcRemoveDir(index) {
 }
 
 function setupDepCollect() {
-  const log = (e) => addLog(`Collect Dependencies: ${String(e)}`);
+  const log = (e) => addLog(`Find Dependencies Locally: ${String(e)}`);
 
   $("dep-collect-browse")?.addEventListener("click", () => {
     dcBrowse().catch(log);
@@ -6794,7 +8187,7 @@ function setupDepCollect() {
     });
   });
 
-  // "Change in Settings". Close Scan Dependencies too when it's underneath —
+  // "Change in Settings". Close Download Dependencies too when it's underneath —
   // first, so dcClose doesn't re-run its scan — or Settings opens behind it.
   $("dep-collect-dest")?.addEventListener("click", (event) => {
     if (!event.target.closest?.("[data-dc-settings]") || DEP_COLLECT.running) return;
@@ -6919,6 +8312,7 @@ async function loadFavorites() {
 function refreshFavoriteIndicators() {
   renderVarPackages();
   renderVarDetailsFavoriteButton();
+  dbPkgsRender();
 }
 
 async function togglePackageFavorite(packageId) {
@@ -7080,6 +8474,7 @@ function sendVarToTargetPage(page, path) {
     if (dirEl && !dirEl.value && state.missingResources?.inputDir) {
       dirEl.value = state.missingResources.inputDir;
     }
+    renderVamSources();
     addLog(`Sent target VAR to Missing Resources: ${target}`);
     return;
   }
@@ -7103,6 +8498,7 @@ function sendVarToTargetPage(page, path) {
     if (dirEl && !dirEl.value && state.internalize?.inputDir) {
       dirEl.value = state.internalize.inputDir;
     }
+    renderVamSources();
     addLog(`Sent target VAR to Internalize Resources: ${target}`);
     return;
   }
@@ -7226,7 +8622,7 @@ async function runVarDetailsAnalysis(mode) {
     const dirRaw = state.varDetails.inputDir || $("var-details-folder-input")?.value || "";
     inputDir = String(dirRaw).trim();
     if (!inputDir) {
-      const message = "Pick a VAR Folder above before running Scan Local.";
+      const message = "Set your VaM directory in Settings before running Scan Local.";
       addLog(`VAR Details: ${message}`);
       state.varDetails.resourcesError = message;
       state.varDetails.dbFindResult = null;
@@ -8417,348 +9813,338 @@ async function ensureVarDetailsResourcePreviewLoaded(ref, packageFile) {
   }
 }
 
-// Maps the camelCase frontend filter shape to the snake-case fields the
-// backend struct deserializes via `#[serde(rename_all = "camelCase")]`.
-// Returns `null` so Tauri sends `Option::None` when nothing is selected,
-// keeping the SQL builder on its no-filter path.
+// Maps the frontend filter shape to the backend's VarPackageFilters (camelCase
+// via serde). Returns `null` when nothing is selected so Tauri sends None.
+// The Missing status is a view, not a package filter, so it is never sent.
 function serializeVarPackageFilters(filters) {
   if (!filters) return null;
   const payload = {};
+  if (filters.status && filters.status !== "missing") payload.status = filters.status;
+  if (filters.pkgType) payload.pkgType = filters.pkgType;
+  if (filters.enabled) payload.enabled = filters.enabled;
   if (filters.sizeBucket) payload.sizeBucket = filters.sizeBucket;
   if (filters.creator) payload.creator = filters.creator;
-  if (filters.favorites) payload.favorite = true;
   if (filters.scene) payload.sceneImage = filters.scene;
   return Object.keys(payload).length > 0 ? payload : null;
 }
 
+// Status is a view selection (like Backstage's), so it neither counts as a
+// filter nor gets cleared by Reset.
 function activeVarPackageFilterCount(filters) {
   if (!filters) return 0;
   let n = 0;
+  if (filters.pkgType) n += 1;
+  if (filters.enabled) n += 1;
   if (filters.sizeBucket) n += 1;
   if (filters.creator) n += 1;
-  if (filters.favorites) n += 1;
   if (filters.scene) n += 1;
   return n;
 }
 
-/// Loads the Creator dropdown's options for the CURRENT mode. In folder mode the
-/// backend reads the scanned folder's cache, so the menu only offers creators
-/// that are actually in the listing — the DB-wide list used to offer creators
-/// that live nowhere in the scanned folder, and picking one emptied the grid.
+function emptyVarPackageFilters(status = null) {
+  return { status, pkgType: null, enabled: null, sizeBucket: null, creator: null, scene: null };
+}
+
+/// Loads the Author suggestions: the creators of the scanned folders, read off
+/// the backend's folder cache.
 async function loadVarPackagesFilterOptions() {
   if (!invoke) return;
-  // Captured because the user can switch modes during the await; a late reply
-  // for the other mode must not overwrite the current menu.
-  const mode = state.varPackagesMode;
   try {
-    const opts = await invoke("list_var_package_filter_options", {
-      scope: mode === "database" ? null : "folder",
-    });
-    if (state.varPackagesMode !== mode) return;
+    const opts = await invoke("list_var_package_filter_options", { scope: "folder" });
     state.varPackagesFilterOptions = {
       creators: Array.isArray(opts?.creators) ? opts.creators : [],
     };
   } catch (error) {
-    if (state.varPackagesMode !== mode) return;
     state.varPackagesFilterOptions = { creators: [] };
     addLog(t("varPackagesFilterOptionsFailed", String(error)));
   }
-  renderVarPackagesFilterBar();
+  libRenderAuthorPopup();
 }
 
 function setVarPackagesFilter(field, value) {
-  if (!state.varPackagesFilters) {
-    state.varPackagesFilters = { sizeBucket: null, creator: null, favorites: null, scene: null };
-  }
+  if (!state.varPackagesFilters) state.varPackagesFilters = emptyVarPackageFilters();
   const next = value || null;
   if (state.varPackagesFilters[field] === next) return;
+  const wasMissing = libIsMissingView();
   state.varPackagesFilters[field] = next;
-  state.varPackagesPage = 0;
   renderVarPackagesFilterBar();
-  if (state.varPackagesMode === "database") {
-    refreshVarPackagesFromDb();
-  } else {
-    refreshVarPackagesFromFolder({ forceRescan: false });
+  if (field === "status" && next === "missing") {
+    renderVarPackages();
+    libLoadMissing();
+    return;
   }
+  if (wasMissing && field === "status") renderVarPackages();
+  refreshVarPackagesFromFolder({ forceRescan: false });
 }
 
 function clearVarPackagesFilters() {
-  const had = activeVarPackageFilterCount(state.varPackagesFilters) > 0;
-  if (!had) return;
-  state.varPackagesFilters = { sizeBucket: null, creator: null, favorites: null, scene: null };
-  state.varPackagesPage = 0;
+  if (activeVarPackageFilterCount(state.varPackagesFilters) === 0) return;
+  state.varPackagesFilters = emptyVarPackageFilters(state.varPackagesFilters?.status ?? null);
   renderVarPackagesFilterBar();
-  if (state.varPackagesMode === "database") {
-    refreshVarPackagesFromDb();
-  } else {
-    refreshVarPackagesFromFolder({ forceRescan: false });
-  }
+  refreshVarPackagesFromFolder({ forceRescan: false });
 }
 
-function varPackageFilterDisplayValue(field) {
-  const filters = state.varPackagesFilters ?? {};
-  switch (field) {
-    case "size": {
-      if (filters.sizeBucket === "sm") return t("varPackagesSizeSmall");
-      if (filters.sizeBucket === "md") return t("varPackagesSizeMedium");
-      if (filters.sizeBucket === "lg") return t("varPackagesSizeLarge");
-      return t("varPackagesFilterAll");
-    }
-    case "creator":
-      return filters.creator || t("varPackagesFilterAll");
-    case "favorites":
-      return filters.favorites ? t("varPackagesFavoritesOnly") : t("varPackagesFilterAll");
-    default:
-      return t("varPackagesFilterAll");
-  }
+function libCountText(n) {
+  if (state.varPackagesLoading && !state.varPackagesFacets) return "…";
+  if (n == null) return "";
+  return Number(n).toLocaleString();
 }
 
-function varPackageFilterFieldLabel(field) {
-  switch (field) {
-    case "size":
-      return t("varPackagesFilterSize");
-    case "creator":
-      return t("varPackagesFilterCreator");
-    case "favorites":
-      return t("varPackagesFilterFavorites");
-    default:
-      return field;
-  }
+function libListRowHtml({ value, label, title = "", count, selected, indent = false, dot = "" }) {
+  return `<button type="button" class="lib-row${selected ? " is-selected" : ""}${indent ? " is-indented" : ""}"
+      data-lib-value="${escapeAttribute(value ?? "")}" ${title ? `title="${escapeAttribute(title)}"` : ""}>
+      ${dot ? `<span class="lib-type-dot" style="--dot:${dot}"></span>` : ""}
+      <span class="lib-row-label">${escapeHtml(label)}</span>
+      <span class="lib-row-count">${escapeHtml(libCountText(count))}</span>
+    </button>`;
 }
 
-function isVarPackageFilterActive(field) {
-  const filters = state.varPackagesFilters ?? {};
-  switch (field) {
-    case "size":
-      return Boolean(filters.sizeBucket);
-    case "creator":
-      return Boolean(filters.creator);
-    case "favorites":
-      return Boolean(filters.favorites);
-    default:
-      return false;
-  }
+const LIB_SIZE_OPTIONS = [
+  { value: null, label: "Any size" },
+  { value: "sm", label: "< 100 MB" },
+  { value: "md", label: "100 MB – 1 GB" },
+  { value: "lg", label: "> 1 GB" },
+];
+const LIB_SCENE_OPTIONS = [
+  { value: null, label: "Any" },
+  { value: "with", label: "Has a scene image" },
+  { value: "without", label: "No scene image" },
+];
+const LIB_SORT_OPTIONS = [
+  { value: "type", label: "Type" },
+  { value: "name", label: "Name" },
+  { value: "size", label: "Size" },
+  { value: "items", label: "Content" },
+  { value: "deps", label: "Deps" },
+  { value: "modified", label: "Date modified" },
+];
+
+// One dropdown open at a time; the trigger shows the current value and turns
+// accent-coloured while its filter differs from the default.
+function libSetDropdown(name, label, active) {
+  vpSetText(`lib-dd-${name}-label`, label);
+  document.querySelector(`[data-lib-dd-trigger='${name}']`)?.classList.toggle("is-active", Boolean(active));
 }
 
-function renderVarPackagesFilterBar() {
-  const setText = (id, value) => {
-    const node = $(id);
-    if (node) node.textContent = value;
-  };
-  ["size", "creator", "favorites"].forEach((field) => {
-    const fieldLabel = varPackageFilterFieldLabel(field);
-    const value = varPackageFilterDisplayValue(field);
-    const active = isVarPackageFilterActive(field);
-    setText(
-      `var-packages-filter-${field}-label`,
-      active ? t("varPackagesFilterChip", fieldLabel, value) : fieldLabel
-    );
-    const trigger = document.querySelector(`[data-vp-trigger='${field}']`);
-    if (trigger) {
-      trigger.classList.toggle("is-active", active);
-    }
+function libCloseDropdowns(except = null) {
+  document.querySelectorAll("[data-lib-dd-menu]").forEach((menu) => {
+    if (menu.getAttribute("data-lib-dd-menu") === except) return;
+    menu.classList.add("hidden");
   });
-  // The Scene image filter is a checkbox, not a dropdown: checked = only
-  // packages with a Saves/scene image. Synced here so Clear All resets it.
-  setText("var-packages-filter-scene-label", t("varPackagesFilterScene"));
-  const sceneCheck = $("var-packages-filter-scene");
-  if (sceneCheck) {
-    const on = state.varPackagesFilters?.scene === "with";
-    sceneCheck.checked = on;
-    sceneCheck.closest(".vp-filter-check")?.classList.toggle("is-active", on);
+  document.querySelectorAll("[data-lib-dd-trigger].is-open").forEach((trigger) => {
+    if (trigger.getAttribute("data-lib-dd-trigger") !== except) trigger.classList.remove("is-open");
+  });
+}
+
+function libToggleDropdown(name) {
+  const menu = document.querySelector(`[data-lib-dd-menu='${name}']`);
+  const trigger = document.querySelector(`[data-lib-dd-trigger='${name}']`);
+  if (!menu || !trigger) return;
+  const open = menu.classList.contains("hidden");
+  libCloseDropdowns(name);
+  menu.classList.toggle("hidden", !open);
+  trigger.classList.toggle("is-open", open);
+  if (open && name === "author") {
+    const input = $("lib-author-input");
+    if (input) {
+      input.value = "";
+      LIB_AC.active = -1;
+      libRenderAuthorPopup();
+      input.focus();
+    }
   }
-  // Sort chip. There is always a sort, so the chip always reads "Sort: <key>"
-  // and always looks active — unlike the filters, which fall back to a bare
-  // field name. The direction rides along as a text arrow (the same trick
-  // renderUrSortPills uses; the label is rebuilt from scratch each time, so
-  // arrows can't accumulate).
-  const sort = state.varPackagesSort ?? { key: "name", dir: "asc" };
-  const sortLabel =
-    varPackagesSortOptions().find((o) => o.value === sort.key)?.label ??
-    t("varPackagesSortName");
-  const arrow = sort.dir === "asc" ? " ▲" : " ▼";
-  setText(
-    "var-packages-filter-sort-label",
-    `${t("varPackagesFilterChip", t("varPackagesFilterSort"), sortLabel)}${arrow}`
+}
+
+// The filter bar: one dropdown per filter (Status / Type / Enabled lists carry
+// facet counts), the Author autocomplete, and Sort. Rebuilt after every listing.
+function renderVarPackagesFilterBar() {
+  const f = state.varPackagesFilters ?? emptyVarPackageFilters();
+  const facets = state.varPackagesFacets;
+
+  const statusList = $("lib-status-list");
+  if (statusList) {
+    statusList.innerHTML = LIB_STATUSES.map((s) =>
+      libListRowHtml({
+        value: s.key,
+        label: s.label,
+        title: s.title,
+        indent: s.indent,
+        selected: (f.status ?? null) === s.key,
+        count: facets ? facets.statuses?.[s.count ?? s.key] : null,
+      }),
+    ).join("");
+  }
+  const status = LIB_STATUSES.find((s) => s.key === (f.status ?? null));
+  libSetDropdown("status", f.status ? status?.label ?? f.status : "Status: All", Boolean(f.status));
+
+  const typeList = $("lib-type-list");
+  if (typeList) {
+    const all = facets
+      ? Object.values(facets.types ?? {}).reduce((sum, n) => sum + Number(n || 0), 0)
+      : null;
+    typeList.innerHTML =
+      libListRowHtml({ value: null, label: "All types", selected: !f.pkgType, count: all }) +
+      LIB_TYPES.map((type) =>
+        libListRowHtml({
+          value: type.key,
+          label: type.label,
+          dot: type.color,
+          selected: f.pkgType === type.key,
+          count: facets ? facets.types?.[type.key] ?? 0 : null,
+        }),
+      ).join("");
+  }
+  const type = f.pkgType ? LIB_TYPE_BY_KEY[f.pkgType] : null;
+  libSetDropdown("type", type ? type.label : "Type", Boolean(type));
+  const typeDot = $("lib-dd-type-dot");
+  if (typeDot) {
+    typeDot.classList.toggle("hidden", !type);
+    if (type) typeDot.style.setProperty("--dot", type.color);
+  }
+
+  const enabledList = $("lib-enabled-list");
+  if (enabledList) {
+    const en = facets ? Number(facets.enabled || 0) : null;
+    const dis = facets ? Number(facets.disabled || 0) : null;
+    enabledList.innerHTML = [
+      { value: null, label: "All", count: facets ? en + dis : null },
+      { value: "enabled", label: "Enabled", count: en },
+      { value: "disabled", label: "Disabled", count: dis, title: "Have a .disabled marker — VaM skips them" },
+    ]
+      .map((row) => libListRowHtml({ ...row, selected: (f.enabled ?? null) === row.value }))
+      .join("");
+  }
+  libSetDropdown(
+    "enabled",
+    f.enabled === "enabled" ? "Enabled only" : f.enabled === "disabled" ? "Disabled only" : "Enabled",
+    Boolean(f.enabled),
   );
-  document.querySelector("[data-vp-trigger='sort']")?.classList.add("is-active");
 
-  const clearBtn = $("var-packages-filter-clear");
-  if (clearBtn) {
-    clearBtn.classList.toggle(
-      "hidden",
-      activeVarPackageFilterCount(state.varPackagesFilters) === 0
-    );
+  const chips = $("lib-author-chips");
+  if (chips) {
+    chips.classList.toggle("hidden", !f.creator);
+    chips.innerHTML = f.creator
+      ? `<button type="button" class="lib-filter-chip" data-lib-clear-author title="Clear author filter">
+           ${escapeHtml(f.creator)}<span class="material-symbols-outlined">close</span></button>`
+      : "";
   }
-  populateVarPackagesFilterMenus();
+  libSetDropdown("author", f.creator ? `by ${f.creator}` : "Author", Boolean(f.creator));
+
+  const pickList = (id, options, current) => {
+    const el = $(id);
+    if (el) {
+      el.innerHTML = options
+        .map((o) => libListRowHtml({ value: o.value, label: o.label, selected: (current ?? null) === o.value }))
+        .join("");
+    }
+  };
+  pickList("lib-size-list", LIB_SIZE_OPTIONS, f.sizeBucket);
+  libSetDropdown(
+    "size",
+    f.sizeBucket ? LIB_SIZE_OPTIONS.find((o) => o.value === f.sizeBucket)?.label ?? "Size" : "Size",
+    Boolean(f.sizeBucket),
+  );
+  pickList("lib-scene-list", LIB_SCENE_OPTIONS, f.scene);
+  libSetDropdown(
+    "scene",
+    f.scene ? LIB_SCENE_OPTIONS.find((o) => o.value === f.scene)?.label ?? "Scene image" : "Scene image",
+    Boolean(f.scene),
+  );
+
+  const sort = state.varPackagesSort ?? { key: "type", dir: "asc" };
+  pickList("lib-sort-list", LIB_SORT_OPTIONS, sort.key);
+  libSetDropdown("sort", `Sort: ${LIB_SORT_OPTIONS.find((o) => o.value === sort.key)?.label ?? sort.key}`, false);
+  const dirIcon = document.querySelector("#lib-sort-dir .material-symbols-outlined");
+  if (dirIcon) dirIcon.textContent = sort.dir === "asc" ? "arrow_upward" : "arrow_downward";
+
+  const hasSearch = Boolean(String(state.varPackagesFilter ?? "").trim());
+  $("lib-search-clear")?.classList.toggle("hidden", !hasSearch);
+  $("lib-search")?.classList.toggle("has-value", hasSearch);
+  $("lib-search-legend")?.classList.toggle("is-available", !hasSearch);
+  libRenderToolbar();
 }
 
-function populateVarPackagesFilterMenus() {
-  populateMenuOptions("size", varPackagesSizeOptions());
-  populateMenuOptions("favorites", varPackagesFavoritesOptions());
-  populateMenuOptions("sort", varPackagesSortOptions());
-  populateCreatorMenu();
-}
-
-function varPackagesFavoritesOptions() {
-  return [
-    { value: null, label: t("varPackagesFilterAll") },
-    { value: "only", label: t("varPackagesFavoritesOnly") },
-  ];
-}
-
-function varPackagesSizeOptions() {
-  return [
-    { value: null, label: t("varPackagesFilterAll") },
-    { value: "sm", label: t("varPackagesSizeSmall") },
-    { value: "md", label: t("varPackagesSizeMedium") },
-    { value: "lg", label: t("varPackagesSizeLarge") },
-  ];
-}
-
-function varPackagesSortOptions() {
-  return [
-    { value: "name", label: t("varPackagesSortName") },
-    { value: "size", label: t("varPackagesSortSize") },
-    { value: "modified", label: t("varPackagesSortModified") },
-  ];
-}
-
-// Direction a key gets when first picked: names read naturally A->Z, while
-// sizes and dates are asked about "biggest"/"newest" first. Same rule as the
-// Reclaim Space table's header sort.
+// Direction a key gets when first picked: names and types read naturally
+// ascending, while sizes, counts and dates are asked about "biggest"/"newest".
 function varPackagesSortDefaultDir(key) {
-  return key === "name" ? "asc" : "desc";
+  return key === "name" || key === "type" ? "asc" : "desc";
 }
 
-// Re-picking the active key flips direction; a new key adopts its default.
-function setVarPackagesSort(key) {
-  const next = String(key ?? "name");
-  const current = state.varPackagesSort ?? { key: "name", dir: "asc" };
-  if (current.key === next) {
+function setVarPackagesSort(key, { flip = false } = {}) {
+  const next = String(key ?? "type");
+  const current = state.varPackagesSort ?? { key: "type", dir: "asc" };
+  if (flip || current.key === next) {
     state.varPackagesSort = { key: next, dir: current.dir === "asc" ? "desc" : "asc" };
   } else {
     state.varPackagesSort = { key: next, dir: varPackagesSortDefaultDir(next) };
   }
-  // A reorder invalidates the current page offset — go back to page 1.
-  state.varPackagesPage = 0;
   renderVarPackagesFilterBar();
-  if (state.varPackagesMode === "database") {
-    refreshVarPackagesFromDb();
-  } else {
-    // Not a rescan: sort is not part of the Rust folder-cache key, so this is
-    // served from the cached scan with no disk walk.
-    refreshVarPackagesFromFolder({ forceRescan: false });
-  }
+  // Not a rescan: sort is not part of the Rust folder-cache key, so this is
+  // served from the cached scan with no disk walk.
+  refreshVarPackagesFromFolder({ forceRescan: false });
 }
 
-// The wire format for both list commands. Always sent — the backend defaults
-// to name/asc for anything unrecognised, so this is also the safe fallback.
+// The wire format for list_var_packages. Always sent — the backend defaults to
+// name/asc for anything unrecognised, so this is also the safe fallback.
 function varPackagesSortArgs() {
   const s = state.varPackagesSort ?? {};
-  return { sort: s.key || "name", sortDir: s.dir === "desc" ? "desc" : "asc" };
+  return { sort: s.key || "type", sortDir: s.dir === "desc" ? "desc" : "asc" };
 }
 
-function populateMenuOptions(field, options) {
-  const menu = document.querySelector(`[data-vp-menu='${field}']`);
-  if (!menu) return;
-  const stateField = field === "size" ? "sizeBucket" : field;
-  // Sort lives outside varPackagesFilters, so its active marker reads from its
-  // own state slice.
-  const current =
-    field === "sort"
-      ? state.varPackagesSort?.key ?? "name"
-      : state.varPackagesFilters?.[stateField] ?? null;
-  menu.innerHTML = options
-    .map((opt) => {
-      const isActive = (opt.value ?? null) === (current ?? null);
-      const dataValue = opt.value == null ? "" : escapeAttribute(String(opt.value));
-      const disabledAttr = opt.disabled ? " disabled" : "";
-      return `<button type="button" class="vp-filter-menu-item${
-        isActive ? " is-active" : ""
-      }${opt.disabled ? " is-disabled" : ""}" data-vp-menu-value="${dataValue}"${disabledAttr}>${escapeHtml(
-        opt.label
-      )}</button>`;
-    })
-    .join("");
-}
+// ---- Author autocomplete ----------------------------------------------------
 
-function populateCreatorMenu() {
-  const list = state.varPackagesFilterOptions?.creators ?? [];
-  const query = String(state.varPackagesCreatorMenuQuery ?? "").trim().toLowerCase();
-  const filtered = query
-    ? list.filter((name) => name.toLowerCase().includes(query))
-    : list.slice();
-  const opts = [{ value: null, label: t("varPackagesFilterAll") }];
-  for (const name of filtered) opts.push({ value: name, label: name });
-  if (filtered.length === 0) {
-    opts.push({ value: null, label: t("varPackagesFilterEmpty"), disabled: true });
+const LIB_AC = { active: -1, matches: [] };
+
+// The list inside the Author dropdown: every scanned creator, narrowed by
+// what's typed (prefix matches first).
+function libRenderAuthorPopup() {
+  const input = $("lib-author-input");
+  const popup = $("lib-author-popup");
+  if (!input || !popup) return;
+  const query = input.value.trim().toLowerCase();
+  const creators = state.varPackagesFilterOptions?.creators ?? [];
+  const starts = [];
+  const contains = [];
+  for (const name of creators) {
+    const lower = name.toLowerCase();
+    if (!query || lower.startsWith(query)) starts.push(name);
+    else if (lower.includes(query)) contains.push(name);
   }
-  const menuList = document.querySelector("[data-vp-menu-list='creator']");
-  if (!menuList) return;
+  LIB_AC.matches = [...starts, ...contains].slice(0, 200);
+  if (LIB_AC.active >= LIB_AC.matches.length) LIB_AC.active = LIB_AC.matches.length - 1;
   const current = state.varPackagesFilters?.creator ?? null;
-  menuList.innerHTML = opts
-    .map((opt) => {
-      const isActive = (opt.value ?? null) === (current ?? null);
-      const dataValue = opt.value == null ? "" : escapeAttribute(String(opt.value));
-      const disabledAttr = opt.disabled ? " disabled" : "";
-      return `<button type="button" class="vp-filter-menu-item${
-        isActive ? " is-active" : ""
-      }${opt.disabled ? " is-disabled" : ""}" data-vp-menu-value="${dataValue}"${disabledAttr}>${escapeHtml(
-        opt.label
-      )}</button>`;
-    })
-    .join("");
+  popup.innerHTML = LIB_AC.matches.length
+    ? LIB_AC.matches
+        .map(
+          (name, i) =>
+            `<button type="button" class="lib-ac-option${i === LIB_AC.active ? " is-active" : ""}${
+              name === current ? " is-current" : ""
+            }" data-lib-author-pick="${escapeAttribute(name)}">${escapeHtml(name)}</button>`,
+        )
+        .join("")
+    : `<div class="lib-ac-empty">${creators.length ? "No matching authors" : "Scan a folder to list its authors"}</div>`;
+  popup.querySelector(".lib-ac-option.is-active")?.scrollIntoView({ block: "nearest" });
 }
 
-function closeAllVarPackagesFilterMenus() {
-  document.querySelectorAll(".vp-filter-menu").forEach((m) => m.classList.add("hidden"));
-  document
-    .querySelectorAll(".vp-filter-trigger.is-open")
-    .forEach((t) => t.classList.remove("is-open"));
+function libPickAuthor(name) {
+  const input = $("lib-author-input");
+  if (input) input.value = "";
+  LIB_AC.active = -1;
+  libCloseDropdowns();
+  setVarPackagesFilter("creator", name || null);
 }
 
-function toggleVarPackagesFilterMenu(field) {
-  const menu = document.querySelector(`[data-vp-menu='${field}']`);
-  const trigger = document.querySelector(`[data-vp-trigger='${field}']`);
-  if (!menu || !trigger) return;
-  const willOpen = menu.classList.contains("hidden");
-  closeAllVarPackagesFilterMenus();
-  if (willOpen) {
-    menu.classList.remove("hidden");
-    trigger.classList.add("is-open");
-    if (field === "creator") {
-      const search = document.querySelector("[data-vp-menu-search='creator']");
-      if (search) {
-        search.value = state.varPackagesCreatorMenuQuery ?? "";
-        search.focus();
-      }
-    }
-  }
+// Extra VAR folders live in a dropdown on the top bar; its trigger shows how
+// many there are.
+function libRenderFoldersBadge() {
+  const n = getAdditionalDirs("varPackages").length;
+  vpSetText("lib-folders-label", n ? `+${n} folder${n === 1 ? "" : "s"}` : "Folders");
+  document.querySelector("[data-lib-dd-trigger='folders']")?.classList.toggle("is-active", n > 0);
 }
 
-function applyVarPackagesModeUi() {
-  const isDb = state.varPackagesMode === "database";
-  const folderControls = $("var-packages-folder-controls");
-  const dbControls = $("var-packages-db-controls");
-  const folderBtn = $("var-packages-mode-folders");
-  const dbBtn = $("var-packages-mode-database");
-  if (folderControls) folderControls.classList.toggle("hidden", isDb);
-  if (dbControls) dbControls.classList.toggle("hidden", !isDb);
-  if (folderBtn) {
-    folderBtn.classList.toggle("active", !isDb);
-    folderBtn.setAttribute("aria-selected", String(!isDb));
-  }
-  if (dbBtn) {
-    dbBtn.classList.toggle("active", isDb);
-    dbBtn.setAttribute("aria-selected", String(isDb));
-  }
-}
-
-// --- Scan depth (VAR Folders mode) -----------------------------------------
+// --- Scan depth (VAR Folders) -------------------------------------------------
 // Deep walks every subfolder of the chosen folders; Normal lists only the .var
-// files sitting directly in them. Deep is the default and the behavior this page
-// has always had.
+// files sitting directly in them. Deep is the default.
 
 function applyVarPackagesDepthUi() {
   const deep = state.varPackagesDeepScan !== false;
@@ -8774,8 +10160,7 @@ function applyVarPackagesDepthUi() {
   }
 
   // The switch only takes effect on the next Scan, so say so while the listing
-  // on screen was built with the other depth — otherwise the grid would just
-  // look wrong with no explanation.
+  // on screen was built with the other depth.
   const pending =
     state.varPackagesDeepScan !== state.varPackagesScannedDeep &&
     (state.varPackagesItems?.length ?? 0) > 0;
@@ -8784,15 +10169,15 @@ function applyVarPackagesDepthUi() {
   vpSetText(
     "var-packages-depth-hint",
     pending
-      ? "Click Scan Directory to apply."
+      ? "Click Scan to apply."
       : deep
         ? "Includes .var files inside subfolders."
-        : "Only .var files directly in the folder — subfolders are skipped.",
+        : "Only .var files directly in the folder.",
   );
 }
 
 /// Moves the switch. Deliberately does NOT rescan — scanning happens only when
-/// the user clicks Scan Directory.
+/// the user clicks Scan.
 function setVarPackagesDeepScan(deep) {
   if (state.varPackagesDeepScan === deep) return;
   state.varPackagesDeepScan = deep;
@@ -8800,32 +10185,342 @@ function setVarPackagesDeepScan(deep) {
   persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
 }
 
-function setVarPackagesMode(mode) {
-  if (state.varPackagesMode === mode) return;
-  state.varPackagesMode = mode;
-  state.varPackagesItems = [];
-  state.varPackagesTotal = 0;
-  state.varPackagesPage = 0;
-  // Folder and DB listings are different universes of paths — a selection
-  // carried across would silently target the wrong copies.
-  vpClearSelection();
-  // The Creator menu is scoped per mode (scanned folder vs whole DB), so it has
-  // to be reloaded here. Filter SELECTIONS are deliberately kept — but a creator
-  // picked in one mode may not exist in the other's menu, in which case the grid
-  // comes back empty until the user clears it.
-  // Clearing the key makes the next folder listing re-derive the menu, so a
-  // round trip through database mode can't leave DB creators on a folder listing.
-  state.varPackagesFilterOptionsKey = null;
-  loadVarPackagesFilterOptions();
-  applyVarPackagesModeUi();
-  renderVarPackagesFilterBar();
-  renderVarPackages();
-  refreshVarPackagesView();
-}
-
 window.__refreshVarPackagesView = () => {
   refreshVarPackagesView();
 };
+
+// ============================================================
+// Database page — tabs, and the Packages tab
+//
+// The Packages tab lists every package row in the local database. It used to
+// be the VAR Packages page's "Database" mode; it lives here now so VAR Packages
+// is purely the folder library. Paginated server-side by
+// `list_var_packages_from_db`; status = whether the indexed file is still on
+// disk (`indexed` means "on disk" for these rows).
+// ============================================================
+
+const DB_PKGS_PAGE_SIZE = 50;
+const dbPkgs = {
+  tab: "build",
+  items: [],
+  total: 0,
+  page: 0,
+  loading: false,
+  requery: false,
+  loadedOnce: false,
+  search: "",
+  filters: { status: null, sizeBucket: null, creator: null, favorite: false },
+  sort: { key: "name", dir: "asc" },
+};
+
+function setDatabaseTab(tab) {
+  dbPkgs.tab = tab === "packages" ? "packages" : "build";
+  document.querySelectorAll("[data-db-tab]").forEach((btn) => {
+    const on = btn.getAttribute("data-db-tab") === dbPkgs.tab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", String(on));
+  });
+  $("db-tab-panel-build")?.classList.toggle("hidden", dbPkgs.tab !== "build");
+  $("db-tab-panel-packages")?.classList.toggle("hidden", dbPkgs.tab !== "packages");
+  if (dbPkgs.tab === "packages") {
+    if (!dbPkgs.loadedOnce) dbPkgsLoadCreators();
+    dbPkgsRefresh();
+  }
+}
+
+function dbPkgsVisible() {
+  const view = $("build-db-view");
+  return Boolean(view && !view.classList.contains("hidden") && dbPkgs.tab === "packages");
+}
+
+// Called after library mutations and on entering the Database page.
+function dbPkgsRefreshIfVisible() {
+  if (dbPkgsVisible()) dbPkgsRefresh();
+}
+
+window.__refreshDatabasePackages = dbPkgsRefreshIfVisible;
+
+function dbPkgsSerializeFilters() {
+  const f = dbPkgs.filters;
+  const payload = {};
+  if (f.status) payload.status = f.status;
+  if (f.sizeBucket) payload.sizeBucket = f.sizeBucket;
+  if (f.creator) payload.creator = f.creator;
+  if (f.favorite) payload.favorite = true;
+  return Object.keys(payload).length ? payload : null;
+}
+
+async function dbPkgsRefresh() {
+  if (!invoke) return;
+  if (dbPkgs.loading) {
+    dbPkgs.requery = true;
+    return;
+  }
+  dbPkgs.loading = true;
+  dbPkgsRender();
+  const btn = $("db-pkgs-refresh");
+  if (btn) btn.disabled = true;
+  try {
+    const page = await invoke("list_var_packages_from_db", {
+      offset: dbPkgs.page * DB_PKGS_PAGE_SIZE,
+      limit: DB_PKGS_PAGE_SIZE,
+      search: dbPkgs.search.trim() || null,
+      filters: dbPkgsSerializeFilters(),
+      sort: dbPkgs.sort.key,
+      sortDir: dbPkgs.sort.dir,
+    });
+    dbPkgs.items = Array.isArray(page?.items) ? page.items : [];
+    dbPkgs.total = Math.max(0, Number(page?.total ?? 0));
+    const pages = Math.max(1, Math.ceil(dbPkgs.total / DB_PKGS_PAGE_SIZE));
+    if (dbPkgs.page >= pages) {
+      dbPkgs.page = pages - 1;
+      dbPkgs.requery = dbPkgs.total > 0;
+    }
+    dbPkgs.loadedOnce = true;
+  } catch (error) {
+    dbPkgs.items = [];
+    dbPkgs.total = 0;
+    addLog(t("varPackagesDbFailed", String(error)));
+  } finally {
+    dbPkgs.loading = false;
+    if (btn) btn.disabled = false;
+    dbPkgsRender();
+    if (dbPkgs.requery) {
+      dbPkgs.requery = false;
+      dbPkgsRefresh();
+    }
+  }
+}
+
+async function dbPkgsLoadCreators() {
+  if (!invoke) return;
+  try {
+    const opts = await invoke("list_var_package_filter_options", { scope: null });
+    const list = $("db-pkgs-creators");
+    if (list) {
+      list.innerHTML = (opts?.creators ?? [])
+        .map((name) => `<option value="${escapeAttribute(name)}"></option>`)
+        .join("");
+    }
+  } catch (error) {
+    addLog(t("varPackagesFilterOptionsFailed", String(error)));
+  }
+}
+
+function dbPkgsRender() {
+  const tbody = $("db-pkgs-tbody");
+  if (!tbody) return;
+  $("db-pkgs-progress")?.classList.toggle("hidden", !dbPkgs.loading);
+  vpSetText("db-pkgs-count", t("varPackagesCount", dbPkgs.total));
+  const dirIcon = document.querySelector("#db-pkgs-sort-dir .material-symbols-outlined");
+  if (dirIcon) dirIcon.textContent = dbPkgs.sort.dir === "asc" ? "arrow_upward" : "arrow_downward";
+
+  const message = (text) => {
+    tbody.innerHTML = `<tr class="var-packages-empty-row"><td colspan="6">${escapeHtml(text)}</td></tr>`;
+  };
+  if (dbPkgs.loading && !dbPkgs.items.length) {
+    message(t("varPackagesLoadingDb"));
+    dbPkgsRenderPagination();
+    return;
+  }
+  if (!dbPkgs.items.length) {
+    const filtered = dbPkgs.search.trim() || dbPkgsSerializeFilters();
+    message(filtered ? t("varPackagesNoResults") : "The database has no packages yet — build it from the Build tab.");
+    dbPkgsRenderPagination();
+    return;
+  }
+  tbody.innerHTML = dbPkgs.items
+    .map((it) => {
+      const onDisk = Boolean(it.indexed);
+      const fav = _favoritePackages.has(it.package_id);
+      const fp = it.file_path ?? "";
+      return `
+        <tr data-package-id="${escapeAttribute(it.package_id ?? "")}" data-file-path="${escapeAttribute(fp)}"
+            title="${escapeAttribute(fp)}">
+          <td class="vp-col-status">
+            <span class="vp-status ${onDisk ? "is-indexed" : "is-unindexed"}">
+              <span class="vp-status-dot"></span>
+              <span>${escapeHtml(t(onDisk ? "varPackagesStatusOnDisk" : "varPackagesStatusMissing"))}</span>
+            </span>
+          </td>
+          <td class="vp-col-name vp-cell-name">${escapeHtml(it.file_name ?? "")}</td>
+          <td class="vp-col-creator">${escapeHtml(it.creator || "—")}</td>
+          <td class="vp-col-size vp-cell-size">${escapeHtml(formatBytesLocal(it.size_bytes))}</td>
+          <td class="vp-col-modified vp-cell-modified">${escapeHtml(formatVarModifiedMs(it.modified_ms))}</td>
+          <td class="vp-col-actions">
+            <button class="icon-button vp-row-fav${fav ? " is-active" : ""}" type="button"
+                    data-db-fav="${escapeAttribute(it.package_id ?? "")}" aria-pressed="${fav}"
+                    title="${fav ? "Remove from favorites" : "Add to favorites"}">
+              <span class="material-symbols-outlined">star</span>
+            </button>
+            <button class="icon-button vp-row-images" type="button" data-db-images="${escapeAttribute(fp)}"
+                    ${onDisk ? "" : "disabled"} title="${onDisk ? "View images" : "The file is already gone from disk"}">
+              <span class="material-symbols-outlined">photo_library</span>
+            </button>
+            <button class="icon-button vp-row-delete" type="button" data-db-delete="${escapeAttribute(fp)}"
+                    ${onDisk ? "" : "disabled"} title="${onDisk ? "Send to Recycle Bin" : "The file is already gone from disk"}">
+              <span class="material-symbols-outlined">delete</span>
+            </button>
+          </td>
+        </tr>`;
+    })
+    .join("");
+  dbPkgsRenderPagination();
+}
+
+function dbPkgsRenderPagination() {
+  const pagination = $("db-pkgs-pagination");
+  const summary = $("db-pkgs-pagination-summary");
+  const controls = $("db-pkgs-pagination-controls");
+  if (!pagination || !summary || !controls) return;
+  if (dbPkgs.total === 0) {
+    pagination.classList.add("hidden");
+    return;
+  }
+  pagination.classList.remove("hidden");
+  const pages = Math.max(1, Math.ceil(dbPkgs.total / DB_PKGS_PAGE_SIZE));
+  const current = Math.min(dbPkgs.page, pages - 1);
+  const start = current * DB_PKGS_PAGE_SIZE + 1;
+  const end = Math.min(dbPkgs.total, (current + 1) * DB_PKGS_PAGE_SIZE);
+  summary.textContent = t("varPackagesPageSummary", start, end, dbPkgs.total);
+  if (pages <= 1) {
+    controls.innerHTML = "";
+    return;
+  }
+  controls.innerHTML = `
+    <button class="page-nav-button" data-db-page="${current - 1}" type="button" ${current === 0 ? "disabled" : ""}>
+      <span class="material-symbols-outlined">chevron_left</span>${escapeHtml(t("varPackagesPagePrev"))}
+    </button>
+    <div class="page-numbers">${buildPageNumbers(pages, current)
+      .map((p) =>
+        p === "ellipsis"
+          ? `<span class="page-ellipsis">…</span>`
+          : `<button class="page-button ${p === current ? "active" : ""}" data-db-page="${p}" type="button">${p + 1}</button>`,
+      )
+      .join("")}</div>
+    <button class="page-nav-button" data-db-page="${current + 1}" type="button" ${current >= pages - 1 ? "disabled" : ""}>
+      ${escapeHtml(t("varPackagesPageNext"))}<span class="material-symbols-outlined">chevron_right</span>
+    </button>`;
+}
+
+function dbPkgsItem(row) {
+  const fp = row?.getAttribute("data-file-path");
+  return dbPkgs.items.find((it) => it.file_path === fp) ?? null;
+}
+
+function setupDatabasePackages() {
+  document.querySelectorAll("[data-db-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => setDatabaseTab(btn.getAttribute("data-db-tab")));
+  });
+
+  const requery = () => {
+    dbPkgs.page = 0;
+    dbPkgsRefresh();
+  };
+  const search = $("db-pkgs-search");
+  let timer = null;
+  search?.addEventListener("input", () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (dbPkgs.search === search.value) return;
+      dbPkgs.search = search.value;
+      requery();
+    }, 180);
+  });
+  $("db-pkgs-status")?.addEventListener("change", (e) => {
+    dbPkgs.filters.status = e.target.value || null;
+    requery();
+  });
+  $("db-pkgs-size")?.addEventListener("change", (e) => {
+    dbPkgs.filters.sizeBucket = e.target.value || null;
+    requery();
+  });
+  $("db-pkgs-creator")?.addEventListener("change", (e) => {
+    dbPkgs.filters.creator = e.target.value.trim() || null;
+    requery();
+  });
+  $("db-pkgs-fav")?.addEventListener("change", (e) => {
+    dbPkgs.filters.favorite = e.target.checked;
+    requery();
+  });
+  $("db-pkgs-sort")?.addEventListener("change", (e) => {
+    const key = e.target.value || "name";
+    dbPkgs.sort = { key, dir: key === "name" ? "asc" : "desc" };
+    requery();
+  });
+  $("db-pkgs-sort-dir")?.addEventListener("click", () => {
+    dbPkgs.sort = { ...dbPkgs.sort, dir: dbPkgs.sort.dir === "asc" ? "desc" : "asc" };
+    requery();
+  });
+  $("db-pkgs-refresh")?.addEventListener("click", () => {
+    dbPkgsLoadCreators();
+    dbPkgsRefresh();
+  });
+  $("db-pkgs-pagination-controls")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-db-page]");
+    if (!btn || btn.disabled) return;
+    dbPkgs.page = Math.max(0, Number(btn.getAttribute("data-db-page")) || 0);
+    dbPkgsRefresh();
+  });
+
+  const tbody = $("db-pkgs-tbody");
+  tbody?.addEventListener("click", (event) => {
+    const fav = event.target.closest("[data-db-fav]");
+    if (fav) {
+      togglePackageFavorite(fav.getAttribute("data-db-fav"));
+      return;
+    }
+    const images = event.target.closest("[data-db-images]");
+    if (images) {
+      vpImagesOpen(images.getAttribute("data-db-images"));
+      return;
+    }
+    const del = event.target.closest("[data-db-delete]");
+    if (del) {
+      vpDeleteOne(del.getAttribute("data-db-delete"), del).catch((e) => addLog(`Database: ${String(e)}`));
+      return;
+    }
+    const item = dbPkgsItem(event.target.closest("tr[data-file-path]"));
+    if (item) openVarDetailsView(item, "db");
+  });
+  tbody?.addEventListener("contextmenu", (event) => {
+    const item = dbPkgsItem(event.target.closest("tr[data-file-path]"));
+    if (!item) return;
+    event.preventDefault();
+    const onDisk = Boolean(item.indexed);
+    showContextMenu(event.clientX, event.clientY, [
+      { label: "Open Details", action: () => openVarDetailsView(item, "db") },
+      ...(onDisk
+        ? [
+            {
+              label: "Show in Explorer",
+              action: () =>
+                invoke("show_in_explorer", { path: item.file_path }).catch((e) => addLog(`Database: ${String(e)}`)),
+            },
+            { label: t("varPackagesImagesOpen"), action: () => vpImagesOpen(item.file_path) },
+          ]
+        : []),
+      {
+        label: _favoritePackages.has(item.package_id) ? "Remove from favorites" : "Add to favorites",
+        action: () => togglePackageFavorite(item.package_id),
+      },
+      {
+        label: t("varPackagesRowCopyPath"),
+        action: () => navigator.clipboard?.writeText(item.file_path ?? "").catch(() => {}),
+      },
+      ...(onDisk
+        ? [
+            { separator: true },
+            {
+              label: "Delete (Recycle Bin)",
+              danger: true,
+              action: () => vpDeleteOne(item.file_path, null).catch((e) => addLog(`Database: ${String(e)}`)),
+            },
+          ]
+        : []),
+    ]);
+  });
+}
 
 function renderModeControls() {
   if (state.currentPage === "db-find") return dbfRenderModeControls();
@@ -9779,7 +11474,7 @@ async function openSourceRowInVarDetails(packageId, packageFile, sourceType) {
   }
 
   const source = cached
-    ? (state.varPackagesMode === "database" ? "db" : "folder")
+    ? "folder"
     : (sourceType === "db" ? "db" : (packageFile ? "local" : "db"));
   const item = cached ?? {
     package_id: packageId,
@@ -10930,9 +12625,10 @@ async function startScan() {
 // dbfAugmentScanWithAllTargetResources.
 
 async function startBuildDbScan() {
-  const inputDir = $("input-dir").value.trim();
+  const inputDir = vamAddonPackagesDir();
   if (!inputDir) {
-    addLog(t("missingPath"));
+    showToast("Set your VaM directory in Settings first.", "error");
+    openVamDirSettings();
     return;
   }
   if (!invoke) {
@@ -10941,10 +12637,13 @@ async function startBuildDbScan() {
 
   state.targetVarPath = "";
   state.targetPackageId = null;
+  // AddonPackages plus the extra folders from Settings (and any legacy
+  // Overview list); the backend dedupes overlapping roots.
+  const extra = [...new Set([...getScanAdditionalDirs(), ...getAdditionalDirs("downloadVars")])];
   const handle = await invoke("start_scan_task", {
     request: {
       input_dir: inputDir,
-      additional_input_dirs: getScanAdditionalDirs(),
+      additional_input_dirs: extra,
       target_var_path: null,
       index_only: true,
     },
@@ -11358,6 +13057,10 @@ async function initConfig() {
 
 function applyConfigToInputs(config) {
   if (!config) return;
+  state.vamDir =
+    typeof config.vam_dir === "string" && config.vam_dir.trim()
+      ? config.vam_dir.trim()
+      : vamDirFromLegacyConfig(config);
   const setVal = (id, val) => {
     const el = $(id);
     if (el && typeof val === "string") el.value = val;
@@ -11490,12 +13193,18 @@ function applyConfigToInputs(config) {
     if (mrReplace) mrReplace.checked = !!state.missingResources.replaceInPlace;
     if (mrBackup && mrReplace) mrBackup.disabled = !mrReplace.checked;
   }
+
+  // Last: every page's VAR folder is AddonPackages under the VaM directory,
+  // whatever per-page folder an older config remembered.
+  applyVamDir();
+  refreshVamDirInfo();
 }
 
 function buildCurrentConfig() {
   return {
     language: state.language,
     theme: state.theme,
+    vam_dir: vamDir() || null,
     input_dir: ($("input-dir")?.value || "").trim() || null,
     scan_additional_dirs: getScanAdditionalDirs().length ? getScanAdditionalDirs() : null,
     var_details_additional_dirs: getAdditionalDirs("varDetails").length
@@ -11587,6 +13296,255 @@ async function chooseFolder(targetId) {
 }
 
 // =====================================================================
+// VaM directory — set once in Settings, as in VaM Backstage.
+//
+// `<VaM>\AddonPackages` (the folder VaM itself loads) is the VAR folder for
+// every page. The pages still read their old per-page folder fields, which
+// are now hidden inputs kept equal to AddonPackages by applyVamDir(); what
+// the user sees is a read-only [data-vam-source] line with a link to
+// Settings. Each page's own "Add folder" list still adds extra scan folders.
+// =====================================================================
+
+const VAM_FOLDER_FIELDS = [
+  "dbf-input-dir",
+  "build-db-input-dir",
+  "build-db-backfill-input",
+  "var-packages-input-dir",
+  "var-details-folder-input",
+  "reclaim-folder-input",
+  "ur-folder-input",
+  "missing-input-dir",
+  "internalize-input-dir",
+  "settings-input-dir",
+  "settings-library-folder",
+];
+
+function vamDir() {
+  return String(state.vamDir ?? "").trim();
+}
+
+function vamJoin(dir, name) {
+  const base = String(dir).replace(/[\\/]+$/, "");
+  const sep = base.includes("/") && !base.includes("\\") ? "/" : "\\";
+  return `${base}${sep}${name}`;
+}
+
+function vamAddonPackagesDir() {
+  const dir = vamDir();
+  return dir ? vamJoin(dir, "AddonPackages") : "";
+}
+
+// Older configs only know per-page VAR folders. Any of them that IS an
+// AddonPackages folder names the VaM directory (its parent).
+function vamDirFromLegacyConfig(config) {
+  const candidates = [
+    config?.download_vars_folder,
+    config?.var_packages_input_dir,
+    config?.dbf_input_dir,
+    config?.input_dir,
+    config?.internalize_input_dir,
+  ];
+  for (const raw of candidates) {
+    const path = String(raw ?? "").trim().replace(/[\\/]+$/, "");
+    const parts = path.split(/[\\/]/);
+    if (parts.length > 1 && parts[parts.length - 1].toLowerCase() === "addonpackages") {
+      return path.slice(0, path.length - parts[parts.length - 1].length).replace(/[\\/]+$/, "");
+    }
+  }
+  return "";
+}
+
+// Points every page at AddonPackages and repaints the read-only lines.
+function applyVamDir() {
+  const addon = vamAddonPackagesDir();
+  for (const id of VAM_FOLDER_FIELDS) {
+    const el = $(id);
+    if (el) el.value = addon;
+  }
+  if (state.internalize) state.internalize.inputDir = addon;
+  if (state.missingResources) state.missingResources.inputDir = addon;
+  if (state.varDetails) state.varDetails.inputDir = addon;
+  renderVamSources();
+  renderSettingsVamDir();
+  libRenderStatusBar();
+}
+
+// Each [data-vam-source] line describes the hidden folder field right after it,
+// so it always shows the folder that page will actually scan.
+function renderVamSources() {
+  const addon = vamAddonPackagesDir();
+  document.querySelectorAll("[data-vam-source]").forEach((row) => {
+    const field = row.nextElementSibling?.matches?.('input[type="hidden"]') ? row.nextElementSibling : null;
+    const value = String(field?.value ?? addon).trim();
+    if (!value) {
+      row.classList.add("is-missing");
+      row.innerHTML = `
+        <span class="material-symbols-outlined">warning</span>
+        <span class="vam-source-path">VaM directory not set</span>
+        <button type="button" class="vam-source-change" data-vam-settings>Set in Settings</button>`;
+      return;
+    }
+    row.classList.remove("is-missing");
+    const isAddon = addon && value.toLowerCase() === addon.toLowerCase();
+    row.title = value;
+    row.innerHTML = `
+      <span class="material-symbols-outlined">hard_drive</span>
+      <span class="vam-source-name">${isAddon ? "AddonPackages" : "Folder"}</span>
+      <span class="vam-source-path">${escapeHtml(value)}</span>
+      <button type="button" class="vam-source-change" data-vam-settings title="Change the VaM directory in Settings">Change</button>`;
+  });
+}
+
+function renderSettingsVamDir() {
+  const text = $("settings-vam-dir-text");
+  if (text) {
+    const dir = vamDir();
+    text.textContent = dir || "Not configured";
+    text.classList.toggle("is-empty", !dir);
+    text.title = dir;
+  }
+  const status = $("settings-vam-dir-status");
+  if (!status) return;
+  const info = state.vamDirInfo;
+  if (!vamDir()) {
+    status.textContent = "Pick the folder VaM is installed in (the one that contains AddonPackages).";
+  } else if (info && info.vam_dir === vamDir()) {
+    status.textContent = info.valid
+      ? `AddonPackages: ${info.addon_packages} · ${Number(info.var_count).toLocaleString()} .var files`
+      : `No AddonPackages folder in ${info.vam_dir}. Pick the folder VaM is installed in.`;
+    status.classList.toggle("is-error", !info.valid);
+  } else {
+    status.textContent = `AddonPackages: ${vamAddonPackagesDir()}`;
+  }
+}
+
+// Fills in the .var count / validity line for the stored directory.
+async function refreshVamDirInfo() {
+  if (!invoke || !vamDir()) return;
+  try {
+    state.vamDirInfo = await invoke("inspect_vam_dir", { path: vamDir() });
+  } catch (err) {
+    addLog(`VaM directory: ${String(err)}`);
+  }
+  renderSettingsVamDir();
+}
+
+// Browse, as in Backstage: the folder must contain AddonPackages (picking
+// AddonPackages itself is accepted and resolved to its parent). Saved at once.
+async function pickVamDir() {
+  if (!invoke) return;
+  const picked = await invoke("pick_folder");
+  if (!picked) return;
+  const info = await invoke("inspect_vam_dir", { path: picked });
+  if (!info?.valid) {
+    showToast("That folder has no AddonPackages folder — pick the folder VaM is installed in.", "error", 6000);
+    return;
+  }
+  await setVamDir(info);
+  showToast(`VaM directory set. Found ${Number(info.var_count).toLocaleString()} .var files.`, "success", 6000);
+}
+
+// Stores a validated directory (an inspect_vam_dir result), points every page
+// at its AddonPackages and saves. VAR Packages reloads from the new library.
+async function setVamDir(info) {
+  const changed = info.vam_dir !== vamDir();
+  state.vamDir = info.vam_dir;
+  state.vamDirInfo = info;
+  applyVamDir();
+  await persistAllConfig();
+  if (changed) libOnVamDirChanged();
+}
+
+// ---- First run ---------------------------------------------------------------
+// Like VaM Backstage's welcome step: while no VaM directory is set, the app
+// opens on a dialog asking for one. "Skip for now" leaves it unset (pages then
+// show "VaM directory not set" with a link to Settings).
+
+const VAM_SETUP = { info: null };
+
+function renderVamSetup() {
+  const info = VAM_SETUP.info;
+  const path = $("vam-setup-path");
+  if (path) {
+    path.textContent = info?.valid ? info.vam_dir : "Not selected";
+    path.classList.toggle("is-empty", !info?.valid);
+  }
+  vpSetText("vam-setup-browse", info?.valid ? "Change" : "Select");
+  const found = $("vam-setup-found");
+  if (found) found.classList.toggle("hidden", !info?.valid);
+  vpSetText("vam-setup-found-text", info?.valid ? `${Number(info.var_count).toLocaleString()} var files found` : "");
+  const cont = $("vam-setup-continue");
+  if (cont) cont.disabled = !info?.valid;
+}
+
+function showVamSetup() {
+  VAM_SETUP.info = null;
+  $("vam-setup-error")?.classList.add("hidden");
+  renderVamSetup();
+  $("vam-setup-backdrop")?.classList.remove("hidden");
+}
+
+function hideVamSetup() {
+  $("vam-setup-backdrop")?.classList.add("hidden");
+}
+
+async function browseVamSetup() {
+  if (!invoke) return;
+  const picked = await invoke("pick_folder");
+  if (!picked) return;
+  const info = await invoke("inspect_vam_dir", { path: picked });
+  const error = $("vam-setup-error");
+  if (!info?.valid) {
+    if (error) {
+      error.textContent = "No AddonPackages folder found in that directory.";
+      error.classList.remove("hidden");
+    }
+    return;
+  }
+  error?.classList.add("hidden");
+  VAM_SETUP.info = info;
+  renderVamSetup();
+}
+
+function openVamDirSettings() {
+  document.querySelector('[data-sidebar-link="settings"]')?.click();
+  requestAnimationFrame(() => {
+    const card = $("settings-vam-card");
+    if (!card) return;
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    card.classList.remove("is-flash");
+    void card.offsetWidth;
+    card.classList.add("is-flash");
+  });
+}
+
+function setupVamDir() {
+  $("settings-pick-vam-dir")?.addEventListener("click", () => {
+    pickVamDir().catch((e) => addLog(`VaM directory: ${String(e)}`));
+  });
+  $("vam-setup-browse")?.addEventListener("click", () => {
+    browseVamSetup().catch((e) => addLog(`VaM directory: ${String(e)}`));
+  });
+  $("vam-setup-skip")?.addEventListener("click", hideVamSetup);
+  $("vam-setup-continue")?.addEventListener("click", async () => {
+    if (!VAM_SETUP.info?.valid) return;
+    hideVamSetup();
+    await setVamDir(VAM_SETUP.info).catch((e) => addLog(`VaM directory: ${String(e)}`));
+    showToast("VaM directory set — your library is ready.", "success");
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest?.("[data-vam-settings]")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openVamDirSettings();
+  });
+  applyVamDir();
+  // Config is loaded before setup runs, so an unset directory here is a first
+  // run (or a skipped one).
+  if (invoke && !vamDir()) showVamSetup();
+}
+
+// =====================================================================
 // Additional VAR folders — shared across sections.
 // Each section keeps a primary single-folder field plus an optional list of
 // extra scan roots (unioned into that section's scan, deduped by the backend).
@@ -11630,6 +13588,18 @@ const ADDITIONAL_DIR_SECTIONS = {
     labelId: "settings-library-additional-dirs-label",
     primaryInputId: "settings-library-folder",
     onChange: persistAllConfig,
+  },
+  // Download Dependencies dialog: the same list as Settings (downloadVars),
+  // edited in place; a change re-runs the open scan.
+  depScan: {
+    listId: "dep-scan-extra-dirs",
+    addBtnId: "dep-scan-add-folder",
+    primaryInputId: "settings-library-folder",
+    stateKey: "downloadVars",
+    onChange: async () => {
+      await persistAllConfig();
+      depRescanAfterFolderChange();
+    },
   },
   reclaim: {
     listId: "reclaim-additional-dirs",
@@ -11727,6 +13697,7 @@ function renderAdditionalDirs(sectionId) {
     row.append(label, remove);
     container.append(row);
   });
+  if (sectionId === "varPackages") libRenderFoldersBadge();
 }
 
 async function addAdditionalDir(sectionId) {
@@ -11904,221 +13875,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDownloadLinksImport();
   setupDownloadsManager();
 
-  const vpInput = $("var-packages-input-dir");
-  const vpPick = $("var-packages-pick-input");
-  if (vpPick) {
-    vpPick.addEventListener("click", async () => {
-      if (!invoke || !vpInput) return;
-      const selected = await invoke("pick_folder");
-      if (!selected) return;
-      vpInput.value = selected;
-      // Persist the picked VAR folder so it survives app restarts.
-      persistAllConfig();
-    });
-  }
-  if (vpInput) {
-    // Persist a manually typed/edited path on commit (blur / Enter), matching
-    // the Browse button and the VAR Details folder input behavior.
-    vpInput.addEventListener("change", () => {
-      persistAllConfig();
-    });
-  }
-  const vpScan = $("var-packages-scan-button");
-  if (vpScan) {
-    vpScan.addEventListener("click", () => {
-      if (vpInput && !vpInput.value.trim()) {
-        addLog(t("varPackagesPickFirst"));
-        return;
-      }
-      // The only place the depth switch takes effect. Everything else (paging,
-      // filters, post-delete refreshes) keeps whatever depth this listing was
-      // built with.
-      state.varPackagesScannedDeep = state.varPackagesDeepScan;
-      state.varPackagesPage = 0;
-      // A rescan is the commit point for root/depth changes; old selected
-      // paths may fall out of scope.
-      vpClearSelection();
-      refreshVarPackagesFromFolder();
-    });
-  }
-  const vpFilterInput = $("var-packages-filter");
-  if (vpFilterInput) {
-    let vpFilterTimer = null;
-    vpFilterInput.addEventListener("input", () => {
-      const next = vpFilterInput.value;
-      if (vpFilterTimer) clearTimeout(vpFilterTimer);
-      vpFilterTimer = setTimeout(() => {
-        if (state.varPackagesFilter === next) return;
-        state.varPackagesFilter = next;
-        state.varPackagesPage = 0;
-        if (state.varPackagesMode === "database") {
-          refreshVarPackagesFromDb();
-        } else {
-          refreshVarPackagesFromFolder({ forceRescan: false });
-        }
-      }, 180);
-    });
-  }
-  const vpModeFolders = $("var-packages-mode-folders");
-  if (vpModeFolders) {
-    vpModeFolders.addEventListener("click", () => setVarPackagesMode("folders"));
-  }
-  $("var-packages-depth-deep")?.addEventListener("click", () => setVarPackagesDeepScan(true));
-  $("var-packages-depth-normal")?.addEventListener("click", () => setVarPackagesDeepScan(false));
-  applyVarPackagesDepthUi();
-
-  const vpModeDb = $("var-packages-mode-database");
-  if (vpModeDb) {
-    vpModeDb.addEventListener("click", () => setVarPackagesMode("database"));
-  }
-  const vpDbRefresh = $("var-packages-db-refresh-button");
-  if (vpDbRefresh) {
-    vpDbRefresh.addEventListener("click", () => {
-      state.varPackagesPage = 0;
-      refreshVarPackagesFromDb();
-    });
-  }
-
-  // Delegated row-click on the VAR Packages table → open VAR Details for the
-  // clicked package. Looks the row's data up by package_id in the cached
-  // varPackagesItems so we don't re-invoke the backend. Source flag tells
-  // the analyzer whether the file is guaranteed to be on disk (folder mode)
-  // or might be stale (database mode).
-  const vpTbody = $("var-packages-tbody");
-  if (vpTbody) {
-    vpTbody.addEventListener("click", (event) => {
-      // Action buttons live inside the row, so closest("tr[...]") matches them
-      // too — and this listener is registered first, so stopPropagation from
-      // theirs cannot save us. Bail explicitly instead of opening VAR Details
-      // behind a delete confirm. (The folder grid needs no such guard: its
-      // delete button is a sibling of .vp-card, not a descendant.)
-      if (
-        event.target.closest?.(
-          "[data-vp-delete],[data-vp-fav],[data-vp-select],[data-vp-images]",
-        )
-      )
-        return;
-      const row = event.target.closest("tr[data-package-id]");
-      if (!row) return;
-      // Selection resolves by file_path — the same package_id can exist in two
-      // folders and each copy selects independently. Plain-click open keeps
-      // the historical package_id lookup.
-      if (event.ctrlKey || event.metaKey || event.shiftKey) {
-        const fp = row.getAttribute("data-file-path");
-        const selItem = (state.varPackagesItems ?? []).find((it) => it.file_path === fp);
-        if (!selItem) return;
-        if (event.shiftKey) vpSelectRangeTo(selItem);
-        else vpToggleSelect(selItem);
-        return;
-      }
-      const packageId = row.getAttribute("data-package-id");
-      if (!packageId) return;
-      const item = (state.varPackagesItems ?? []).find((it) => it.package_id === packageId);
-      if (!item) return;
-      const source = state.varPackagesMode === "database" ? "db" : "folder";
-      openVarDetailsView(item, source);
-    });
-  }
-
-  // Delegated clicks on a Local-mode thumbnail card. Clicking anywhere on the
-  // card toggles its selection (shift = range); the open button navigates to
-  // VAR Details; delete lives in the right-click menu. Folder cards are always
-  // disk-backed. (The checkbox itself is handled by setupVarPackagesSelection.)
-  const vpGrid = $("var-packages-grid");
-  if (vpGrid) {
-    vpGrid.addEventListener("click", (event) => {
-      const card = event.target.closest(".vp-card[data-package-id]");
-      if (!card) return;
-      const fp = card.getAttribute("data-file-path");
-      const item = (state.varPackagesItems ?? []).find((it) => it.file_path === fp);
-      if (!item) return;
-      if (event.shiftKey) vpSelectRangeTo(item);
-      else vpToggleSelect(item);
-    });
-
-    // Right-click a thumbnail → actions menu. Delete lives here (destructive,
-    // so it's last and styled as such). Folder-mode cards are always
-    // disk-backed, so the file path is real.
-    vpGrid.addEventListener("contextmenu", (event) => {
-      const card = event.target.closest(".vp-card[data-package-id]");
-      if (!card) return;
-      event.preventDefault();
-      const packageId = card.getAttribute("data-package-id") || "";
-      const filePath = card.getAttribute("data-file-path") || "";
-      if (!filePath) return;
-      const items = [
-        {
-          label: "Open Details",
-          action: () => {
-            const item = (state.varPackagesItems ?? []).find(
-              (it) => it.file_path === filePath,
-            );
-            if (item) openVarDetailsView(item, "folder");
-          },
-        },
-        {
-          label: "Scan Dependencies",
-          action: () =>
-            depStartScan({ filePath, packageId }).catch((e) =>
-              addLog(`Scan Dependencies: ${String(e)}`),
-            ),
-        },
-        {
-          label: "Collect Dependencies…",
-          action: () => dcOpen({ filePath, packageId }),
-        },
-        {
-          label: "Export Scene Image",
-          action: () => exportOneSceneImage(filePath, packageId),
-        },
-        {
-          label: "Show in Explorer",
-          action: () =>
-            invoke("show_in_explorer", { path: filePath }).catch((e) =>
-              addLog(`VAR Packages: ${String(e)}`),
-            ),
-        },
-        {
-          label: "Move to creator folder",
-          action: () =>
-            vpMoveToCreatorFolder(filePath).catch((e) =>
-              addLog(`Move to creator folder: ${String(e)}`),
-            ),
-        },
-        { separator: true },
-        {
-          label: "Send to",
-          submenu: [
-            {
-              label: "Clean VARs",
-              action: () => sendVarToTargetPage("db-find", filePath),
-            },
-            {
-              label: "Missing Resources",
-              action: () => sendVarToTargetPage("missing-resources", filePath),
-            },
-            {
-              label: "Internalize Resources",
-              action: () => sendVarToTargetPage("internalize-resources", filePath),
-            },
-          ],
-        },
-        { separator: true },
-        {
-          label: t("varPackagesImagesOpen"),
-          action: () => vpImagesOpen(filePath),
-        },
-        { separator: true },
-        {
-          label: "Delete (Recycle Bin)",
-          danger: true,
-          action: () =>
-            vpDeleteOne(filePath, null).catch((e) => addLog(`VAR Packages: ${String(e)}`)),
-        },
-      ];
-      showContextMenu(event.clientX, event.clientY, items);
-    });
-  }
+  setupVamDir();
+  setupLibraryView();
+  setupDatabasePackages();
 
   const vdBack = $("var-details-back");
   if (vdBack) {
@@ -12338,8 +14097,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
         const cached = (state.varPackagesItems ?? []).find((it) => it.package_id === packageId);
         if (cached) {
-          const source = state.varPackagesMode === "database" ? "db" : "folder";
-          openVarDetailsView(cached, source);
+          openVarDetailsView(cached, "folder");
           return;
         }
         const fileName = filePath ? filePath.split(/[\\/]/).pop() : `${packageId}.var`;
@@ -12565,72 +14323,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     tauriEvent.listen("tauri://drag-over", () => dragoverPaint(true)).catch(() => {});
     tauriEvent.listen("tauri://drag-leave", () => dragoverPaint(false)).catch(() => {});
   }
-
-  document.querySelectorAll(".vp-filter-trigger").forEach((trigger) => {
-    trigger.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const field = trigger.getAttribute("data-vp-trigger");
-      if (field) toggleVarPackagesFilterMenu(field);
-    });
-  });
-
-  // Delegate menu-item clicks so options can be re-rendered freely without
-  // re-attaching listeners on every selection change.
-  const vpFilterBar = $("var-packages-filter-bar");
-  if (vpFilterBar) {
-    vpFilterBar.addEventListener("click", (event) => {
-      const item = event.target.closest("[data-vp-menu-value]");
-      if (!item || item.disabled) return;
-      const menu = item.closest(".vp-filter-menu");
-      if (!menu) return;
-      const field = menu.getAttribute("data-vp-menu");
-      if (!field) return;
-      const raw = item.getAttribute("data-vp-menu-value");
-      const value = raw === "" ? null : raw;
-      // Sort shares the chip markup but not the filter state, so it routes to
-      // its own setter (which also handles the direction flip on re-select).
-      if (field === "sort") {
-        setVarPackagesSort(value);
-        closeAllVarPackagesFilterMenus();
-        return;
-      }
-      const stateField = field === "size" ? "sizeBucket" : field;
-      setVarPackagesFilter(stateField, value);
-      closeAllVarPackagesFilterMenus();
-    });
-  }
-
-  const vpCreatorSearch = document.querySelector("[data-vp-menu-search='creator']");
-  if (vpCreatorSearch) {
-    vpCreatorSearch.addEventListener("input", () => {
-      state.varPackagesCreatorMenuQuery = vpCreatorSearch.value;
-      populateCreatorMenu();
-    });
-    // Keep the dropdown open while the user is typing in the search box.
-    vpCreatorSearch.addEventListener("click", (event) => event.stopPropagation());
-  }
-
-  // Scene image checkbox: checked = "with" (only packages whose indexed
-  // contents include a Saves/scene image), unchecked = no filter. setVarPackages-
-  // Filter re-renders the bar, which mirrors the state back onto the checkbox.
-  const vpSceneCheck = $("var-packages-filter-scene");
-  if (vpSceneCheck) {
-    vpSceneCheck.addEventListener("change", () => {
-      setVarPackagesFilter("scene", vpSceneCheck.checked ? "with" : null);
-    });
-  }
-
-  const vpClearAll = $("var-packages-filter-clear");
-  if (vpClearAll) {
-    vpClearAll.addEventListener("click", clearVarPackagesFilters);
-  }
-
-  // Close any open filter menu when the user clicks outside of it.
-  document.addEventListener("click", (event) => {
-    if (!event.target.closest(".vp-filter-dropdown")) {
-      closeAllVarPackagesFilterMenus();
-    }
-  });
 
   const bulkDropzone = $("build-db-bulk-dropzone");
   if (bulkDropzone) {
@@ -12864,7 +14556,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     // while a scan runs, so a stray keypress can't abandon a live scan.
     } else if (event.key === "Escape" && !$("vp-delete-backdrop")?.classList.contains("hidden")) {
       vpDeleteModalClose(false);
-    // Collect Dependencies stacks over Scan Dependencies, so it closes first.
+    // Collect Dependencies stacks over Download Dependencies, so it closes first.
     // dcClose refuses while a scan or copy runs, like depScanClose.
     } else if (event.key === "Escape" && !$("dep-collect-backdrop")?.classList.contains("hidden")) {
       dcClose();
@@ -12882,7 +14574,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVarPackagesSelection();
   setupVarPackagesDeleteModal();
   setupVarPackagesImagesModal();
-  setupVarPackagesHoverCard();
   setupVarDetailsDeps();
   setupDepCollect();
 
