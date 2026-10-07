@@ -79,6 +79,8 @@ pub(crate) struct LinkInfo {
     pub(crate) size: Option<u64>,
     /// Why the link can't be used, or what couldn't be checked.
     pub(crate) error: Option<String>,
+    /// A MEGA folder link: the `.var` files inside, to pick from.
+    pub(crate) folder_files: Option<Vec<crate::mega::FolderEntry>>,
 }
 
 #[derive(Deserialize)]
@@ -105,10 +107,16 @@ pub(crate) fn inspect_link(url: &str) -> LinkInfo {
     };
     let mut info = LinkInfo { url: url.clone(), host: host.to_string(), ..Default::default() };
     if host == "mega" {
-        match crate::mega::parse_link(&url).and_then(|link| crate::mega::file_info_blocking(&link)) {
-            Ok(file) => {
-                info.filename = file.name;
-                info.size = file.size;
+        match crate::mega::inspect(&url) {
+            Ok(found) => {
+                info.filename = found.name;
+                info.size = found.size;
+                if let Some(files) = found.files {
+                    if files.is_empty() {
+                        info.error = Some("That MEGA folder has no .var files.".to_string());
+                    }
+                    info.folder_files = Some(files);
+                }
             }
             Err(err) => info.error = Some(err),
         }
@@ -168,8 +176,11 @@ pub(crate) fn add_download_link(
 ) -> Result<DownloadLinkRow, String> {
     let (url, host) = normalize_link(&url).ok_or_else(|| "Paste an http(s) link.".to_string())?;
     if host == "mega" {
-        // Without its key a MEGA link can't be decrypted — refuse it now.
-        crate::mega::parse_link(&url)?;
+        // Without its key a MEGA link can't be decrypted, and a whole folder
+        // isn't one file — refuse both now.
+        if let crate::mega::MegaRef::Folder { .. } = crate::mega::parse(&url)? {
+            return Err("Pick the .var inside the MEGA folder — a folder link isn't one file.".to_string());
+        }
     }
     let mut name = filename.trim().to_string();
     if !name.to_ascii_lowercase().ends_with(".var") {

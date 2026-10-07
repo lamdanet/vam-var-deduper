@@ -266,15 +266,25 @@ pub(crate) fn download_to_file(
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<bool> {
+    // A MEGA link is resolved first (blocking API calls, so before the async
+    // runtime starts) to a temporary address for the encrypted bytes, which
+    // are decrypted as they stream in.
+    let (fetch_url, decrypt) = if crate::mega::is_mega(url) {
+        let (address, decryptor) = crate::mega::open_download(url).map_err(|e| anyhow!(e))?;
+        (address, Some(decryptor))
+    } else {
+        (url.to_string(), None)
+    };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| anyhow!("failed to start download runtime: {e}"))?;
-    rt.block_on(download_async(url, dest_path, cancel, progress))
+    rt.block_on(download_async(&fetch_url, decrypt, dest_path, cancel, progress))
 }
 
 async fn download_async(
     url: &str,
+    mut decrypt: Option<crate::mega::CtrDecryptor>,
     dest_path: &Path,
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
@@ -283,21 +293,8 @@ async fn download_async(
     use std::sync::atomic::Ordering;
 
     let client = download_client(url.contains("pixeldrain.com"))?;
-    // A MEGA link is resolved to a temporary address for the encrypted bytes,
-    // which are decrypted as they stream in.
-    let (fetch_url, mut decrypt) = if crate::mega::is_mega(url) {
-        let link = crate::mega::parse_link(url).map_err(|e| anyhow!(e))?;
-        let api = reqwest::Client::builder()
-            .timeout(Duration::from_secs(API_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| anyhow!("failed to build HTTP client: {e}"))?;
-        let info = crate::mega::file_info(&api, &link).await?;
-        (info.download_url, Some(link.decryptor()))
-    } else {
-        (url.to_string(), None)
-    };
     let resp = client
-        .get(&fetch_url)
+        .get(url)
         .send()
         .await
         .map_err(|e| anyhow!("download request failed: {e}"))?;
