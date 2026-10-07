@@ -12342,10 +12342,13 @@ button.lib-dep-ref:hover {
   color: #e8e9ed;
 }
 
+/* Solid, like Backstage's default button: it keeps the gradient for the
+   Download / Install call to action only (.lib-btn-gradient, .hub-btn-install).
+   On a wide button the diagonal gradient read as a stretched image. */
 :root[data-theme="backstage"] .primary-button,
 :root[data-theme="backstage"] .accent-button {
   border-color: transparent;
-  background: var(--bs-gradient);
+  background: #4a91f1;
   color: #fff;
   box-shadow: none;
 }
@@ -12353,8 +12356,7 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .primary-button:hover:not(:disabled),
 :root[data-theme="backstage"] .accent-button:hover:not(:disabled) {
   border-color: transparent;
-  background: var(--bs-gradient);
-  filter: brightness(1.1);
+  background: #5c9cf3;
 }
 
 :root[data-theme="backstage"] .primary-button:active:not(:disabled),
@@ -12365,10 +12367,9 @@ button.lib-dep-ref:hover {
 
 :root[data-theme="backstage"] .primary-button:disabled,
 :root[data-theme="backstage"] .accent-button:disabled {
-  background: var(--bs-gradient);
+  background: #4a91f1;
   color: #fff;
   opacity: 0.45;
-  filter: saturate(0.6);
 }
 
 /* ---- Inputs ---------------------------------------------------------------- */
