@@ -9550,7 +9550,8 @@ tr.is-selected td {
 
 .lib-view,
 .db-pkgs,
-.hub-dl-card {
+.hub-dl-card,
+.sources-view {
   --lib-base: var(--bg);
   --lib-surface: var(--surface);
   --lib-elevated: var(--surface-2);
@@ -14360,4 +14361,148 @@ button.lib-dep-ref:hover {
 
 .src-folder-list .hub-dl-row.is-other .hub-dl-name {
   color: var(--lib-text-3);
+}
+
+/* =========================================================
+   Sources page
+   ========================================================= */
+.sources-view {
+  gap: 20px;
+}
+
+.sources-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.sources-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sources-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.sources-card-head small {
+  font-weight: 400;
+  color: var(--lib-text-3);
+}
+
+.sources-text {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 110px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface);
+  color: var(--text);
+  font: 12px/1.5 var(--lib-mono, ui-monospace, monospace);
+}
+
+.sources-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sources-password {
+  flex: 1 1 260px;
+}
+
+.sources-search {
+  flex: 0 1 280px;
+}
+
+.sources-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sources-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--lib-text-2);
+}
+
+.sources-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sources-group-title .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.sources-group-pw {
+  flex: 0 1 220px;
+}
+
+.sources-lock {
+  font-size: 12px;
+  vertical-align: -2px;
+  color: var(--lib-warning);
+}
+
+.sources-result-actions {
+  justify-content: flex-end;
+}
+
+.sources-selection {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--lib-text-2);
+}
+
+.sources-problems {
+  font-size: 12px;
+  color: var(--lib-text-2);
+}
+
+.sources-problems summary {
+  cursor: pointer;
+  color: var(--lib-warning);
+}
+
+.sources-problems ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.sources-problem-link {
+  font-family: var(--lib-mono, ui-monospace, monospace);
+}
+
+.sources-saved {
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.sources-saved-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sources-saved-row .hub-dl-main {
+  flex: 1 1 auto;
+  min-width: 0;
 }

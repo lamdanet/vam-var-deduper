@@ -78,6 +78,10 @@
                 <span class="material-symbols-outlined">explore</span>
                 <span class="sidebar-label">Hub</span>
               </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="sources">
+                <span class="material-symbols-outlined">link</span>
+                <span class="sidebar-label">Sources</span>
+              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="var-details">
                 <span class="material-symbols-outlined">description</span>
                 <span class="sidebar-label" id="sidebar-var-details-label">VAR Details</span>
@@ -2373,6 +2377,62 @@
       </section>
 
       <!-- Settings View (hidden by default; revealed by sidebar Settings link) -->
+      <!-- Download sources: paste a forum post or links, see the .var files
+           they deliver (inside MEGA folders, Pixeldrain lists and .zip archives
+           too), save them as sources or download them; manage saved sources. -->
+      <section id="sources-view" class="app-main settings-view sources-view hidden">
+        <header class="settings-header">
+          <span class="settings-eyebrow">Downloads</span>
+          <h1 class="settings-title">Sources</h1>
+          <p class="settings-subtitle">
+            Paste a forum post or a few links — Pixeldrain files and lists, MEGA files and folders, MediaFire,
+            or links straight to a .var or .zip. Every .var they hold is listed, including the ones inside
+            (password-protected) zips, ready to save as download sources or download now.
+          </p>
+        </header>
+
+        <section class="sources-card">
+          <div class="sources-card-head"><h3>Find .var files</h3></div>
+          <textarea id="sources-text" class="sources-text" rows="6" spellcheck="false"
+                    placeholder="Paste a post, or links one per line…"></textarea>
+          <div class="sources-row">
+            <div class="input-with-icon sources-password">
+              <span class="material-symbols-outlined input-leading-icon">key</span>
+              <input id="sources-password" type="text" spellcheck="false" autocomplete="off"
+                     placeholder="Archive password, if the post gives one" />
+            </div>
+            <button id="sources-scan" class="primary-button" type="button">
+              <span class="material-symbols-outlined">travel_explore</span><span>Find files</span>
+            </button>
+          </div>
+          <div id="sources-progress" class="offload-progress hidden">
+            <div class="offload-progress-track"><div id="sources-progress-bar" class="offload-progress-bar"></div></div>
+            <span id="sources-progress-message" class="offload-progress-message"></span>
+          </div>
+          <div id="sources-results" class="sources-results"></div>
+          <div id="sources-result-actions" class="sources-row sources-result-actions hidden">
+            <span id="sources-selection" class="sources-selection"></span>
+            <button id="sources-save" class="ghost-button" type="button">
+              <span class="material-symbols-outlined">bookmark_add</span><span>Save as sources</span>
+            </button>
+            <button id="sources-download" class="primary-button" type="button">
+              <span class="material-symbols-outlined">download</span><span>Save &amp; download</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="sources-card">
+          <div class="sources-card-head">
+            <h3>Saved sources <small id="sources-saved-count"></small></h3>
+            <div class="input-with-icon sources-search">
+              <span class="material-symbols-outlined input-leading-icon">search</span>
+              <input id="sources-search" type="text" spellcheck="false" placeholder="Search by file name" />
+            </div>
+          </div>
+          <div id="sources-saved" class="sources-saved"></div>
+        </section>
+      </section>
+
       <section id="settings-view" class="app-main settings-view hidden">
         <header class="settings-header">
           <span class="settings-eyebrow">Configuration</span>
@@ -3338,6 +3398,8 @@
             // Hub (after VaM Backstage's Hub page) is hidden with the rest.
             var hubView = document.getElementById("hub-view");
             if (hubView) hubView.classList.add("hidden");
+            var sourcesView = document.getElementById("sources-view");
+            if (sourcesView) sourcesView.classList.add("hidden");
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
@@ -3351,6 +3413,9 @@
             if (route === "hub" && hubView) {
               hubView.classList.remove("hidden");
               if (window.__refreshHubView) window.__refreshHubView();
+            } else if (route === "sources" && sourcesView) {
+              sourcesView.classList.remove("hidden");
+              if (window.__refreshSourcesView) window.__refreshSourcesView();
             } else if (route === "settings") {
               settings.classList.remove("hidden");
               if (window.__loadSettingsView) window.__loadSettingsView();

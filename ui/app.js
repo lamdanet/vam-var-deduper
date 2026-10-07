@@ -5223,6 +5223,387 @@ function setupSources() {
   });
 }
 
+// ---- Sources page ----------------------------------------------------------------
+// Paste a forum post or links; start_scan_source_links_task follows every
+// Pixeldrain file/list, MEGA file/folder, MediaFire and .var/.zip link and lists
+// the .var files they hold (zip members too). Selected ones are saved as
+// download sources (with the archive's password) and optionally downloaded.
+
+const SOURCES = {
+  result: null,
+  rows: [],
+  running: false,
+  taskId: null,
+  // Archive URL -> password typed for it (defaults to the page's password box).
+  passwords: new Map(),
+  savedTimer: null,
+  saved: [],
+};
+
+function sourcesStem(filename) {
+  return String(filename || "").replace(/\.var$/i, "");
+}
+
+function sourcesInLibrary(filename) {
+  return HUB.local.ids.has(sourcesStem(filename).toLowerCase());
+}
+
+function sourcesShortLink(url) {
+  const s = String(url || "").replace(/^https?:\/\//i, "");
+  return s.length > 60 ? `${s.slice(0, 57)}…` : s;
+}
+
+// Rows grouped by what holds them: one archive, or one pasted link.
+function sourcesGroups() {
+  const groups = new Map();
+  SOURCES.rows.forEach((row, i) => {
+    const key = row.archive_entry ? `zip:${row.url}` : `link:${row.origin}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        archive: row.archive_entry ? { url: row.url, name: row.archive_name || "archive.zip" } : null,
+        origin: row.origin,
+        host: row.host,
+        rows: [],
+      });
+    }
+    groups.get(key).rows.push(i);
+  });
+  return [...groups.values()];
+}
+
+function sourcesPassword(url) {
+  return SOURCES.passwords.has(url) ? SOURCES.passwords.get(url) : ($("sources-password")?.value || "").trim();
+}
+
+function sourcesRenderResults() {
+  const host = $("sources-results");
+  if (!host) return;
+  const res = SOURCES.result;
+  const actions = $("sources-result-actions");
+  if (!res) {
+    host.innerHTML = "";
+    actions?.classList.add("hidden");
+    return;
+  }
+  const inLib = SOURCES.rows.filter((r) => r.inLibrary).length;
+  const summary = `${SOURCES.rows.length} .var file${SOURCES.rows.length === 1 ? "" : "s"} from ${res.links} link${
+    res.links === 1 ? "" : "s"
+  }${inLib ? ` · ${inLib} already in your library` : ""}${res.skipped_files ? ` · ${res.skipped_files} other files skipped` : ""}`;
+  const groups = sourcesGroups()
+    .map((g) => {
+      const encrypted = g.rows.some((i) => SOURCES.rows[i].encrypted);
+      const title = g.archive
+        ? `<span class="material-symbols-outlined">folder_zip</span>${escapeHtml(g.archive.name)}`
+        : `<span class="material-symbols-outlined">link</span>${escapeHtml(sourcesShortLink(g.origin))}`;
+      const pw = encrypted
+        ? `<div class="input-with-icon sources-group-pw"><span class="material-symbols-outlined input-leading-icon">lock</span>
+             <input type="text" spellcheck="false" placeholder="Password" data-sources-pw="${escapeAttribute(g.archive.url)}"
+                    value="${escapeAttribute(sourcesPassword(g.archive.url))}" /></div>`
+        : "";
+      const rows = g.rows
+        .map((i) => {
+          const r = SOURCES.rows[i];
+          const where = r.archive_entry && r.archive_entry.includes("/") ? r.archive_entry.slice(0, r.archive_entry.lastIndexOf("/")) : "";
+          const meta = [where, r.host === "mediafire" ? "MediaFire — downloads in your browser" : ""].filter(Boolean).join(" · ");
+          const pill = r.inLibrary
+            ? `<span class="lib-pill lib-pill-ok">In library</span>`
+            : `<span class="lib-pill lib-pill-info">New</span>`;
+          return `<label class="check-row hub-dl-row">
+              <input type="checkbox" data-sources-row="${i}"${r.checked ? " checked" : ""} />
+              <span class="hub-dl-main">
+                <span class="hub-dl-name" title="${escapeAttribute(r.filename)}">${escapeHtml(r.filename)}${
+                  r.encrypted ? ` <span class="material-symbols-outlined sources-lock" title="Password-protected">lock</span>` : ""
+                }</span>
+                ${meta ? `<span class="hub-dl-meta">${escapeHtml(meta)}</span>` : ""}
+              </span>
+              <span class="hub-dl-size">${r.size ? escapeHtml(formatBytesLocal(r.size)) : ""}</span>
+              <span class="hub-dl-chip">${pill}</span>
+            </label>`;
+        })
+        .join("");
+      return `<div class="hub-dl-group sources-group">
+          <div class="hub-dl-group-head">
+            <span class="hub-dl-group-title sources-group-title" title="${escapeAttribute(g.archive ? g.archive.url : g.origin)}">${title}
+              <small>(${g.rows.length})</small></span>
+            ${pw}
+          </div>
+          <div class="hub-dl-list">${rows}</div>
+        </div>`;
+    })
+    .join("");
+  const problems = res.problems?.length
+    ? `<details class="sources-problems"><summary>${res.problems.length} link${res.problems.length === 1 ? "" : "s"} had a problem</summary>
+         <ul>${res.problems
+           .map((p) => `<li><span class="sources-problem-link">${escapeHtml(sourcesShortLink(p.link))}</span> — ${escapeHtml(p.error)}</li>`)
+           .join("")}</ul></details>`
+    : "";
+  host.innerHTML = `<p class="sources-summary">${escapeHtml(summary)}</p>${groups}${problems}`;
+  actions?.classList.toggle("hidden", !SOURCES.rows.length);
+  sourcesSyncSelection();
+}
+
+function sourcesSyncSelection() {
+  const picked = SOURCES.rows.filter((r) => r.checked);
+  const size = picked.reduce((sum, r) => sum + (Number(r.size) || 0), 0);
+  vpSetText(
+    "sources-selection",
+    picked.length ? `${picked.length} selected${size ? ` · ${formatBytesLocal(size)}` : ""}` : "Nothing selected",
+  );
+  for (const id of ["sources-save", "sources-download"]) {
+    const b = $(id);
+    if (b) b.disabled = !picked.length || SOURCES.running;
+  }
+}
+
+async function sourcesScan() {
+  if (!invoke || SOURCES.running) return;
+  const text = ($("sources-text")?.value || "").trim();
+  if (!text) {
+    showToast("Paste a post or some links first.", "info");
+    return;
+  }
+  SOURCES.running = true;
+  SOURCES.passwords.clear();
+  const scan = $("sources-scan");
+  if (scan) scan.disabled = true;
+  $("sources-progress")?.classList.remove("hidden");
+  const bar = $("sources-progress-bar");
+  let result = null;
+  try {
+    const handle = await invoke("start_scan_source_links_task", { text });
+    SOURCES.taskId = handle?.id ?? null;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, TASK_POLL_MS));
+      const payload = await invoke("get_task_progress", { taskId: SOURCES.taskId });
+      if (!payload) break;
+      if (bar) bar.style.width = `${Math.round(Math.max(0, Math.min(1, Number(payload.progress) || 0)) * 100)}%`;
+      vpSetText("sources-progress-message", payload.message || "");
+      if (payload.error) throw new Error(String(payload.error));
+      if (payload.done) {
+        result = payload.source_scan_result ?? null;
+        break;
+      }
+    }
+  } catch (e) {
+    showToast(String(e?.message || e), "error", 6000);
+  } finally {
+    if (SOURCES.taskId != null) invoke("clear_task", { taskId: SOURCES.taskId }).catch(() => {});
+    SOURCES.taskId = null;
+    SOURCES.running = false;
+    if (scan) scan.disabled = false;
+    $("sources-progress")?.classList.add("hidden");
+  }
+  if (!result) return;
+  await hubLoadLocal(true);
+  // One row per file per place it can come from.
+  const seen = new Set();
+  SOURCES.rows = (result.found || [])
+    .filter((f) => {
+      const key = `${f.filename}|${f.url}|${f.archive_entry || ""}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((f) => {
+      const inLibrary = sourcesInLibrary(f.filename);
+      return { ...f, inLibrary, checked: !inLibrary };
+    });
+  SOURCES.result = result;
+  sourcesRenderResults();
+}
+
+// Saves the selected rows as sources. Returns the saved rows, or null when a
+// protected archive still needs its password.
+async function sourcesSaveSelected() {
+  const picked = SOURCES.rows.filter((r) => r.checked);
+  const locked = picked.find((r) => r.encrypted && !sourcesPassword(r.url));
+  if (locked) {
+    showToast(`${locked.archive_name || "The archive"} is password-protected — enter its password first.`, "error", 6000);
+    document.querySelector(`[data-sources-pw="${CSS.escape(locked.url)}"]`)?.focus();
+    return null;
+  }
+  const saved = [];
+  for (const r of picked) {
+    try {
+      await invoke("add_download_link", {
+        filename: r.filename,
+        url: r.url,
+        archiveEntry: r.archive_entry || null,
+        archivePassword: r.archive_entry ? sourcesPassword(r.url) || null : null,
+      });
+      saved.push(r);
+    } catch (e) {
+      addLog(`Sources: ${r.filename} — ${String(e?.message || e)}`);
+    }
+  }
+  const failed = picked.length - saved.length;
+  if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
+  sourcesLoadSaved();
+  if (failed) showToast(`${failed} could not be saved — see Console`, "error", 6000);
+  return saved;
+}
+
+function sourcesQueue(row, destDir) {
+  const stem = sourcesStem(row.filename);
+  return queueDownload({
+    packageId: stem,
+    url: row.url,
+    filename: row.filename,
+    host: row.host,
+    destDir,
+    label: row.filename,
+    onDone: (status) => {
+      if (status !== "done" && status !== "exists") return;
+      hubLocalAdd(stem);
+      for (const r of SOURCES.rows) if (sourcesStem(r.filename).toLowerCase() === stem.toLowerCase()) r.inLibrary = true;
+      sourcesRenderResults();
+      sourcesRenderSaved();
+      vpRefreshAfterMutation().catch(() => {});
+    },
+  });
+}
+
+async function sourcesDownloadSelected() {
+  const saved = await sourcesSaveSelected();
+  if (!saved) return;
+  const destDir = await ensureDownloadsDir();
+  if (!destDir) return;
+  let queued = 0;
+  let browser = 0;
+  for (const r of saved) {
+    if (r.inLibrary) continue;
+    if (r.host === "mediafire") {
+      browser += 1;
+      continue;
+    }
+    if (sourcesQueue(r, destDir) != null) queued += 1;
+  }
+  showToast(
+    `Saved ${saved.length} source${saved.length === 1 ? "" : "s"}${queued ? `, downloading ${queued}` : ""}${
+      browser ? ` · ${browser} MediaFire link${browser === 1 ? "" : "s"} must be opened in the browser` : ""
+    }`,
+    "success",
+    5000,
+  );
+}
+
+// ---- Saved sources ---------------------------------------------------------------
+
+function sourcesRenderSaved() {
+  const host = $("sources-saved");
+  if (!host) return;
+  const rows = SOURCES.saved;
+  if (!rows.length) {
+    host.innerHTML = `<p class="hub-dl-empty">${
+      ($("sources-search")?.value || "").trim() ? "No saved source matches." : "No sources saved yet."
+    }</p>`;
+    return;
+  }
+  host.innerHTML = `<div class="hub-dl-list">${rows
+    .map((r, i) => {
+      const inLib = sourcesInLibrary(r.filename);
+      const archive = r.archive_entry
+        ? `<span class="lib-pill" title="${escapeAttribute(r.archive_entry)}">zip${r.archive_password ? " · 🔒" : ""}</span>`
+        : "";
+      return `<div class="hub-dl-row sources-saved-row">
+          <span class="hub-dl-main">
+            <span class="hub-dl-name" title="${escapeAttribute(r.filename)}">${escapeHtml(r.filename)}</span>
+            <span class="hub-dl-meta">${escapeHtml(srcHostLabel(r.host))} · ${escapeHtml(sourcesShortLink(r.url))}</span>
+          </span>
+          ${archive}
+          ${inLib ? `<span class="lib-pill lib-pill-ok">In library</span>` : ""}
+          ${
+            !inLib && r.host !== "mediafire"
+              ? `<button type="button" class="icon-button" data-sources-saved-dl="${i}" title="Download it"><span class="material-symbols-outlined">download</span></button>`
+              : ""
+          }
+          <button type="button" class="icon-button" data-sources-saved-open="${i}" title="Open the link in your browser"><span class="material-symbols-outlined">open_in_new</span></button>
+          <button type="button" class="icon-button dep-scan-act-danger" data-sources-saved-remove="${i}" title="Forget this source"><span class="material-symbols-outlined">delete</span></button>
+        </div>`;
+    })
+    .join("")}</div>`;
+}
+
+async function sourcesLoadSaved() {
+  if (!invoke) return;
+  try {
+    const [rows, total] = await invoke("search_download_links", {
+      query: ($("sources-search")?.value || "").trim() || null,
+      limit: 300,
+    });
+    SOURCES.saved = Array.isArray(rows) ? rows : [];
+    vpSetText(
+      "sources-saved-count",
+      total > SOURCES.saved.length ? `(${SOURCES.saved.length} of ${Number(total).toLocaleString()})` : `(${Number(total).toLocaleString()})`,
+    );
+  } catch (e) {
+    addLog(`Sources: ${String(e)}`);
+  }
+  sourcesRenderSaved();
+}
+
+function setupSourcesPage() {
+  window.__refreshSourcesView = () => {
+    hubLoadLocal().then(() => sourcesRenderSaved());
+    sourcesLoadSaved();
+  };
+  $("sources-scan")?.addEventListener("click", () => sourcesScan().catch((e) => addLog(`Sources: ${String(e)}`)));
+  $("sources-save")?.addEventListener("click", async () => {
+    const saved = await sourcesSaveSelected();
+    if (saved?.length) showToast(`Saved ${saved.length} source${saved.length === 1 ? "" : "s"}`, "success");
+  });
+  $("sources-download")?.addEventListener("click", () =>
+    sourcesDownloadSelected().catch((e) => addLog(`Sources: ${String(e)}`)),
+  );
+  $("sources-password")?.addEventListener("input", () => {
+    // The page-wide password fills every archive box nobody typed into.
+    document.querySelectorAll("[data-sources-pw]").forEach((input) => {
+      if (!SOURCES.passwords.has(input.getAttribute("data-sources-pw"))) input.value = $("sources-password").value;
+    });
+  });
+  const results = $("sources-results");
+  results?.addEventListener("change", (e) => {
+    const box = e.target.closest?.("[data-sources-row]");
+    if (box) {
+      const row = SOURCES.rows[Number(box.getAttribute("data-sources-row"))];
+      if (row) row.checked = box.checked;
+      sourcesSyncSelection();
+    }
+  });
+  results?.addEventListener("input", (e) => {
+    const pw = e.target.closest?.("[data-sources-pw]");
+    if (pw) SOURCES.passwords.set(pw.getAttribute("data-sources-pw"), pw.value.trim());
+  });
+  $("sources-search")?.addEventListener("input", () => {
+    clearTimeout(SOURCES.savedTimer);
+    SOURCES.savedTimer = setTimeout(sourcesLoadSaved, 250);
+  });
+  $("sources-saved")?.addEventListener("click", async (e) => {
+    const pick = (attr) => {
+      const el = e.target.closest?.(`[${attr}]`);
+      return el ? SOURCES.saved[Number(el.getAttribute(attr))] : null;
+    };
+    const dl = pick("data-sources-saved-dl");
+    const open = pick("data-sources-saved-open");
+    const remove = pick("data-sources-saved-remove");
+    if (dl) {
+      const destDir = await ensureDownloadsDir();
+      if (destDir && sourcesQueue(dl, destDir) != null) showToast(`Downloading ${dl.filename}`, "info");
+    } else if (open) {
+      invoke("open_url", { url: open.url }).catch((err) => addLog(`Sources: ${String(err)}`));
+    } else if (remove) {
+      try {
+        await invoke("remove_download_link", { filename: remove.filename, url: remove.url });
+        if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
+        sourcesLoadSaved();
+      } catch (err) {
+        addLog(`Sources: ${String(err)}`);
+      }
+    }
+  });
+}
+
 // ---- Selection ---------------------------------------------------------------
 
 function vpSelectOnly(item, { render = true } = {}) {
@@ -17284,6 +17665,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVamDir();
   setupOffload();
   setupSources();
+  setupSourcesPage();
   setupLibraryView();
   setupDatabasePackages();
   setupHubView();
