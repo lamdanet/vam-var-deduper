@@ -14279,3 +14279,11 @@ button.lib-dep-ref:hover {
   border-color: var(--dot);
   background: color-mix(in srgb, var(--dot) 26%, transparent);
 }
+
+/* Performance: cards scrolled out of view skip layout and paint. Laying out
+   every card on each redraw cost ~150 ms per 120 cards; `auto` remembers a
+   card's real height once it has been on screen, so the scrollbar stays put. */
+#var-packages-grid > .lib-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
+}

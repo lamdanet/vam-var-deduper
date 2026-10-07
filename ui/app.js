@@ -3399,7 +3399,10 @@ function libEmptyHtml() {
   )}</span></div>`;
 }
 
-function renderVarPackages() {
+// Rebuilds the grid (or table). `appendFrom` — the number of rows already on
+// screen after an infinite-scroll chunk arrived — adds only the new rows when
+// the DOM still holds exactly those, instead of re-creating every card.
+function renderVarPackages({ appendFrom = null } = {}) {
   const grid = $("var-packages-grid");
   const tableWrap = $("lib-table-wrap");
   const tbody = $("var-packages-tbody");
@@ -3442,13 +3445,23 @@ function renderVarPackages() {
     } else {
       grid.innerHTML = libEmptyHtml();
     }
-  } else if (table) {
-    tbody.innerHTML = items.map((it, i) => libRowHtml(it, i)).join("");
-    libThumbWatch(tbody);
   } else {
-    grid.classList.toggle("is-bulk", state.vpSelected.size > 1);
-    grid.innerHTML = items.map((it, i) => libCardHtml(it, i)).join("");
-    libThumbWatch(grid);
+    const host = table ? tbody : grid;
+    const rowHtml = table ? libRowHtml : libCardHtml;
+    if (!table) grid.classList.toggle("is-bulk", state.vpSelected.size > 1);
+    const shown = host.querySelectorAll(":scope > [data-idx]").length;
+    if (Number.isInteger(appendFrom) && appendFrom > 0 && shown === appendFrom && items.length >= appendFrom) {
+      host.insertAdjacentHTML(
+        "beforeend",
+        items
+          .slice(appendFrom)
+          .map((it, i) => rowHtml(it, appendFrom + i))
+          .join(""),
+      );
+    } else {
+      host.innerHTML = items.map((it, i) => rowHtml(it, i)).join("");
+    }
+    libThumbWatch(host);
   }
   libRenderLoadMore();
   libApplyLayout();
@@ -4113,7 +4126,14 @@ async function refreshVarPackagesFromFolder({
     state.varPackagesFacets = null;
   }
   if (forceRescan) LIB_DETAILS.cache.clear();
-  renderVarPackages();
+  if (append) {
+    // Only the "loading more" indicators change; redrawing every card here
+    // made each scroll chunk cost a full grid layout.
+    $("var-packages-progress")?.classList.remove("hidden");
+    libRenderLoadMore();
+  } else {
+    renderVarPackages();
+  }
   const scanBtn = $("var-packages-scan-button");
   if (scanBtn) scanBtn.disabled = true;
 
@@ -4154,7 +4174,7 @@ async function refreshVarPackagesFromFolder({
       libAfterFreshListing({ keepScroll: keepLoaded });
     }
     renderVarPackagesFilterBar();
-    renderVarPackages();
+    renderVarPackages(listed && append ? { appendFrom: loaded } : {});
 
     if (listed && !append) {
       // The Author suggestions come from the folder cache this call just left
