@@ -1456,10 +1456,18 @@ pub(crate) fn list_var_packages(
     sort_dir: Option<String>,
     force_rescan: Option<bool>,
     deep_scan: Option<bool>,
+    // The offload folder. Packages under it are flagged `offloaded`; the caller
+    // also lists it among the additional dirs when it should be scanned.
+    offload_dir: Option<String>,
     db: State<'_, Db>,
     state: State<'_, AppState>,
 ) -> Result<VarPackagePage, String> {
     let force = force_rescan.unwrap_or(false);
+    let offload_root = offload_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from);
     let filters = filters.unwrap_or_default();
     let additional = additional_input_dirs.unwrap_or_default();
     let additional_paths: Vec<PathBuf> = additional
@@ -1477,12 +1485,16 @@ pub(crate) fn list_var_packages(
     // deep listing after switching to top-level (and vice versa) until something
     // else forced a rescan.
     let cache_key = format!(
-        "{}|{}",
+        "{}|{}|{}",
         crate::utils::scan_cache_key_multi(
             &roots.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
             None,
         ),
         depth.cache_token(),
+        offload_root
+            .as_ref()
+            .map(|p| p.display().to_string().to_ascii_lowercase())
+            .unwrap_or_default(),
     );
 
     // Snapshotted BEFORE the walk below, which runs without holding the cache
@@ -1557,6 +1569,9 @@ pub(crate) fn list_var_packages(
                 item_count: info.item_count,
                 dep_count: info.deps.len() as u32,
                 disabled: crate::packages::disabled_sidecar(path).exists(),
+                offloaded: offload_root
+                    .as_deref()
+                    .is_some_and(|root| crate::offload::path_is_under(path, root)),
                 has_scene_image: info.has_scene_image,
                 license: info.license,
                 readable: info.readable,
@@ -1622,7 +1637,7 @@ pub(crate) fn list_var_packages(
                 }
             }
             matches_var_package_filters(item, &filters, &favorite_ids)
-                && crate::library::enabled_matches(item, &filters)
+                && crate::library::location_matches(item, &filters)
         })
         .collect();
     let mut facets = crate::library::compute_facets(items, &base, &filters, &favorite_ids, missing_unique);

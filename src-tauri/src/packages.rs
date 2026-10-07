@@ -878,7 +878,7 @@ const WIN32_LOCK_VIOLATION: i32 = 33;
 const HRESULT_SHARING_VIOLATION: i32 = 0x8007_0020u32 as i32;
 const HRESULT_LOCK_VIOLATION: i32 = 0x8007_0021u32 as i32;
 
-fn friendly_io_error(err: &std::io::Error, verb: &str) -> String {
+pub(crate) fn friendly_io_error(err: &std::io::Error, verb: &str) -> String {
     match err.raw_os_error() {
         Some(WIN32_SHARING_VIOLATION) | Some(WIN32_LOCK_VIOLATION) => IN_USE_MESSAGE.to_string(),
         _ => format!("Couldn't {verb}: {err}"),

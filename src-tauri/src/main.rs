@@ -11,6 +11,7 @@ mod internalize;
 mod library;
 mod models;
 mod naming;
+mod offload;
 mod packages;
 mod scan;
 mod tasks;
@@ -28,9 +29,9 @@ use crate::{
         hub_embed_open, hub_embed_bounds, hub_embed_control, hub_embed_close,
         inspect_vam_dir,
         list_missing_dependencies,
-        set_var_package_disabled,
     },
     models::AppState,
+    offload::{plan_offload, start_offload_task},
     packages::{
         delete_var_package, move_var_to_creator_folder, start_apply_package_plan_task,
         start_plan_clean_duplicates_task, start_plan_organize_by_creator_task,
@@ -143,7 +144,8 @@ fn main() {
             get_var_package_details,
             get_var_image,
             list_missing_dependencies,
-            set_var_package_disabled,
+            plan_offload,
+            start_offload_task,
             inspect_vam_dir,
             get_hub_package_meta,
             hub_api,

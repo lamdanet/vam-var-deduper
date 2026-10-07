@@ -6084,3 +6084,98 @@ fn local_package_ids_walk_roots_recursively() {
     assert_eq!(ids, vec!["a.b.1".to_string(), "c.d.2".to_string()]);
     fs::remove_dir_all(&root).expect("cleanup");
 }
+
+fn offload_item(package_id: &str, deps: &[&str], offloaded: bool) -> VarPackageListItem {
+    let dir = if offloaded { "AddonPackages_offload" } else { "AddonPackages" };
+    VarPackageListItem {
+        file_path: format!(r"C:\VaM\{dir}\{package_id}.var"),
+        offloaded,
+        ..lib_item(package_id, deps)
+    }
+}
+
+#[test]
+fn offload_plan_leaves_shared_dependencies_unselected() {
+    let items = vec![
+        offload_item("A.Scene.1", &["B.Look.1", "C.Hair.1", "E.Mid.1", "G.Off.1", "M.Gone.1"], false),
+        offload_item("B.Look.1", &["D.Tex.1"], false),
+        offload_item("C.Hair.1", &[], false),
+        offload_item("D.Tex.1", &[], false),
+        offload_item("E.Mid.1", &["F.Base.1"], false),
+        offload_item("F.Base.1", &[], false),
+        offload_item("G.Off.1", &[], true),
+        // Stay in AddonPackages and use C directly / F through E.
+        offload_item("X.Scene.1", &["C.Hair.1"], false),
+        offload_item("W.Scene.1", &["E.Mid.1"], false),
+    ];
+    let plan = crate::offload::build_plan(&items, &[0], false);
+    let dep = |id: &str| plan.deps.iter().find(|d| d.package_id == id).unwrap();
+    assert!(plan.targets[0].default_selected);
+    assert!(dep("B.Look.1").default_selected && dep("B.Look.1").direct);
+    assert!(dep("D.Tex.1").default_selected && !dep("D.Tex.1").direct, "only A needs it, via B");
+    assert!(!dep("C.Hair.1").default_selected);
+    assert_eq!(dep("C.Hair.1").used_by, vec!["X.Scene.1".to_string()]);
+    assert!(!dep("E.Mid.1").default_selected);
+    assert!(!dep("F.Base.1").default_selected, "E stays in AddonPackages and needs it");
+    assert!(dep("F.Base.1").used_by.is_empty());
+    assert!(!dep("G.Off.1").movable && !dep("G.Off.1").default_selected);
+    assert_eq!(plan.missing, vec!["M.Gone.1".to_string()]);
+}
+
+#[test]
+fn restore_plan_brings_back_offloaded_dependencies() {
+    let items = vec![
+        offload_item("A.Scene.1", &["B.Look.1", "C.Hair.1"], true),
+        offload_item("B.Look.1", &[], true),
+        offload_item("C.Hair.1", &[], false),
+    ];
+    let plan = crate::offload::build_plan(&items, &[0], true);
+    let dep = |id: &str| plan.deps.iter().find(|d| d.package_id == id).unwrap();
+    assert!(plan.targets[0].movable && plan.targets[0].default_selected);
+    assert!(dep("B.Look.1").default_selected);
+    assert!(!dep("C.Hair.1").movable, "already in AddonPackages");
+}
+
+#[test]
+fn offload_relative_paths_ignore_case_and_separators() {
+    use crate::offload::{path_is_under, relative_to};
+    assert_eq!(
+        relative_to(Path::new(r"D:\VaM\AddonPackages\Sub\A.B.1.var"), Path::new("d:/vam/addonpackages/")),
+        Some(PathBuf::from(r"Sub\A.B.1.var"))
+    );
+    assert!(!path_is_under(Path::new(r"D:\VaM\AddonPackages_offload\A.B.1.var"), Path::new(r"D:\VaM\AddonPackages")));
+    assert!(!path_is_under(Path::new(r"D:\VaM\AddonPackages"), Path::new(r"D:\VaM\AddonPackages")));
+}
+
+#[test]
+fn offload_moves_into_creator_folders_and_back() {
+    use crate::offload::move_package;
+    let root = std::env::temp_dir().join(format!("vam_offload_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let addon = root.join("AddonPackages");
+    let offload = root.join("AddonPackages_offload");
+    fs::create_dir_all(addon.join("Downloads")).unwrap();
+    let src = addon.join("Downloads").join("Qing.Hair.1.var");
+    fs::write(&src, b"var").unwrap();
+    fs::write(addon.join("Downloads").join("Qing.Hair.1.var.disabled"), b"").unwrap();
+    fs::write(addon.join("Downloads").join("Qing.Hair.1.jpg"), b"img").unwrap();
+
+    let (dest, notes) = move_package(&src, &addon, &offload, true, false).expect("offload");
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(dest, offload.join("Qing").join("Qing.Hair.1.var"));
+    assert!(dest.is_file() && !src.exists());
+    assert!(offload.join("Qing").join("Qing.Hair.1.var.disabled").exists());
+    assert!(offload.join("Qing").join("Qing.Hair.1.jpg").exists());
+
+    // Not by creator: keeps its path relative to the folder it leaves.
+    let (back, _) = move_package(&dest, &offload, &addon, false, true).expect("restore");
+    assert_eq!(back, addon.join("Qing").join("Qing.Hair.1.var"));
+    assert!(back.is_file());
+
+    // Never overwrites.
+    fs::create_dir_all(offload.join("Qing")).unwrap();
+    fs::write(offload.join("Qing").join("Qing.Hair.1.var"), b"other").unwrap();
+    assert!(move_package(&back, &addon, &offload, true, false).is_err());
+    assert!(back.is_file());
+    fs::remove_dir_all(&root).expect("cleanup");
+}

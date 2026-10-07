@@ -112,6 +112,18 @@ pub(crate) struct AppConfig {
     /// and the folders picked in a session are forgotten on exit.
     #[serde(default)]
     pub(crate) dep_source_dirs: Option<Vec<String>>,
+    /// Where Offload moves packages so VaM stops loading them. `None` means the
+    /// default, `<vam_dir>/AddonPackages_offload` beside AddonPackages.
+    #[serde(default)]
+    pub(crate) offload_dir: Option<String>,
+    /// Offload and Restore file each package under a creator folder at the
+    /// destination. Off keeps the path it had relative to the folder it left.
+    #[serde(default = "default_offload_by_creator")]
+    pub(crate) offload_by_creator: bool,
+}
+
+fn default_offload_by_creator() -> bool {
+    true
 }
 
 fn default_backup_changed() -> bool {
@@ -158,6 +170,8 @@ impl Default for AppConfig {
             internalize_replace_in_place: false,
             internalize_backup: true,
             dep_source_dirs: None,
+            offload_dir: None,
+            offload_by_creator: true,
         }
     }
 }
@@ -409,6 +423,8 @@ pub(crate) struct ProgressPayload {
     /// Result payload for `start_collect_deps_copy_task` (VAR Packages).
     #[serde(default)]
     pub(crate) collect_deps_copy_result: Option<CollectDepsCopyResponse>,
+    #[serde(default)]
+    pub(crate) offload_result: Option<OffloadResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1060,6 +1076,8 @@ pub(crate) struct VarPackageListItem {
     pub(crate) newer_version: bool,
     /// `<file>.var.disabled` exists beside it — VaM will not load it.
     pub(crate) disabled: bool,
+    /// It sits in the offload folder (see `offload`), not AddonPackages.
+    pub(crate) offloaded: bool,
     pub(crate) has_scene_image: bool,
     pub(crate) license: Option<String>,
     /// The archive and its meta.json could be read.
@@ -1077,8 +1095,9 @@ pub(crate) struct VarPackageListItem {
 pub(crate) struct VarPackageFacets {
     pub(crate) types: BTreeMap<String, u64>,
     pub(crate) statuses: BTreeMap<String, u64>,
-    pub(crate) enabled: u64,
-    pub(crate) disabled: u64,
+    /// Packages outside the offload folder / inside it.
+    pub(crate) active: u64,
+    pub(crate) offloaded: u64,
     /// Totals over the fully filtered set.
     pub(crate) total_bytes: u64,
     pub(crate) total_items: u64,
@@ -1262,9 +1281,9 @@ pub(crate) struct VarPackageFilters {
     /// Folder mode only: a `library::TYPE_KEYS` content type.
     #[serde(default)]
     pub(crate) pkg_type: Option<String>,
-    /// Folder mode only: `"enabled"` or `"disabled"` (the `.var.disabled` marker).
+    /// Folder mode only: `"active"` (outside the offload folder) or `"offloaded"`.
     #[serde(default)]
-    pub(crate) enabled: Option<String>,
+    pub(crate) location: Option<String>,
 }
 
 /// Single row in the global Resource List page. Joins `resources` with
@@ -1454,4 +1473,31 @@ pub(crate) struct InternalizeReport {
     pub(crate) errors: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) output_path: Option<String>,
+}
+
+/// Outcome of an Offload or Restore run (`offload::start_offload_task`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct OffloadResponse {
+    /// `true` for Restore (offload folder -> AddonPackages).
+    pub(crate) restore: bool,
+    pub(crate) moved: Vec<OffloadMove>,
+    pub(crate) failed: Vec<OffloadFailure>,
+    pub(crate) moved_bytes: u64,
+    pub(crate) was_cancelled: bool,
+    /// Sidecars that could not follow their package, and similar asides.
+    pub(crate) notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct OffloadMove {
+    pub(crate) package_id: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct OffloadFailure {
+    pub(crate) package_id: String,
+    pub(crate) file_path: String,
+    pub(crate) error: String,
 }

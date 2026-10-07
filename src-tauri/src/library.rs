@@ -548,6 +548,27 @@ fn persist_cache_rows(db: &Db, rows: &[(String, CachedVarInfo)]) {
     let _ = tx.commit();
 }
 
+/// Carries cached info over to packages that moved (`(from, to)` paths), so
+/// the next listing doesn't reopen archives whose contents didn't change.
+pub(crate) fn rekey_info_cache(
+    cache: &std::sync::Mutex<Option<HashMap<String, CachedVarInfo>>>,
+    db: &Db,
+    moves: &[(String, String)],
+) {
+    let mut fresh: Vec<(String, CachedVarInfo)> = Vec::new();
+    if let Ok(mut guard) = cache.lock() {
+        if let Some(cache) = guard.as_mut() {
+            for (from, to) in moves {
+                if let Some(entry) = cache.remove(from) {
+                    cache.insert(to.clone(), entry.clone());
+                    fresh.push((to.clone(), entry));
+                }
+            }
+        }
+    }
+    persist_cache_rows(db, &fresh);
+}
+
 /// Library info for every scanned entry, in `entries` order. Cached rows whose
 /// fingerprint still matches are reused; the rest are read in parallel.
 pub(crate) fn infos_for_entries(
@@ -804,10 +825,10 @@ pub(crate) fn type_matches(item: &VarPackageListItem, filters: &VarPackageFilter
     }
 }
 
-pub(crate) fn enabled_matches(item: &VarPackageListItem, filters: &VarPackageFilters) -> bool {
-    match filters.enabled.as_deref().map(str::trim) {
-        Some("enabled") => !item.disabled,
-        Some("disabled") => item.disabled,
+pub(crate) fn location_matches(item: &VarPackageListItem, filters: &VarPackageFilters) -> bool {
+    match filters.location.as_deref().map(str::trim) {
+        Some("active") => !item.offloaded,
+        Some("offloaded") => item.offloaded,
         _ => true,
     }
 }
@@ -824,7 +845,7 @@ pub(crate) fn library_status_matches(
 }
 
 /// Counts for the filter panel. `base` is every item that passes the
-/// non-facet filters (search, creator, size, favorites, scene image, enabled);
+/// non-facet filters (search, creator, size, favorites, scene image, location);
 /// each facet then applies the *other* facet's selection.
 pub(crate) fn compute_facets(
     all: &[VarPackageListItem],
@@ -857,10 +878,10 @@ pub(crate) fn compute_facets(
             }
         }
         if status_ok && type_ok {
-            if item.disabled {
-                facets.disabled += 1;
+            if item.offloaded {
+                facets.offloaded += 1;
             } else {
-                facets.enabled += 1;
+                facets.active += 1;
             }
         }
     }
@@ -942,6 +963,8 @@ pub(crate) struct VarPackageDependency {
     pub(crate) resolved_id: Option<String>,
     pub(crate) file_path: Option<String>,
     pub(crate) size_bytes: Option<u64>,
+    /// The resolved package sits in the offload folder, so VaM can't load it.
+    pub(crate) offloaded: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1088,6 +1111,7 @@ pub(crate) fn get_var_package_details(
                 resolved_id: hit.map(|h| h.package_id.clone()),
                 file_path: hit.map(|h| h.file_path.clone()),
                 size_bytes: hit.map(|h| h.size_bytes),
+                offloaded: hit.is_some_and(|h| h.offloaded),
             });
         }
 
@@ -1296,45 +1320,6 @@ pub(crate) fn list_missing_dependencies(
     Ok(out)
 }
 
-/// Turns VaM's `.var.disabled` marker on or off for one package and patches
-/// the folder cache so the listing reflects it without a rescan.
-#[tauri::command]
-pub(crate) fn set_var_package_disabled(
-    file_path: String,
-    disabled: bool,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    let path = Path::new(&file_path);
-    if !path.is_file() {
-        return Err(format!("not a file: {file_path}"));
-    }
-    let is_var = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("var"));
-    if !is_var {
-        return Err("only .var packages can be disabled".to_string());
-    }
-    let marker = crate::packages::disabled_sidecar(path);
-    if disabled {
-        if !marker.exists() {
-            fs::write(&marker, b"").map_err(|e| format!("could not create marker: {e}"))?;
-        }
-    } else if marker.exists() {
-        fs::remove_file(&marker).map_err(|e| format!("could not remove marker: {e}"))?;
-    }
-    if let Ok(mut cache) = state.var_packages_folder_cache.lock() {
-        if let Some(c) = cache.as_mut() {
-            for item in c.items.iter_mut() {
-                if item.file_path.eq_ignore_ascii_case(&file_path) {
-                    item.disabled = disabled;
-                }
-            }
-        }
-    }
-    Ok(disabled)
-}
-
 // ----------------------------------------------------------------------------
 // VaM directory
 // ----------------------------------------------------------------------------
@@ -1349,6 +1334,8 @@ pub(crate) struct VamDirInfo {
     pub(crate) valid: bool,
     /// `.var` files anywhere under `AddonPackages` (0 when not valid).
     pub(crate) var_count: u64,
+    /// The default offload folder, beside AddonPackages (may not exist yet).
+    pub(crate) offload_dir: String,
 }
 
 /// Checks a candidate VaM directory the way VaM Backstage's settings do: it
@@ -1386,6 +1373,7 @@ pub(crate) fn inspect_vam_dir(path: String) -> VamDirInfo {
     };
     VamDirInfo {
         vam_dir: dir.display().to_string(),
+        offload_dir: dir.join(crate::offload::OFFLOAD_FOLDER_NAME).display().to_string(),
         addon_packages: addon.display().to_string(),
         valid,
         var_count,
