@@ -25,6 +25,7 @@ use crate::{
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
+        hub_embed_open, hub_embed_bounds, hub_embed_control, hub_embed_close,
         inspect_vam_dir,
         list_missing_dependencies,
         set_var_package_disabled,
@@ -147,6 +148,10 @@ fn main() {
             get_hub_package_meta,
             hub_api,
             hub_image,
+            hub_embed_open,
+            hub_embed_bounds,
+            hub_embed_control,
+            hub_embed_close,
             list_local_package_ids,
             hub_wishlist_list,
             hub_wishlist_set,

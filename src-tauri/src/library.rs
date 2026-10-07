@@ -1534,6 +1534,211 @@ pub(crate) async fn hub_image(url: String) -> Result<Option<String>, String> {
     Ok(data)
 }
 
+// ---- Hub page: an embedded browser inside the main window -------------------
+//
+// VaM Backstage shows a resource's Hub pages (overview, updates, reviews,
+// history, discussion) in a <webview> beside the package info. Here that is a
+// child webview of the main window: the frontend lays out a placeholder and
+// keeps the webview's bounds on it (hub_embed_bounds), hiding it while a modal
+// or the Downloads popover covers that area. Hub pages need the
+// `vamhubconsent` cookie or the Hub serves its consent gate instead.
+
+const HUB_EMBED_LABEL: &str = "hub-embed";
+
+/// A `.var` download started inside the Hub page, handed to the main window's
+/// Downloads queue instead of the webview's own download manager.
+#[derive(Clone, Serialize)]
+struct HubPageDownload {
+    url: String,
+    filename: String,
+}
+
+/// Page-load progress of the Hub page, for its address bar and tabs.
+#[derive(Clone, Serialize)]
+struct HubPageNav {
+    url: String,
+    loading: bool,
+}
+
+fn hub_page_url(url: &str) -> Result<tauri::Url, String> {
+    let parsed: tauri::Url = url.trim().parse().map_err(|e| format!("invalid URL: {e}"))?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("hub.virtamate.com") {
+        return Err("only hub.virtamate.com pages open in the Hub page".to_string());
+    }
+    Ok(parsed)
+}
+
+/// Where the Hub page may navigate itself; anything else opens in the system
+/// browser. Includes Cloudflare's challenge host and the Hub's image CDN.
+fn hub_page_allows(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "about" | "data" | "blob" => true,
+        "https" | "http" => url.host_str().is_some_and(|h| {
+            h == "virtamate.com"
+                || h.ends_with(".virtamate.com")
+                || h == "challenges.cloudflare.com"
+                || h.ends_with(".rsc.cdn77.org")
+        }),
+        _ => false,
+    }
+}
+
+fn hub_page_bounds(x: f64, y: f64, width: f64, height: f64) -> tauri::Rect {
+    tauri::Rect {
+        position: tauri::LogicalPosition::new(x.max(0.0), y.max(0.0)).into(),
+        size: tauri::LogicalSize::new(width.max(1.0), height.max(1.0)).into(),
+    }
+}
+
+fn hub_page_webview(app: &tauri::AppHandle) -> Option<tauri::Webview> {
+    use tauri::Manager;
+    app.get_webview(HUB_EMBED_LABEL)
+}
+
+/// Shows `url` (a hub.virtamate.com page) in the Hub page at the given
+/// main-window rect (CSS pixels), creating the embedded webview on first use.
+#[tauri::command]
+pub(crate) async fn hub_embed_open(
+    app: tauri::AppHandle,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+
+    let target = hub_page_url(&url)?;
+    if let Some(webview) = hub_page_webview(&app) {
+        webview.set_bounds(hub_page_bounds(x, y, width, height)).map_err(|e| e.to_string())?;
+        webview.show().map_err(|e| e.to_string())?;
+        return webview.navigate(target).map_err(|e| e.to_string());
+    }
+
+    let window = app.get_window("main").ok_or("main window not found")?;
+    let blank: tauri::Url = "about:blank".parse().map_err(|e| format!("{e}"))?;
+    let popup_app = app.clone();
+    let load_app = app.clone();
+    let download_app = app.clone();
+    let builder = tauri::webview::WebviewBuilder::new(HUB_EMBED_LABEL, tauri::WebviewUrl::External(blank))
+        .on_navigation(|url| {
+            if hub_page_allows(url) {
+                return true;
+            }
+            let _ = crate::tasks::open_url(url.to_string());
+            false
+        })
+        // target=_blank / window.open: Hub pages load in place, the rest go to
+        // the system browser.
+        .on_new_window(move |url, _features| {
+            if url.host_str() == Some("hub.virtamate.com") {
+                if let Some(webview) = hub_page_webview(&popup_app) {
+                    let _ = webview.navigate(url);
+                }
+            } else if url.scheme() == "https" || url.scheme() == "http" {
+                let _ = crate::tasks::open_url(url.to_string());
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_page_load(move |_webview, payload| {
+            let nav = HubPageNav {
+                url: payload.url().to_string(),
+                loading: matches!(payload.event(), tauri::webview::PageLoadEvent::Started),
+            };
+            let _ = load_app.emit_to("main", "hub-page-nav", nav);
+        })
+        .on_download(move |_webview, event| match event {
+            tauri::webview::DownloadEvent::Requested { url, destination } => {
+                let filename = destination
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !filename.to_ascii_lowercase().ends_with(".var") {
+                    return true;
+                }
+                let payload = HubPageDownload { url: url.to_string(), filename };
+                // Handled by the Downloads queue: cancel the webview's own copy.
+                download_app.emit_to("main", "hub-page-download", payload).is_err()
+            }
+            _ => true,
+        });
+    let webview = window
+        .add_child(
+            builder,
+            tauri::LogicalPosition::new(x.max(0.0), y.max(0.0)),
+            tauri::LogicalSize::new(width.max(1.0), height.max(1.0)),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let expires = tauri::webview::cookie::time::OffsetDateTime::now_utc()
+        + tauri::webview::cookie::time::Duration::days(365);
+    let consent = tauri::webview::cookie::Cookie::build(("vamhubconsent", "1"))
+        .domain("hub.virtamate.com")
+        .path("/")
+        .secure(true)
+        .expires(expires)
+        .build();
+    if let Err(e) = webview.set_cookie(consent) {
+        eprintln!("Hub page: could not set the consent cookie: {e}");
+    }
+    webview.navigate(target).map_err(|e| e.to_string())
+}
+
+/// Moves the Hub page to a new rect, or hides it (`visible: false`).
+#[tauri::command]
+pub(crate) async fn hub_embed_bounds(
+    app: tauri::AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    let Some(webview) = hub_page_webview(&app) else {
+        return Ok(());
+    };
+    if !visible {
+        return webview.hide().map_err(|e| e.to_string());
+    }
+    webview.set_bounds(hub_page_bounds(x, y, width, height)).map_err(|e| e.to_string())?;
+    webview.show().map_err(|e| e.to_string())
+}
+
+/// Browser controls for the Hub page: back, forward, reload, stop, or
+/// `navigate` to a hub.virtamate.com `url`.
+#[tauri::command]
+pub(crate) async fn hub_embed_control(
+    app: tauri::AppHandle,
+    action: String,
+    url: Option<String>,
+) -> Result<(), String> {
+    let Some(webview) = hub_page_webview(&app) else {
+        return Ok(());
+    };
+    let result = match action.as_str() {
+        "back" => webview.eval("history.back()"),
+        "forward" => webview.eval("history.forward()"),
+        "reload" => webview.reload(),
+        "stop" => webview.eval("window.stop()"),
+        "navigate" => {
+            let target = hub_page_url(url.as_deref().unwrap_or_default())?;
+            webview.navigate(target)
+        }
+        other => return Err(format!("unknown Hub page action: {other}")),
+    };
+    result.map_err(|e| e.to_string())
+}
+
+/// Closes the Hub page's webview (the next open creates a fresh one).
+#[tauri::command]
+pub(crate) async fn hub_embed_close(app: tauri::AppHandle) -> Result<(), String> {
+    match hub_page_webview(&app) {
+        Some(webview) => webview.close().map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
 /// Lowercased file stems of every `.var` under `roots` (recursive) — what the
 /// Hub page compares Hub files against to show "Installed".
 #[tauri::command(async)]
