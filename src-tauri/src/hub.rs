@@ -269,6 +269,14 @@ pub(crate) fn download_to_file(
     // A MEGA link is resolved first (blocking API calls, so before the async
     // runtime starts) to a temporary address for the encrypted bytes, which
     // are decrypted as they stream in.
+    // A MediaFire file page is resolved to its (expiring) direct address.
+    let resolved;
+    let url = if crate::sources::is_mediafire_page(url) {
+        resolved = crate::sources::mediafire_direct(url).map_err(|e| anyhow!(e))?;
+        resolved.as_str()
+    } else {
+        url
+    };
     let mega = if crate::mega::is_mega(url) {
         Some(crate::mega::open_download(url).map_err(|e| anyhow!(e))?)
     } else {

@@ -197,6 +197,8 @@ impl<T: Read + Seek> ReadSeek for T {}
 fn open_remote(url: &str) -> Result<Box<dyn ReadSeek>, String> {
     let reader = if crate::mega::is_mega(url) {
         crate::mega::open_download(url).and_then(HttpRangeReader::open_mega)
+    } else if crate::sources::is_mediafire_page(url) {
+        crate::sources::mediafire_direct(url).and_then(|direct| HttpRangeReader::open(&direct))
     } else {
         HttpRangeReader::open(url)
     };

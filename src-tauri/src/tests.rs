@@ -6729,3 +6729,63 @@ fn write_password_zip_fixtures() {
     write("Pack2.zip", SimpleFileOptions::default().with_deprecated_encryption(b"beta2"),
         vec![("Looks/ZzTest.HairB.2.var", var("b")), ("preview.png", b"png".to_vec())]);
 }
+
+#[test]
+fn f95_changelog_html_yields_only_real_links() {
+    // As copied from an F95 post: escaped HTML, favicon proxies, masked links.
+    let html = r#"<a href="https://www.mediafire.com/folder/gvtp9c62fsetz/Pack+1" class="link">Pack 1</a>
+        <img src="https://external-content.duckduckgo.com/ip3/www.mediafire.com.ico&quot;" />
+        <a href="https://f95zone.to/masked/pixeldrain.com/239921/10996954/OG1PCXo1ab">PD</a>
+        <img src="https://external-content.duckduckgo.com/ip3/pixeldrain.com.ico&quot;" />
+        <a href="https://pixeldrain.com/u/AbCd12?foo=1&amp;bar=2">direct</a>"#;
+    let text = crate::sources::decode_html_entities(html);
+    let links = crate::sources::extract_links(&text);
+    assert_eq!(
+        links,
+        vec![
+            "https://www.mediafire.com/folder/gvtp9c62fsetz/Pack+1",
+            "https://f95zone.to/masked/pixeldrain.com/239921/10996954/OG1PCXo1ab",
+            "https://pixeldrain.com/u/AbCd12?foo=1&bar=2",
+        ]
+    );
+    use crate::sources::normalize_link;
+    assert_eq!(normalize_link(&links[0]).map(|(_, h)| h), Some("mediafire"));
+    assert_eq!(normalize_link(&links[1]).map(|(_, h)| h), Some("f95"), "masked, not Pixeldrain");
+    assert!(crate::sources::is_mediafire_page("https://www.mediafire.com/file/kgtrv44zyya5de7/x.var/file"));
+    assert!(!crate::sources::is_mediafire_page("https://www.mediafire.com/folder/gvtp9c62fsetz/Pack+1"));
+    assert!(!crate::sources::is_mediafire_page("https://download1528.mediafire.com/abc/kgtrv44zyya5de7/x.var"));
+}
+
+#[test]
+fn f95_post_labels_and_unsupported_hosts() {
+    let post = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../f95htmllinks.md"));
+    let text = match post {
+        Ok(p) => crate::sources::decode_html_entities(&p),
+        // The sample post isn't committed; fall back to two of its lines.
+        Err(_) => crate::sources::decode_html_entities(r#"Collection Update 2025-05-13 (Pack 1):  <a href="https://www.mediafire.com/folder/gvtp9c62fsetz/Pack+1" style="background-image: url(&quot;https://external-content.duckduckgo.com/ip3/www.mediafire.com.ico&quot;);">MEDIAFIRE</a> - <a href="https://f95zone.to/masked/gofile.io/239921/10996954/x">GOFILE</a> - <a href="https://vikingfile.com/f/5hKKoMEy2U">VIKINGFILE</a><br>
+Collection Update 2025-05-13 (Pack 2):  <a href="https://www.mediafire.com/folder/a907i6iiy8cik/Pack+2">MEDIAFIRE </a>- <a href="https://vikingfile.com/f/JlEAsCP0RD">VIKINGFILE</a><br>"#),
+    };
+    let links = crate::sources::extract_links(&text);
+    let first = &links[0];
+    assert!(first.contains("mediafire.com/folder/gvtp9c62fsetz"), "{first}");
+    let pos = text.find(first.as_str()).unwrap();
+    assert_eq!(crate::sources::link_label(&text, pos).as_deref(), Some("Collection Update 2025-05-13 (Pack 1)"));
+    let ignored = crate::sources::unsupported_hosts(&text);
+    let hosts: Vec<&str> = ignored.iter().map(|(h, _)| h.as_str()).collect();
+    assert!(hosts.contains(&"vikingfile.com") && hosts.contains(&"gofile.io"), "{ignored:?}");
+    assert!(!hosts.iter().any(|h| h.contains("mediafire") || h.contains("pixeldrain") || h.contains("mega")));
+}
+
+#[test]
+fn file_host_pages_are_not_taken_for_direct_zips() {
+    let text = r#"<a href="https://datanodes.to/9572z1t321av/Pack_1.zip">DATANODES</a> <a href="https://example.com/files/Pack_1.zip">direct</a>"#;
+    assert_eq!(crate::sources::extract_links(text), vec!["https://example.com/files/Pack_1.zip"]);
+    assert_eq!(crate::sources::unsupported_hosts(text), vec![("datanodes.to".to_string(), 1)]);
+}
+
+#[test]
+fn masked_links_to_unsupported_hosts_are_skipped() {
+    let text = r#"<a href="https://f95zone.to/masked/gofile.io/1/2/abc">G</a> <a href="https://f95zone.to/masked/mega.nz/1/2/def">M</a>"#;
+    assert_eq!(crate::sources::extract_links(text), vec!["https://f95zone.to/masked/mega.nz/1/2/def"]);
+    assert_eq!(crate::sources::unsupported_hosts(text), vec![("gofile.io".to_string(), 1)]);
+}

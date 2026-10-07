@@ -19,19 +19,57 @@ pub(crate) fn normalize_link(raw: &str) -> Option<(String, &'static str)> {
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
         return None;
     }
-    if lower.contains("pixeldrain.") || lower.contains("pixeldra.in") {
+    let host = url_host(url);
+    if is_f95_masked(url) {
+        return Some((url.to_string(), "f95"));
+    }
+    if host == "pixeldrain.com" || host == "pixeldrain.net" || host == "pixeldra.in" || host.ends_with(".pixeldrain.com") {
         return Some(match pixeldrain_id(url) {
             Some(id) => (format!("https://pixeldrain.com/api/file/{id}?download"), "pixeldrain"),
             None => (url.to_string(), "pixeldrain"),
         });
     }
-    if lower.contains("mediafire.com") {
+    if host == "mediafire.com" || host.ends_with(".mediafire.com") {
         return Some((url.to_string(), "mediafire"));
     }
     if crate::mega::is_mega(url) {
         return Some((url.to_string(), "mega"));
     }
     Some((url.to_string(), "other"))
+}
+
+/// The host of an http(s) URL, lowercased, without a leading `www.`.
+pub(crate) fn url_host(url: &str) -> String {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit('@').next().unwrap_or(host).split(':').next().unwrap_or("");
+    host.to_ascii_lowercase().trim_start_matches("www.").to_string()
+}
+
+/// F95zone hides external links behind `f95zone.to/masked/<host>/...`.
+pub(crate) fn is_f95_masked(url: &str) -> bool {
+    url_host(url) == "f95zone.to" && url.contains("/masked/")
+}
+
+/// Undoes the HTML escaping a copied page carries (`&amp;`, `&quot;`, ...), so
+/// links and passwords read as written.
+pub(crate) fn decode_html_entities(text: &str) -> String {
+    let re = regex::Regex::new(r"&(#x[0-9a-fA-F]+|#[0-9]+|amp|quot|apos|lt|gt|nbsp);").expect("valid regex");
+    re.replace_all(text, |c: &regex::Captures| {
+        let e = &c[1];
+        let ch = match e {
+            "amp" => Some('&'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "nbsp" => Some(' '),
+            _ if e.starts_with("#x") => u32::from_str_radix(&e[2..], 16).ok().and_then(char::from_u32),
+            _ => e[1..].parse::<u32>().ok().and_then(char::from_u32),
+        };
+        ch.map(String::from).unwrap_or_else(|| c[0].to_string())
+    })
+    .into_owned()
 }
 
 /// The file id in a Pixeldrain `/u/<id>` or `/api/file/<id>` link.
@@ -247,12 +285,23 @@ pub(crate) struct FoundVar {
     /// password box) was verified against it.
     #[serde(default)]
     pub(crate) password: Option<String>,
+    /// What the post calls the link it came from — the text before it on
+    /// its line, e.g. "Collection Update 2025-05-13 (Pack 1)".
+    #[serde(default)]
+    pub(crate) label: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct LinkProblem {
     pub(crate) link: String,
     pub(crate) error: String,
+    /// `"masked"` (F95 hid the link), `"archive"` (a 7z/RAR), `"empty"` (no
+    /// .var inside), or `"unreachable"` (anything else).
+    #[serde(default)]
+    pub(crate) kind: String,
+    /// The file it is about, when known.
+    #[serde(default)]
+    pub(crate) name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -263,6 +312,77 @@ pub(crate) struct SourceScanResult {
     /// Files that are neither a .var nor an archive (preview images, ...).
     pub(crate) skipped_files: usize,
     pub(crate) was_cancelled: bool,
+    /// Links on hosts the app can't download from, by host, e.g.
+    /// `("vikingfile.com", 35)`.
+    #[serde(default)]
+    pub(crate) ignored_hosts: Vec<(String, usize)>,
+}
+
+/// The host an F95 masked link hides (`f95zone.to/masked/<host>/...`).
+fn masked_host(link: &str) -> String {
+    link.split("/masked/").nth(1).and_then(|r| r.split('/').next()).unwrap_or("").to_ascii_lowercase()
+}
+
+fn masked_host_supported(link: &str) -> bool {
+    matches!(
+        normalize_link(&format!("https://{}/", masked_host(link))),
+        Some((_, "pixeldrain" | "mega" | "mediafire"))
+    )
+}
+
+/// File hosts whose links open a download page (often with a captcha or a
+/// wait) rather than the file — even when the URL ends in the file's name.
+fn is_page_host(host: &str) -> bool {
+    const PAGE_HOSTS: &[&str] = &[
+        "datanodes.to", "gofile.io", "vikingfile.com", "1fichier.com", "krakenfiles.com", "workupload.com",
+        "uploadhaven.com", "buzzheavier.com", "sendspace.com", "uploadrar.com", "rapidgator.net", "nitroflare.com",
+        "katfile.com", "ddownload.com", "send.cm", "filefactory.com", "uptobox.com", "racaty.io", "anonfiles.com",
+        "zippyshare.com", "drive.google.com", "dropbox.com", "onedrive.live.com", "1drv.ms",
+    ];
+    PAGE_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}")))
+}
+
+/// Download hosts in the post the app doesn't support, with how many links
+/// each has. Pages of the forum itself and image links aren't counted.
+pub(crate) fn unsupported_hosts(text: &str) -> Vec<(String, usize)> {
+    let re = regex::Regex::new(r#"href\s*=\s*["']?(https?://[^"'\s<>]+)"#).expect("valid regex");
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for c in re.captures_iter(text) {
+        let link = &c[1];
+        let host = if is_f95_masked(link) {
+            masked_host(link)
+        } else {
+            url_host(link)
+        };
+        let supported = matches!(normalize_link(&format!("https://{host}/")), Some((_, "pixeldrain" | "mega" | "mediafire")));
+        let path = link.to_ascii_lowercase();
+        let direct = path.split(['?', '#']).next().is_some_and(|p| p.ends_with(".var") || crate::archives::archive_kind(p).is_some());
+        if host.is_empty() || supported || (direct && !is_page_host(&host)) || host == "f95zone.to" || host.ends_with("duckduckgo.com") {
+            continue;
+        }
+        *counts.entry(host).or_default() += 1;
+    }
+    counts.into_iter().collect()
+}
+
+/// The text before `pos` on its line, without HTML — how a post labels the
+/// links on that line ("Pack 2: MEGA - MEDIAFIRE - ...").
+pub(crate) fn link_label(text: &str, pos: usize) -> Option<String> {
+    let start = text[..pos].rfind(['\n', '\r']).map(|i| i + 1).unwrap_or(0);
+    let mut before = &text[start..pos];
+    // The link usually sits inside a tag (`<a href="`): drop that open tag.
+    if let Some(lt) = before.rfind('<') {
+        if before.rfind('>').is_none_or(|gt| gt < lt) {
+            before = &before[..lt];
+        }
+    }
+    let tags = regex::Regex::new(r"<[^>]*>").expect("valid regex");
+    let plain = tags.replace_all(before, " ");
+    // Up to the first link marker on the line: the label, not "MEGA - ".
+    let label = plain.split(" - ").next().unwrap_or("").split("http").next().unwrap_or("");
+    let label = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    let label = label.trim_end_matches([':', '-', '–', ' ']).trim();
+    (label.len() >= 3 && label.len() <= 120).then(|| label.to_string())
 }
 
 /// Every link worth following in `text`: Pixeldrain, MEGA, MediaFire, and
@@ -271,14 +391,24 @@ pub(crate) fn extract_links(text: &str) -> Vec<String> {
     let re = regex::Regex::new(r#"https?://[^\s"'<>\[\](){}|\\^`]+"#).expect("valid regex");
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
+    const IMAGE_EXTS: &[&str] = &[".ico", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"];
     for m in re.find_iter(text) {
-        let link = m.as_str().trim_end_matches(['.', ',', ';', ':', '?']);
+        let link = m.as_str().trim_end_matches(['.', ',', ';', ':', '?', '&']);
         let lower = link.to_ascii_lowercase();
         let path = lower.split(['?', '#']).next().unwrap_or("");
-        let wanted = lower.contains("pixeldrain.")
-            || lower.contains("pixeldra.in")
-            || crate::mega::is_mega(link)
-            || lower.contains("mediafire.com")
+        // Favicons, thumbnails and image proxies are page decoration.
+        if IMAGE_EXTS.iter().any(|e| path.ends_with(e)) {
+            continue;
+        }
+        // A file host's page, even one whose URL ends in `.zip`, isn't the file.
+        if is_page_host(&url_host(link)) {
+            continue;
+        }
+        // A masked link to a host the app can't use isn't worth unmasking.
+        if is_f95_masked(link) && !masked_host_supported(link) {
+            continue;
+        }
+        let wanted = matches!(normalize_link(link), Some((_, "pixeldrain" | "mega" | "mediafire" | "f95")))
             || path.ends_with(".var")
             || crate::archives::archive_kind(path).is_some();
         if wanted && seen.insert(link.to_string()) {
@@ -379,6 +509,10 @@ struct Scan<'a> {
     origin: String,
     /// Passwords to try on protected archives behind this link, best first.
     candidates: Vec<String>,
+    label: Option<String>,
+    /// Set once F95 refuses to unmask (it wants a log-in): the remaining
+    /// masked links aren't asked about again.
+    f95_refused: &'a std::sync::atomic::AtomicBool,
 }
 
 impl Scan<'_> {
@@ -399,14 +533,12 @@ impl Scan<'_> {
                 size,
                 origin: self.origin.clone(),
                 folder_path,
+                label: self.label.clone(),
                 ..Default::default()
             });
             return;
         }
         match crate::archives::archive_kind(&lower) {
-            Some("zip") if host == "mediafire" => self.problem(format!(
-                "{name}: MediaFire downloads only work in the browser — download and extract it yourself."
-            )),
             Some("zip") => match crate::archives::inspect_remote(url, &self.candidates) {
                 Ok((entries, password)) => {
                     let before = self.out.found.len();
@@ -421,23 +553,33 @@ impl Scan<'_> {
                             encrypted: e.encrypted,
                             origin: self.origin.clone(),
                             folder_path: folder_path.clone(),
+                            label: self.label.clone(),
                             password: if e.encrypted { password.clone() } else { None },
                         });
                     }
                     if self.out.found.len() == before {
-                        self.problem(format!("{name}: no .var files inside"));
+                        self.problem_of("empty", Some(name), "no .var files inside".to_string());
                     }
                     self.out.skipped_files += entries.len() - (self.out.found.len() - before);
                 }
-                Err(e) => self.problem(format!("{name}: {e}")),
+                Err(e) => self.problem_of("unreachable", Some(name), e),
             },
-            Some(_) => self.problem(format!("{name}: {}", crate::archives::UNSUPPORTED_ARCHIVE)),
+            Some(_) => self.problem_of("archive", Some(name), crate::archives::UNSUPPORTED_ARCHIVE.to_string()),
             None => self.out.skipped_files += 1,
         }
     }
 
     fn problem(&mut self, error: String) {
-        self.out.problems.push(LinkProblem { link: self.origin.clone(), error });
+        self.problem_of("unreachable", None, error);
+    }
+
+    fn problem_of(&mut self, kind: &str, name: Option<&str>, error: String) {
+        self.out.problems.push(LinkProblem {
+            link: self.origin.clone(),
+            error,
+            kind: kind.to_string(),
+            name: name.map(str::to_string),
+        });
     }
 
     fn link(&mut self, link: &str) {
@@ -445,6 +587,45 @@ impl Scan<'_> {
             return self.problem("not an http(s) link".to_string());
         };
         match host {
+            "f95" => {
+                let hidden_host = Some(masked_host(&url)).filter(|h| !h.is_empty());
+                let refused = self.f95_refused.load(std::sync::atomic::Ordering::SeqCst);
+                let unmasked = if refused { Err(String::new()) } else { unmask_f95(&url) };
+                match unmasked {
+                    Ok(real) if !is_f95_masked(&real) => self.link(&real),
+                    _ => {
+                        self.f95_refused.store(true, std::sync::atomic::Ordering::SeqCst);
+                        self.problem_of(
+                            "masked",
+                            hidden_host.as_deref(),
+                            "F95 only reveals masked links to logged-in members.".to_string(),
+                        );
+                    }
+                }
+            }
+            "mediafire" => {
+                if let Some(key) = mediafire_folder_key(&url) {
+                    let mut files = Vec::new();
+                    match mediafire_list_folder(key, "", 0, &mut files) {
+                        Ok(()) if files.is_empty() => {
+                            self.problem_of("empty", None, "the MediaFire folder is empty".to_string())
+                        }
+                        Ok(()) => {
+                            for f in files {
+                                self.file_in(&f.name, f.size, &f.url, host, Some(&f.path));
+                            }
+                        }
+                        Err(e) => self.problem(format!("Couldn't read the MediaFire folder: {e}")),
+                    }
+                } else if let Some(key) = mediafire_quick_key(&url) {
+                    match mediafire_file_info(key) {
+                        Ok((name, size)) => self.file(&name, size, &url, host),
+                        Err(e) => self.problem(format!("Couldn't read the MediaFire file: {e}")),
+                    }
+                } else {
+                    self.problem("unrecognized MediaFire link".to_string());
+                }
+            }
             "pixeldrain" => {
                 if let Some(id) = pixeldrain_list_id(link) {
                     match fetch_pixeldrain_list(id) {
@@ -490,6 +671,147 @@ impl Scan<'_> {
     }
 }
 
+// ----------------------------------------------------------------------------
+// MediaFire and F95
+// ----------------------------------------------------------------------------
+
+fn browser_client(timeout_secs: u64) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent(crate::hub::CHROME_USER_AGENT)
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn path_segment_after<'a>(url: &'a str, marker: &str) -> Option<&'a str> {
+    let pos = url.find(marker)?;
+    let rest = &url[pos + marker.len()..];
+    let end = rest.find(['/', '?', '#', '&']).unwrap_or(rest.len());
+    (end > 0).then(|| &rest[..end])
+}
+
+fn mediafire_folder_key(url: &str) -> Option<&str> {
+    path_segment_after(url, "/folder/")
+}
+
+/// A MediaFire file's quick key: `/file/<key>`, `/view/<key>`, `/download/<key>`
+/// or the old `mediafire.com/?<key>`.
+fn mediafire_quick_key(url: &str) -> Option<&str> {
+    ["/file/", "/view/", "/download/", "mediafire.com/?"].iter().find_map(|m| path_segment_after(url, m))
+}
+
+pub(crate) fn is_mediafire_page(url: &str) -> bool {
+    let host = url_host(url);
+    (host == "mediafire.com" || host.ends_with(".mediafire.com"))
+        && !host.starts_with("download")
+        && mediafire_quick_key(url).is_some()
+}
+
+fn mediafire_api(path: &str) -> Result<serde_json::Value, String> {
+    let value: serde_json::Value = browser_client(20)?
+        .get(format!("https://www.mediafire.com/api/1.5/{path}&response_format=json"))
+        .send()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| format!("unexpected answer: {e}"))?;
+    let response = value.get("response").cloned().unwrap_or_default();
+    if response.get("result").and_then(|r| r.as_str()) != Some("Success") {
+        let msg = response.get("message").and_then(|m| m.as_str()).unwrap_or("not found");
+        return Err(msg.to_string());
+    }
+    Ok(response)
+}
+
+fn mediafire_file_info(key: &str) -> Result<(String, Option<u64>), String> {
+    let r = mediafire_api(&format!("file/get_info.php?quick_key={key}"))?;
+    let info = r.get("file_info").ok_or("no file info")?;
+    let name = info.get("filename").and_then(|v| v.as_str()).ok_or("no file name")?.to_string();
+    let size = info.get("size").and_then(|v| v.as_str()).and_then(|s| s.parse().ok());
+    Ok((name, size))
+}
+
+struct FolderFile {
+    name: String,
+    size: Option<u64>,
+    url: String,
+    path: String,
+}
+
+/// Every file in a public MediaFire folder and its subfolders (a few levels).
+fn mediafire_list_folder(key: &str, path: &str, depth: u32, out: &mut Vec<FolderFile>) -> Result<(), String> {
+    for kind in ["files", "folders"] {
+        for chunk in 1..=50 {
+            let r = mediafire_api(&format!(
+                "folder/get_content.php?folder_key={key}&content_type={kind}&chunk={chunk}"
+            ))?;
+            let content = r.get("folder_content").cloned().unwrap_or_default();
+            for item in content.get(kind).and_then(|v| v.as_array()).cloned().unwrap_or_default() {
+                if kind == "files" {
+                    let (Some(name), Some(qk)) = (
+                        item.get("filename").and_then(|v| v.as_str()),
+                        item.get("quickkey").and_then(|v| v.as_str()),
+                    ) else {
+                        continue;
+                    };
+                    out.push(FolderFile {
+                        name: name.to_string(),
+                        size: item.get("size").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()),
+                        url: format!("https://www.mediafire.com/file/{qk}/file"),
+                        path: path.to_string(),
+                    });
+                } else if depth < 4 {
+                    let (Some(sub), Some(name)) = (
+                        item.get("folderkey").and_then(|v| v.as_str()),
+                        item.get("name").and_then(|v| v.as_str()),
+                    ) else {
+                        continue;
+                    };
+                    let sub_path = if path.is_empty() { name.to_string() } else { format!("{path}/{name}") };
+                    mediafire_list_folder(sub, &sub_path, depth + 1, out)?;
+                }
+            }
+            if content.get("more_chunks").and_then(|v| v.as_str()) != Some("yes") {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The direct (`download####.mediafire.com`) address behind a MediaFire file
+/// page. It expires, so it is looked up each time a file is fetched.
+pub(crate) fn mediafire_direct(page_url: &str) -> Result<String, String> {
+    let key = mediafire_quick_key(page_url).ok_or("not a MediaFire file link")?;
+    let html = browser_client(30)?
+        .get(format!("https://www.mediafire.com/file/{key}/file"))
+        .send()
+        .map_err(|e| format!("Couldn't reach MediaFire: {e}"))?
+        .text()
+        .map_err(|e| e.to_string())?;
+    let re = regex::Regex::new(r#"https?://download\d+\.mediafire\.com/[^"'\s<>]+"#).expect("valid regex");
+    re.find(&html).map(|m| m.as_str().to_string()).ok_or_else(|| {
+        "MediaFire didn't give a download address (removed, or it wants a captcha) — open it in your browser".to_string()
+    })
+}
+
+/// The real address behind an F95 masked link, the way F95's own page asks
+/// for it. F95 may refuse (log-in or captcha); the caller then asks the user.
+fn unmask_f95(url: &str) -> Result<String, String> {
+    let resp = browser_client(20)?
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("X-Requested-With", "XMLHttpRequest")
+        .body("xhr=1&download=1")
+        .send()
+        .map_err(|e| e.to_string())?;
+    let value: serde_json::Value = resp.json().map_err(|_| "F95 didn't unmask the link".to_string())?;
+    match (value.get("status").and_then(|v| v.as_str()), value.get("msg").and_then(|v| v.as_str())) {
+        (Some("ok"), Some(link)) if link.starts_with("http") => Ok(link.to_string()),
+        (_, Some(msg)) => Err(msg.to_string()),
+        _ => Err("F95 didn't unmask the link".to_string()),
+    }
+}
+
 /// Follows every link in `text` (see `extract_links`) as a background task
 /// and lists the .var files they deliver.
 #[tauri::command]
@@ -499,28 +821,51 @@ pub(crate) fn start_scan_source_links_task(
     password: Option<String>,
     state: State<'_, crate::models::AppState>,
 ) -> Result<crate::models::TaskHandle, String> {
+    let text = decode_html_entities(&text);
     let links = extract_links(&text);
+    let ignored_hosts = unsupported_hosts(&text);
     let found_passwords = extract_passwords(&text);
     if links.is_empty() {
-        return Err("No Pixeldrain, MEGA, MediaFire or .var / .zip links in that text.".to_string());
+        return Err("No Pixeldrain, MEGA, MediaFire, F95 or .var / .zip links in that text.".to_string());
     }
     let (task_id, tasks, cancel) = crate::packages::begin_task(&state, "source_scan_starting", "Reading links")?;
     std::thread::spawn(move || {
-        let mut result = SourceScanResult { links: links.len(), ..Default::default() };
-        for (i, link) in links.iter().enumerate() {
-            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                result.was_cancelled = true;
-                break;
+        use rayon::prelude::*;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let mut result = SourceScanResult { links: links.len(), ignored_hosts, ..Default::default() };
+        let f95_refused = AtomicBool::new(false);
+        let read = AtomicUsize::new(0);
+        crate::tasks::set_task_progress(&tasks, task_id, "source_scan_link", 0.0, format!("Reading {} links", links.len()));
+        // Hosts answer slowly but independently: read six links at a time.
+        // Results are merged in the post's order.
+        let read_one = |link: &String| -> SourceScanResult {
+            let mut part = SourceScanResult::default();
+            if cancel.load(Ordering::SeqCst) {
+                part.was_cancelled = true;
+                return part;
             }
+            let candidates = password_candidates(password.as_deref(), &found_passwords, text.find(link.as_str()));
+            let label = text.find(link.as_str()).and_then(|pos| link_label(&text, pos));
+            Scan { out: &mut part, origin: link.clone(), candidates, label, f95_refused: &f95_refused }.link(link);
+            let n = read.fetch_add(1, Ordering::SeqCst) + 1;
             crate::tasks::set_task_progress(
                 &tasks,
                 task_id,
                 "source_scan_link",
-                i as f64 / links.len() as f64,
-                format!("Reading link {} of {}", i + 1, links.len()),
+                n as f64 / links.len() as f64,
+                format!("Read {n} of {} links", links.len()),
             );
-            let candidates = password_candidates(password.as_deref(), &found_passwords, text.find(link.as_str()));
-            Scan { out: &mut result, origin: link.clone(), candidates }.link(link);
+            part
+        };
+        let parts: Vec<SourceScanResult> = match rayon::ThreadPoolBuilder::new().num_threads(6).build() {
+            Ok(pool) => pool.install(|| links.par_iter().map(read_one).collect()),
+            Err(_) => links.iter().map(read_one).collect(),
+        };
+        for part in parts {
+            result.found.extend(part.found);
+            result.problems.extend(part.problems);
+            result.skipped_files += part.skipped_files;
+            result.was_cancelled |= part.was_cancelled;
         }
         if let Ok(mut guard) = tasks.lock() {
             if let Some(task) = guard.get_mut(&task_id) {
