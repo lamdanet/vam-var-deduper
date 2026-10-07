@@ -4600,7 +4600,7 @@ async function removeDepsConfirm() {
     if (OFFLOAD.stop) break;
     offloadProgress(n / picked.length, `Deleting ${dep.package_id} (${n + 1}/${picked.length})`);
     try {
-      freed += Number(await invoke("delete_var_package", { filePath: dep.file_path })) || 0;
+      freed += Number(await invoke("delete_var_package", { filePath: dep.file_path, roots: vpPruneRoots() })) || 0;
       removed += 1;
     } catch (e) {
       failed.push(dep);
@@ -5528,6 +5528,19 @@ function vpResolveInputDir() {
     inputField.value = mainInput.value;
   }
   return inputField ? inputField.value.trim() : "";
+}
+
+// The folders a delete may empty its way up to — they themselves always stay.
+// A folder left empty below one of them (a creator folder) is removed.
+function vpPruneRoots() {
+  const dirs = [
+    vamAddonPackagesDir(),
+    offloadDir(),
+    ...getUserAdditionalDirs("varPackages"),
+    ...getUserAdditionalDirs("downloadVars"),
+    ($("settings-downloads-folder")?.value || "").trim(),
+  ].filter(Boolean);
+  return [...new Map(dirs.map((d) => [d.toLowerCase(), d])).values()];
 }
 
 function vpRoots() {
@@ -6463,7 +6476,7 @@ async function vpDeleteOne(filePath, trigger) {
   if (trigger) trigger.disabled = true;
   if (extraPaths.length === 0) {
     try {
-      const freed = await invoke("delete_var_package", { filePath });
+      const freed = await invoke("delete_var_package", { filePath, roots: vpPruneRoots() });
       addLog(`Deleted ${fileName} (${formatBytesLocal(freed)} freed) — restorable from the Recycle Bin.`);
       // A deleted file can't stay multi-selected.
       vpPruneSelection([filePath]);
@@ -6590,7 +6603,7 @@ async function vpDeleteFilesSequential(targets, onProgress) {
       continue;
     }
     try {
-      freed += Number(await invoke("delete_var_package", { filePath: tgt.file_path })) || 0;
+      freed += Number(await invoke("delete_var_package", { filePath: tgt.file_path, roots: vpPruneRoots() })) || 0;
       removed.push(tgt);
     } catch (err) {
       const msg = String(err);
