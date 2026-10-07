@@ -97,6 +97,10 @@ pub(crate) struct AppConfig {
     /// persisted — same convention as Missing Resources / Find Duplicates.
     #[serde(default)]
     pub(crate) internalize_input_dir: Option<String>,
+    /// Missing Resources: extra VAR folders unioned with AddonPackages when
+    /// scanning for replacements.
+    #[serde(default)]
+    pub(crate) missing_additional_dirs: Option<Vec<String>>,
     /// Internalize Resources: extra VAR folders unioned with `internalize_input_dir`.
     #[serde(default)]
     pub(crate) internalize_additional_dirs: Option<Vec<String>>,
@@ -165,6 +169,7 @@ impl Default for AppConfig {
             download_vars_downloads_folder: None,
             download_vars_organize_by_creator: false,
             internalize_input_dir: None,
+            missing_additional_dirs: None,
             internalize_additional_dirs: None,
             internalize_output_dir: None,
             internalize_replace_in_place: false,

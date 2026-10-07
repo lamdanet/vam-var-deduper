@@ -13802,6 +13802,7 @@ function applyConfigToInputs(config) {
   setAdditionalDirs("dbf", config.dbf_additional_dirs);
   setAdditionalDirs("downloadVars", config.download_vars_additional_dirs);
   setAdditionalDirs("internalize", config.internalize_additional_dirs);
+  setAdditionalDirs("missing", config.missing_additional_dirs);
   setVal("output-dir", config.output_dir ?? "");
   setVal("vap-dir", config.vap_dir ?? "");
   if (typeof config.replace_in_place === "boolean") {
@@ -13972,6 +13973,7 @@ function buildCurrentConfig() {
       ((($("internalize-input-dir")?.value || "").trim()) ||
         state.internalize?.inputDir ||
         "").trim() || null,
+    missing_additional_dirs: getUserAdditionalDirs("missing").length ? getUserAdditionalDirs("missing") : null,
     internalize_additional_dirs: getUserAdditionalDirs("internalize").length
       ? getUserAdditionalDirs("internalize")
       : null,
@@ -14345,6 +14347,15 @@ const ADDITIONAL_DIR_SECTIONS = {
     primaryInputId: "dbf-input-dir",
     onChange: persistAllConfig,
   },
+  // Missing Resources: extra folders searched for the missing files'
+  // replacements, persisted as missing_additional_dirs.
+  missing: {
+    listId: "missing-additional-dirs",
+    addBtnId: "missing-add-folder-button",
+    labelId: "missing-additional-dirs-label",
+    primaryInputId: "missing-input-dir",
+    onChange: persistAllConfig,
+  },
   internalize: {
     listId: "internalize-additional-dirs",
     addBtnId: "internalize-add-folder-button",
@@ -14527,11 +14538,10 @@ function setAdditionalDirs(sectionId, dirs) {
   renderAllAdditionalDirs();
 }
 
-// Missing Resources has no folder list of its own; its scan, analysis and fix
-// all walk AddonPackages plus the offload folder (the cache key must match).
+// Missing Resources' scan, analysis and fix all walk AddonPackages plus its
+// own folder list and the offload folder (the cached scan is keyed on them).
 function missingExtraDirs() {
-  const dir = offloadScanDir();
-  return dir ? [dir] : [];
+  return getAdditionalDirs("missing");
 }
 
 // Back-compat thin wrapper — Overview call sites still use this name.
