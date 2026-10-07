@@ -14879,3 +14879,27 @@ button.lib-dep-ref:hover {
 .sources-fold-all .lib-small-link {
   font-size: 11px;
 }
+
+/* A saved link's track record. */
+.link-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.link-health .material-symbols-outlined {
+  font-size: 13px;
+}
+
+.link-health.is-ok {
+  color: var(--lib-success, #22c55e);
+}
+
+.link-health.is-bad {
+  color: var(--lib-error, #ef4444);
+}

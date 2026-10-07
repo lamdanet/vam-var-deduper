@@ -5002,6 +5002,22 @@ function srcHostLabel(host) {
           : "Link";
 }
 
+// How a saved link has fared: downloads through it that worked or failed.
+// New links never replace old ones; a failing one is simply tried last.
+function linkHealthHtml(link) {
+  const fails = Number(link.fail_count) || 0;
+  if (fails) {
+    return `<span class="link-health is-bad" title="${escapeAttribute(link.last_error || "")}"><span class="material-symbols-outlined">error</span>Failed${
+      fails > 1 ? ` ×${fails}` : ""
+    }${link.last_error ? ` — ${escapeHtml(String(link.last_error).slice(0, 80))}` : ""}${link.last_ok ? " (worked before)" : ""}</span>`;
+  }
+  if (link.last_ok) {
+    const when = new Date(Number(link.last_ok) * 1000).toLocaleDateString();
+    return `<span class="link-health is-ok"><span class="material-symbols-outlined">check_circle</span>Worked · ${escapeHtml(when)}</span>`;
+  }
+  return "";
+}
+
 function srcSetError(msg) {
   vpSetText("src-error", msg || "");
 }
@@ -5024,6 +5040,7 @@ async function srcRenderExisting() {
              <span class="hub-dl-main">
                <span class="hub-dl-name" title="${escapeAttribute(r.url)}">${escapeHtml(r.filename)}</span>
                <span class="hub-dl-meta">${escapeHtml(srcHostLabel(r.host))}${r.size ? ` · ${escapeHtml(formatBytesLocal(r.size))}` : ""}</span>
+               ${linkHealthHtml(r)}
              </span>
              <button type="button" class="icon-button" data-src-open="${i}" title="Open the link in your browser"><span class="material-symbols-outlined">open_in_new</span></button>
              <button type="button" class="icon-button dep-scan-act-danger" data-src-remove="${i}" title="Forget this source"><span class="material-symbols-outlined">delete</span></button>
@@ -5789,6 +5806,7 @@ function sourcesRenderSaved() {
           <span class="hub-dl-main">
             <span class="hub-dl-name" title="${escapeAttribute(r.filename)}">${escapeHtml(r.filename)}</span>
             <span class="hub-dl-meta">${escapeHtml(srcHostLabel(r.host))} · ${escapeHtml(sourcesShortLink(r.url))}</span>
+            ${linkHealthHtml(r)}
           </span>
           ${archive}
           ${inLib ? `<span class="lib-pill lib-pill-ok">In library</span>` : ""}
