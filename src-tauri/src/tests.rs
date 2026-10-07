@@ -6490,3 +6490,174 @@ fn mega_parallel_download_reassembles_and_decrypts() {
     assert!(got == plain, "decrypted bytes differ");
     fs::remove_dir_all(&dir).ok();
 }
+
+/// A file server that honours `Range: bytes=a-b` (206 + Content-Range), as
+/// Pixeldrain does, and serves the whole body otherwise.
+fn serve_file(body: Vec<u8>) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body = std::sync::Arc::new(body);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let body = std::sync::Arc::clone(&body);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut range: Option<(usize, usize)> = None;
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap() == 0 || h == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (a, b) = v.trim().split_once('-').unwrap();
+                        range = Some((a.parse().unwrap(), b.parse().unwrap()));
+                    }
+                }
+                let mut out = stream;
+                match range {
+                    Some((a, b)) => {
+                        let b = b.min(body.len() - 1);
+                        write!(out, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {a}-{b}/{}\r\nConnection: close\r\n\r\n", b + 1 - a, body.len()).unwrap();
+                        out.write_all(&body[a..=b]).unwrap();
+                    }
+                    None => {
+                        write!(out, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                        out.write_all(&body).unwrap();
+                    }
+                }
+            });
+        }
+    });
+    format!("http://{addr}/api/file/abc?download")
+}
+
+/// A zip like the ones shared on forums: an AES-protected .var, a
+/// ZipCrypto-protected one in a subfolder, and a preview image.
+fn forum_zip() -> Vec<u8> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut buf);
+        let aes = SimpleFileOptions::default().with_aes_encryption(zip::AesMode::Aes256, "s3cret");
+        w.start_file("Acid.Look.3.var", aes).unwrap();
+        w.write_all(&vec![b'A'; 300_000]).unwrap();
+        use zip::unstable::write::FileOptionsExt;
+        let old = SimpleFileOptions::default().with_deprecated_encryption(b"s3cret");
+        w.start_file("deps/Bee.Hair.2.var", old).unwrap();
+        w.write_all(b"hair bytes").unwrap();
+        w.start_file("preview.png", SimpleFileOptions::default()).unwrap();
+        w.write_all(b"png").unwrap();
+        w.finish().unwrap();
+    }
+    buf.into_inner()
+}
+
+#[test]
+fn archives_list_over_http_ranges_and_extract_with_password() {
+    let zip = forum_zip();
+    let dir = std::env::temp_dir().join(format!("vam_archive_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let local = dir.join("pack.zip");
+    fs::write(&local, &zip).unwrap();
+
+    let entries = crate::archives::list_local_for_test(&local).unwrap();
+    let names: Vec<(&str, bool)> = entries.iter().map(|e| (e.name.as_str(), e.encrypted)).collect();
+    assert_eq!(names, vec![("Acid.Look.3.var", true), ("deps/Bee.Hair.2.var", true), ("preview.png", false)]);
+
+    // The same listing through range requests only.
+    let url = serve_file(zip.clone());
+    let remote = crate::archives::list_http_for_test(&url).unwrap();
+    assert_eq!(remote.len(), 3);
+    assert_eq!(remote[0].size, 300_000);
+
+    let out = dir.join("out.var");
+    use crate::archives::extract_entry;
+    extract_entry(&local, "Acid.Look.3.var", Some("s3cret"), &out).unwrap();
+    assert_eq!(fs::read(&out).unwrap(), vec![b'A'; 300_000]);
+    // By file name alone, ZipCrypto.
+    extract_entry(&local, "Bee.Hair.2.var", Some("s3cret"), &out).unwrap();
+    assert_eq!(fs::read(&out).unwrap(), b"hair bytes");
+    assert!(extract_entry(&local, "Acid.Look.3.var", Some("nope"), &out).unwrap_err().contains("wrong password"));
+    assert!(extract_entry(&local, "Bee.Hair.2.var", Some("nope"), &out).unwrap_err().contains("wrong password"));
+    assert!(extract_entry(&local, "Acid.Look.3.var", None, &out).unwrap_err().contains("password-protected"));
+
+    // Downloading through the cache: one fetch, then reused.
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let cached = crate::archives::ensure_cached(&url, &cancel, &mut |_, _| {}).unwrap();
+    assert_eq!(fs::read(&cached).unwrap(), zip);
+    let again = crate::archives::ensure_cached(&url, &cancel, &mut |_, _| {}).unwrap();
+    assert_eq!(cached, again);
+    let _ = fs::remove_file(&cached);
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn source_links_are_found_in_pasted_text() {
+    let text = "Download (pw: vam123): https://pixeldrain.com/u/AbC123, mirror https://mega.nz/folder/FoLd3r#AAECAwQFBgcICQoLDA0ODw!\n\
+                <a href=\"https://www.mediafire.com/file/x1/Acid.Look.3.var/file\">MF</a> \
+                https://f95zone.to/threads/123/ https://example.com/packs/Pack.zip?dl=1 https://pixeldrain.com/u/AbC123";
+    let links = crate::sources::extract_links(text);
+    assert_eq!(
+        links,
+        vec![
+            "https://pixeldrain.com/u/AbC123",
+            "https://mega.nz/folder/FoLd3r#AAECAwQFBgcICQoLDA0ODw!",
+            "https://www.mediafire.com/file/x1/Acid.Look.3.var/file",
+            "https://example.com/packs/Pack.zip?dl=1",
+        ]
+    );
+}
+
+#[test]
+fn download_task_extracts_a_var_from_a_password_protected_zip_source() {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    // A real (tiny) .var: VaM packages are zips with Saves/ or Custom/ entries.
+    let mut var = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut var);
+        w.start_file("meta.json", SimpleFileOptions::default()).unwrap();
+        w.write_all(b"{}").unwrap();
+        w.start_file("Saves/scene/Look.json", SimpleFileOptions::default()).unwrap();
+        w.write_all(b"{}").unwrap();
+        w.finish().unwrap();
+    }
+    let mut outer = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut outer);
+        let aes = SimpleFileOptions::default().with_aes_encryption(zip::AesMode::Aes256, "pw1");
+        w.start_file("Pack/Acid.Look.3.var", aes).unwrap();
+        w.write_all(var.get_ref()).unwrap();
+        w.finish().unwrap();
+    }
+    let url = format!("{}&case=e2e{}", serve_file(outer.into_inner()), std::process::id());
+
+    let db = crate::db::open_in_memory().expect("db");
+    let mut row = crate::tasks::parse_link_line(&format!("Acid.Look.3.var {url}")).unwrap();
+    row.archive_entry = Some("Pack/Acid.Look.3.var".to_string());
+    row.archive_password = Some("pw1".to_string());
+    crate::db::insert_download_links(&db, std::slice::from_ref(&row)).unwrap();
+
+    let dest = std::env::temp_dir().join(format!("vam_zip_e2e_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dest);
+    let tasks = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+    tasks.lock().unwrap().insert(1, crate::tasks::new_progress_payload("t", "t"));
+    let res = crate::tasks::run_download_one_task(
+        &tasks,
+        1,
+        "Acid.Look.3".to_string(),
+        url.clone(),
+        "Acid.Look.3.var".to_string(),
+        dest.display().to_string(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        db,
+    )
+    .expect("task");
+    assert_eq!(res.items[0].status, "downloaded", "{:?}", res.items[0].error);
+    assert_eq!(fs::read(dest.join("Acid.Look.3.var")).unwrap(), var.into_inner());
+    fs::remove_dir_all(&dest).ok();
+}

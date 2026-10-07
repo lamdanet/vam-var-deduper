@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 15;
+pub(crate) const SCHEMA_VERSION: i32 = 16;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -608,6 +608,30 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         .context("failed to create v15 package id index")?;
     }
 
+    if current < 16 {
+        // A download link can be a .zip holding the .var: its path inside the
+        // archive and the archive's password. Guarded like v10.
+        let tx = conn.transaction().context("failed to start v16 tx")?;
+        for column in ["archive_entry", "archive_password"] {
+            let present: bool = tx
+                .query_row(
+                    "SELECT 1 FROM pragma_table_info('download_links') WHERE name = ?1",
+                    [column],
+                    |_| Ok(true),
+                )
+                .or_else(|err| match err {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(false),
+                    other => Err(other),
+                })
+                .context("failed to inspect download_links columns")?;
+            if !present {
+                tx.execute(&format!("ALTER TABLE download_links ADD COLUMN {column} TEXT"), [])
+                    .context("failed to add a v16 download_links column")?;
+            }
+        }
+        tx.commit().context("failed to commit v16 migration")?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
@@ -627,8 +651,9 @@ pub(crate) fn insert_download_links(db: &Db, rows: &[DownloadLinkRow]) -> Result
     let mut added = 0usize;
     {
         let mut stmt = tx.prepare(
-            "INSERT OR IGNORE INTO download_links (package_base, version, filename, host, url, size)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR IGNORE INTO download_links
+                 (package_base, version, filename, host, url, size, archive_entry, archive_password)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for row in rows {
             added += stmt.execute(params![
@@ -637,7 +662,9 @@ pub(crate) fn insert_download_links(db: &Db, rows: &[DownloadLinkRow]) -> Result
                 row.filename,
                 row.host,
                 row.url,
-                row.size
+                row.size,
+                row.archive_entry,
+                row.archive_password
             ])?;
         }
     }
@@ -667,7 +694,7 @@ pub(crate) fn update_download_link_size(db: &Db, filename: &str, size: u64) -> R
 pub(crate) fn find_download_links(db: &Db, package_base_lc: &str) -> Result<Vec<DownloadLinkRow>> {
     let handle = db.read()?;
     let mut stmt = handle.prepare(
-        "SELECT package_base, version, filename, host, url, size
+        "SELECT package_base, version, filename, host, url, size, archive_entry, archive_password
          FROM download_links
          WHERE package_base = ?1
          ORDER BY version DESC,
@@ -682,6 +709,8 @@ pub(crate) fn find_download_links(db: &Db, package_base_lc: &str) -> Result<Vec<
                 host: r.get(3)?,
                 url: r.get(4)?,
                 size: r.get(5)?,
+                archive_entry: r.get(6)?,
+                archive_password: r.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -692,6 +721,64 @@ pub(crate) fn count_download_links(db: &Db) -> Result<i64> {
     let handle = db.read()?;
     let n = handle.query_row("SELECT COUNT(*) FROM download_links", [], |r| r.get(0))?;
     Ok(n)
+}
+
+/// The archive member and password stored for a link, when the link is a zip.
+pub(crate) fn find_link_archive(db: &Db, filename: &str, url: &str) -> Option<(String, Option<String>)> {
+    let handle = db.read().ok()?;
+    handle
+        .query_row(
+            "SELECT archive_entry, archive_password FROM download_links
+             WHERE filename = ?1 AND url = ?2 AND archive_entry IS NOT NULL",
+            params![filename, url],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .ok()
+}
+
+/// Sets an archive link's member and password (insert is `OR IGNORE`, so a
+/// re-added archive source updates them here — e.g. a password added later).
+pub(crate) fn set_link_archive(db: &Db, row: &DownloadLinkRow) -> Result<()> {
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|_| anyhow!("database connection poisoned"))?;
+    conn.execute(
+        "UPDATE download_links SET archive_entry = ?3, archive_password = ?4 WHERE filename = ?1 AND url = ?2",
+        params![row.filename, row.url, row.archive_entry, row.archive_password],
+    )?;
+    Ok(())
+}
+
+/// Stored links whose file name contains `query` (case-insensitive; all when
+/// empty), newest first, at most `limit`; and how many match in all.
+pub(crate) fn search_download_links(db: &Db, query: &str, limit: u32) -> Result<(Vec<DownloadLinkRow>, u64)> {
+    let handle = db.read()?;
+    let pattern = format!("%{}%", query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let total: i64 = handle.query_row(
+        "SELECT COUNT(*) FROM download_links WHERE filename LIKE ?1 ESCAPE '\\'",
+        params![pattern],
+        |r| r.get(0),
+    )?;
+    let mut stmt = handle.prepare(
+        "SELECT package_base, version, filename, host, url, size, archive_entry, archive_password
+         FROM download_links WHERE filename LIKE ?1 ESCAPE '\\' ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![pattern, limit], |r| {
+            Ok(DownloadLinkRow {
+                package_base: r.get(0)?,
+                version: r.get(1)?,
+                filename: r.get(2)?,
+                host: r.get(3)?,
+                url: r.get(4)?,
+                size: r.get(5)?,
+                archive_entry: r.get(6)?,
+                archive_password: r.get(7)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((rows, total.max(0) as u64))
 }
 
 /// Removes one stored link. Returns whether a row was deleted.

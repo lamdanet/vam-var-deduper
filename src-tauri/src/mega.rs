@@ -348,9 +348,15 @@ fn list_nodes(handle: &str, key: &[u8; 16]) -> Result<Vec<Node>, String> {
         .collect())
 }
 
-/// The `.var` files of a shared folder (or of one of its subfolders), with
-/// their path inside it, sorted by path.
-fn folder_vars(handle: &str, key: &[u8; 16], key_text: &str, sub: Option<&str>) -> Result<Vec<FolderEntry>, String> {
+/// The files of a shared folder (or of one of its subfolders) whose names end
+/// with one of `exts`, with their path inside it, sorted by path.
+fn folder_files(
+    handle: &str,
+    key: &[u8; 16],
+    key_text: &str,
+    sub: Option<&str>,
+    exts: &[&str],
+) -> Result<Vec<FolderEntry>, String> {
     let nodes = list_nodes(handle, key)?;
     let by_handle: HashMap<&str, &Node> = nodes.iter().map(|n| (n.handle.as_str(), n)).collect();
     let path_of = |node: &Node| -> (String, bool) {
@@ -369,7 +375,7 @@ fn folder_vars(handle: &str, key: &[u8; 16], key_text: &str, sub: Option<&str>) 
     };
     let mut out: Vec<FolderEntry> = nodes
         .iter()
-        .filter(|n| n.is_file && n.name.to_ascii_lowercase().ends_with(".var"))
+        .filter(|n| n.is_file && exts.iter().any(|e| n.name.to_ascii_lowercase().ends_with(e)))
         .filter_map(|n| {
             let (path, under_sub) = path_of(n);
             under_sub.then(|| FolderEntry {
@@ -419,9 +425,17 @@ pub(crate) fn inspect(url: &str) -> Result<Inspected, String> {
             Ok(Inspected { name: Some(name), size, files: None })
         }
         MegaRef::Folder { handle, key, key_text, sub } => Ok(Inspected {
-            files: Some(folder_vars(&handle, &key, &key_text, sub.as_deref())?),
+            files: Some(folder_files(&handle, &key, &key_text, sub.as_deref(), &[".var"])?),
             ..Default::default()
         }),
+    }
+}
+
+/// For a folder link: its files ending with one of `exts` (lowercase).
+pub(crate) fn list_folder(url: &str, exts: &[&str]) -> Result<Vec<FolderEntry>, String> {
+    match parse(url)? {
+        MegaRef::Folder { handle, key, key_text, sub } => folder_files(&handle, &key, &key_text, sub.as_deref(), exts),
+        _ => Err("not a MEGA folder link".to_string()),
     }
 }
 

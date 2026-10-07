@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod archives;
 mod collect_deps;
 mod config;
 mod db;
@@ -34,7 +35,10 @@ use crate::{
     },
     models::AppState,
     offload::{plan_offload, start_offload_task},
-    sources::{add_download_link, inspect_download_link, list_download_links, remove_download_link},
+    sources::{
+        add_download_link, inspect_download_link, list_download_links, remove_download_link,
+        search_download_links, start_scan_source_links_task,
+    },
     packages::{
         delete_var_package, move_var_to_creator_folder, start_apply_package_plan_task,
         start_plan_clean_duplicates_task, start_plan_organize_by_creator_task,
@@ -153,6 +157,8 @@ fn main() {
             add_download_link,
             list_download_links,
             remove_download_link,
+            search_download_links,
+            start_scan_source_links_task,
             inspect_vam_dir,
             get_hub_package_meta,
             hub_api,

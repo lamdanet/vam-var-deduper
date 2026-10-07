@@ -5102,7 +5102,7 @@ pub(crate) fn start_analyze_text_dependencies_task(
 // downloads run independently and can be cancelled individually.
 // ----------------------------------------------------------------------------
 
-fn run_download_one_task(
+pub(crate) fn run_download_one_task(
     tasks: &Arc<Mutex<HashMap<u64, ProgressPayload>>>,
     task_id: u64,
     package_id: String,
@@ -5191,7 +5191,24 @@ fn run_download_one_task(
         set_task_progress(tasks, task_id, "download_item", frac.clamp(0.0, 1.0), msg);
     };
 
-    match crate::hub::download_to_file(&download_url, &tmp_path, &cancel, &mut report) {
+    // A source inside a .zip: fetch the archive (cached for the session, so
+    // several packages from it download it once) and extract the one member.
+    let fetched = match crate::db::find_link_archive(&db, &safe_name, &download_url) {
+        Some((entry, password)) => {
+            match crate::archives::ensure_cached(&download_url, &cancel, &mut report) {
+                Ok(zip) => {
+                    set_task_progress(tasks, task_id, "download_item", 1.0, format!("Extracting {safe_name}"));
+                    crate::archives::extract_entry(&zip, &entry, password.as_deref(), &tmp_path)
+                        .map(|()| true)
+                        .map_err(|e| anyhow::anyhow!(e))
+                }
+                Err(e) if e == "cancelled" => Ok(false),
+                Err(e) => Err(anyhow::anyhow!(e)),
+            }
+        }
+        None => crate::hub::download_to_file(&download_url, &tmp_path, &cancel, &mut report),
+    };
+    match fetched {
         Ok(true) => {
             if crate::hub::is_valid_var(&tmp_path) {
                 match std::fs::rename(&tmp_path, &final_path) {
@@ -5334,6 +5351,8 @@ pub(crate) fn parse_link_line(line: &str) -> Option<DownloadLinkRow> {
         host: host.to_string(),
         url,
         size: None,
+        archive_entry: None,
+        archive_password: None,
     })
 }
 

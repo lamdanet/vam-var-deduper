@@ -430,6 +430,8 @@ pub(crate) struct ProgressPayload {
     pub(crate) collect_deps_copy_result: Option<CollectDepsCopyResponse>,
     #[serde(default)]
     pub(crate) offload_result: Option<OffloadResponse>,
+    #[serde(default)]
+    pub(crate) source_scan_result: Option<crate::sources::SourceScanResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -772,6 +774,12 @@ pub(crate) struct DownloadLinkRow {
     /// (the mirror lists don't include it); it's filled in after a download so
     /// future analyses can show it. Stored as i64 (SQLite INTEGER).
     pub(crate) size: Option<i64>,
+    /// When the link is a `.zip`: the `.var`'s path inside it.
+    #[serde(default)]
+    pub(crate) archive_entry: Option<String>,
+    /// The archive's password, when it has one.
+    #[serde(default)]
+    pub(crate) archive_password: Option<String>,
 }
 
 /// Result of importing download links from a folder or text file.

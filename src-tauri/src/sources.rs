@@ -167,11 +167,15 @@ fn fetch_pixeldrain_info(id: &str) -> Result<PixeldrainInfo, String> {
 
 /// Saves `url` as a download source for the `.var` named `filename`
 /// (`Creator.Package.3.var`). Returns the stored row; adding the same link
-/// twice is a no-op.
+/// twice is a no-op, except that an archive's member and password are
+/// updated. `archive_entry` marks the link as a `.zip` holding the `.var` at
+/// that path.
 #[tauri::command]
 pub(crate) fn add_download_link(
     filename: String,
     url: String,
+    archive_entry: Option<String>,
+    archive_password: Option<String>,
     db: State<'_, Db>,
 ) -> Result<DownloadLinkRow, String> {
     let (url, host) = normalize_link(&url).ok_or_else(|| "Paste an http(s) link.".to_string())?;
@@ -192,10 +196,284 @@ pub(crate) fn add_download_link(
             "{name} has no version number — use the package's full file name, e.g. Creator.Package.3.var."
         ));
     }
-    let row = crate::tasks::parse_link_line(&format!("{name} {url}"))
+    let mut row = crate::tasks::parse_link_line(&format!("{name} {url}"))
         .ok_or_else(|| format!("{name} isn't a package file name."))?;
+    row.archive_entry = archive_entry.map(|e| e.trim().to_string()).filter(|e| !e.is_empty());
+    row.archive_password = archive_password.filter(|p| !p.trim().is_empty());
     crate::db::insert_download_links(&db, std::slice::from_ref(&row)).map_err(|e| e.to_string())?;
+    if row.archive_entry.is_some() {
+        crate::db::set_link_archive(&db, &row).map_err(|e| e.to_string())?;
+    }
     Ok(row)
+}
+
+/// Stored sources whose file name contains `query` (all when empty), newest
+/// first, at most `limit`; with the total that match.
+#[tauri::command(async)]
+pub(crate) fn search_download_links(
+    query: Option<String>,
+    limit: Option<u32>,
+    db: State<'_, Db>,
+) -> Result<(Vec<DownloadLinkRow>, u64), String> {
+    crate::db::search_download_links(&db, query.as_deref().unwrap_or("").trim(), limit.unwrap_or(300).min(2000))
+        .map_err(|e| e.to_string())
+}
+
+// ----------------------------------------------------------------------------
+// Scanning pasted text for links
+// ----------------------------------------------------------------------------
+
+/// A `.var` some pasted link delivers: directly, inside a MEGA folder or
+/// Pixeldrain list, or inside a `.zip`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct FoundVar {
+    pub(crate) filename: String,
+    /// The link to save as its source (a file link, MEGA's link to the file
+    /// inside a folder, or the archive's link).
+    pub(crate) url: String,
+    pub(crate) host: String,
+    pub(crate) size: Option<u64>,
+    /// Inside a zip: the path in the archive, and the archive's name.
+    pub(crate) archive_entry: Option<String>,
+    pub(crate) archive_name: Option<String>,
+    /// The zip member is password-protected.
+    pub(crate) encrypted: bool,
+    /// The pasted link it was found through.
+    pub(crate) origin: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LinkProblem {
+    pub(crate) link: String,
+    pub(crate) error: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct SourceScanResult {
+    pub(crate) links: usize,
+    pub(crate) found: Vec<FoundVar>,
+    pub(crate) problems: Vec<LinkProblem>,
+    /// Files that are neither a .var nor an archive (preview images, ...).
+    pub(crate) skipped_files: usize,
+    pub(crate) was_cancelled: bool,
+}
+
+/// Every link worth following in `text`: Pixeldrain, MEGA, MediaFire, and
+/// anything pointing straight at a .var or an archive. In order, deduplicated.
+pub(crate) fn extract_links(text: &str) -> Vec<String> {
+    let re = regex::Regex::new(r#"https?://[^\s"'<>\[\](){}|\\^`]+"#).expect("valid regex");
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for m in re.find_iter(text) {
+        let link = m.as_str().trim_end_matches(['.', ',', ';', ':', '?']);
+        let lower = link.to_ascii_lowercase();
+        let path = lower.split(['?', '#']).next().unwrap_or("");
+        let wanted = lower.contains("pixeldrain.")
+            || lower.contains("pixeldra.in")
+            || crate::mega::is_mega(link)
+            || lower.contains("mediafire.com")
+            || path.ends_with(".var")
+            || crate::archives::archive_kind(path).is_some();
+        if wanted && seen.insert(link.to_string()) {
+            out.push(link.to_string());
+        }
+    }
+    out
+}
+
+#[derive(Deserialize)]
+struct PixeldrainListFile {
+    id: String,
+    name: String,
+    size: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PixeldrainList {
+    files: Vec<PixeldrainListFile>,
+}
+
+fn fetch_pixeldrain_list(id: &str) -> Result<Vec<PixeldrainListFile>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(crate::hub::CHROME_USER_AGENT)
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("https://pixeldrain.com/api/list/{id}"))
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    Ok(resp.json::<PixeldrainList>().map_err(|e| e.to_string())?.files)
+}
+
+/// The id in a Pixeldrain list link (`/l/<id>`).
+fn pixeldrain_list_id(url: &str) -> Option<&str> {
+    let pos = url.find("/l/")?;
+    let rest = &url[pos + 3..];
+    let end = rest.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(rest.len());
+    (end > 0).then(|| &rest[..end])
+}
+
+/// The file name a URL path ends in (MediaFire: the segment after the id).
+fn name_from_url(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next()?;
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let pick = if url.to_ascii_lowercase().contains("mediafire.com") {
+        segments.iter().position(|s| *s == "file").and_then(|i| segments.get(i + 2))
+    } else {
+        segments.last()
+    };
+    pick.map(|s| percent_decode(s))
+}
+
+struct Scan<'a> {
+    out: &'a mut SourceScanResult,
+    origin: String,
+}
+
+impl Scan<'_> {
+    /// One file a link delivers: a .var is a find; a .zip is opened and its
+    /// .var members are finds; anything else is skipped.
+    fn file(&mut self, name: &str, size: Option<u64>, url: &str, host: &str) {
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".var") {
+            self.out.found.push(FoundVar {
+                filename: name.rsplit(['/', '\\']).next().unwrap_or(name).to_string(),
+                url: url.to_string(),
+                host: host.to_string(),
+                size,
+                origin: self.origin.clone(),
+                ..Default::default()
+            });
+            return;
+        }
+        match crate::archives::archive_kind(&lower) {
+            Some("zip") if host == "mediafire" => self.problem(format!(
+                "{name}: MediaFire downloads only work in the browser — download and extract it yourself."
+            )),
+            Some("zip") => match crate::archives::list_remote(url) {
+                Ok(entries) => {
+                    let before = self.out.found.len();
+                    for e in entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".var")) {
+                        self.out.found.push(FoundVar {
+                            filename: e.name.rsplit(['/', '\\']).next().unwrap_or(&e.name).to_string(),
+                            url: url.to_string(),
+                            host: host.to_string(),
+                            size: Some(e.size),
+                            archive_entry: Some(e.name.clone()),
+                            archive_name: Some(name.to_string()),
+                            encrypted: e.encrypted,
+                            origin: self.origin.clone(),
+                        });
+                    }
+                    if self.out.found.len() == before {
+                        self.problem(format!("{name}: no .var files inside"));
+                    }
+                    self.out.skipped_files += entries.len() - (self.out.found.len() - before);
+                }
+                Err(e) => self.problem(format!("{name}: {e}")),
+            },
+            Some(_) => self.problem(format!("{name}: {}", crate::archives::UNSUPPORTED_ARCHIVE)),
+            None => self.out.skipped_files += 1,
+        }
+    }
+
+    fn problem(&mut self, error: String) {
+        self.out.problems.push(LinkProblem { link: self.origin.clone(), error });
+    }
+
+    fn link(&mut self, link: &str) {
+        let Some((url, host)) = normalize_link(link) else {
+            return self.problem("not an http(s) link".to_string());
+        };
+        match host {
+            "pixeldrain" => {
+                if let Some(id) = pixeldrain_list_id(link) {
+                    match fetch_pixeldrain_list(id) {
+                        Ok(files) => {
+                            for f in files {
+                                self.file(&f.name, f.size, &format!("https://pixeldrain.com/api/file/{}?download", f.id), host);
+                            }
+                        }
+                        Err(e) => self.problem(format!("Couldn't read the Pixeldrain list: {e}")),
+                    }
+                } else if let Some(id) = pixeldrain_id(&url) {
+                    match fetch_pixeldrain_info(id) {
+                        Ok(info) => self.file(&info.name, info.size, &url, host),
+                        Err(e) => self.problem(format!("Couldn't read the Pixeldrain file: {e}")),
+                    }
+                } else {
+                    self.problem("unrecognized Pixeldrain link".to_string());
+                }
+            }
+            "mega" => match crate::mega::parse(&url) {
+                Ok(crate::mega::MegaRef::Folder { .. }) => match crate::mega::list_folder(&url, &[".var", ".zip", ".7z", ".rar"]) {
+                    Ok(files) => {
+                        for f in files {
+                            self.file(&f.name, f.size, &f.url, host);
+                        }
+                    }
+                    Err(e) => self.problem(e),
+                },
+                Ok(_) => match crate::mega::inspect(&url) {
+                    Ok(found) => match found.name {
+                        Some(name) => self.file(&name, found.size, &url, host),
+                        None => self.problem("MEGA didn't give the file's name".to_string()),
+                    },
+                    Err(e) => self.problem(e),
+                },
+                Err(e) => self.problem(e),
+            },
+            _ => match name_from_url(&url) {
+                Some(name) => self.file(&name, None, &url, host),
+                None => self.problem("the link doesn't name a file".to_string()),
+            },
+        }
+    }
+}
+
+/// Follows every link in `text` (see `extract_links`) as a background task
+/// and lists the .var files they deliver.
+#[tauri::command]
+pub(crate) fn start_scan_source_links_task(
+    text: String,
+    state: State<'_, crate::models::AppState>,
+) -> Result<crate::models::TaskHandle, String> {
+    let links = extract_links(&text);
+    if links.is_empty() {
+        return Err("No Pixeldrain, MEGA, MediaFire or .var / .zip links in that text.".to_string());
+    }
+    let (task_id, tasks, cancel) = crate::packages::begin_task(&state, "source_scan_starting", "Reading links")?;
+    std::thread::spawn(move || {
+        let mut result = SourceScanResult { links: links.len(), ..Default::default() };
+        for (i, link) in links.iter().enumerate() {
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                result.was_cancelled = true;
+                break;
+            }
+            crate::tasks::set_task_progress(
+                &tasks,
+                task_id,
+                "source_scan_link",
+                i as f64 / links.len() as f64,
+                format!("Reading link {} of {}", i + 1, links.len()),
+            );
+            Scan { out: &mut result, origin: link.clone() }.link(link);
+        }
+        if let Ok(mut guard) = tasks.lock() {
+            if let Some(task) = guard.get_mut(&task_id) {
+                task.done = true;
+                task.progress = 1.0;
+                task.phase = "source_scan_complete".to_string();
+                task.message = format!("{} .var file(s) found", result.found.len());
+                task.source_scan_result = Some(result);
+            }
+        }
+    });
+    Ok(crate::models::TaskHandle { id: task_id })
 }
 
 /// Every stored source for the package family of `package_id`.
