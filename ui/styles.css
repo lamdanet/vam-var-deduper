@@ -11318,6 +11318,7 @@ body.lib-resizing * {
 
 .lib-actions-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
