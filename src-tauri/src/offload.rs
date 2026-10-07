@@ -7,6 +7,9 @@
 //! they need (transitively) resolved against the library listing, and for each
 //! dependency who else uses it. The UI shows the plan, the user adjusts the
 //! selection, and the move runs as a background task.
+//!
+//! The same plan backs Remove Dependencies, which deletes a package's
+//! dependencies (to the Recycle Bin) instead of moving the package.
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -16,7 +19,7 @@ use std::{
     thread,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::{
@@ -89,6 +92,19 @@ fn check_folders(addon: &Path, offload: &Path) -> Result<(), String> {
 // Plan
 // ----------------------------------------------------------------------------
 
+/// What a plan is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PlanMode {
+    /// Move the packages and their dependencies out of AddonPackages.
+    #[default]
+    Offload,
+    /// Move offloaded packages and their dependencies back.
+    Restore,
+    /// Delete the packages' dependencies; the packages themselves stay.
+    Remove,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct OffloadPlanEntry {
     pub(crate) package_id: String,
@@ -106,17 +122,24 @@ pub(crate) struct OffloadPlanEntry {
     /// File paths of plan members (picked packages and dependencies) that
     /// depend on this one.
     pub(crate) required_by: Vec<String>,
-    /// Package ids of AddonPackages packages outside the plan that depend on
-    /// this one — offloading it breaks them.
+    /// Package ids of packages outside the plan that depend on this one —
+    /// offloading or removing it breaks them. For Offload only packages in
+    /// AddonPackages count (nothing else is loaded); for Remove, any.
     pub(crate) used_by: Vec<String>,
-    /// This direction can move it (offload: in AddonPackages; restore: offloaded).
+    /// The plan can act on it (offload: in AddonPackages; restore: offloaded;
+    /// remove: any dependency, never the picked packages).
     pub(crate) movable: bool,
+    /// Dependencies: nothing outside the plan needs it, directly or through a
+    /// dependency that stays — so offloading or removing it breaks nothing.
+    pub(crate) safe: bool,
+    /// Offload: `safe`; Restore: everything movable; Remove: nothing, since
+    /// deleting is opt-in.
     pub(crate) default_selected: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct OffloadPlan {
-    pub(crate) restore: bool,
+    pub(crate) mode: PlanMode,
     pub(crate) targets: Vec<OffloadPlanEntry>,
     pub(crate) deps: Vec<OffloadPlanEntry>,
     /// Dependency keys no version of which is in the library.
@@ -134,7 +157,7 @@ fn location_of(item: &VarPackageListItem) -> &'static str {
 }
 
 /// The plan for `targets` (indices into `items`).
-pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], restore: bool) -> OffloadPlan {
+pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], mode: PlanMode) -> OffloadPlan {
     let index = LibIndex::build(items);
     let resolve = |dep: &str| match index.resolve(dep) {
         DepResolution::Found(t) => Some((t, false)),
@@ -180,8 +203,9 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], restor
     let mut used_by: HashMap<usize, Vec<usize>> = HashMap::new();
     for (u, item) in items.iter().enumerate() {
         let member = in_plan.contains(&u);
-        // Only packages VaM loads can be broken by an offload.
-        if !member && location_of(item) != "active" {
+        // Only packages VaM loads can be broken by an offload; a deletion
+        // breaks any package.
+        if !member && mode != PlanMode::Remove && location_of(item) != "active" {
             continue;
         }
         let mut seen: HashSet<usize> = HashSet::new();
@@ -198,37 +222,45 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], restor
         }
     }
 
-    let movable_loc = if restore { "offloaded" } else { "active" };
-    let movable = |i: usize| location_of(&items[i]) == movable_loc;
+    let movable = |i: usize| match mode {
+        PlanMode::Offload => location_of(&items[i]) == "active",
+        PlanMode::Restore => location_of(&items[i]) == "offloaded",
+        PlanMode::Remove => !target_set.contains(&i),
+    };
 
-    // Restore brings back everything the packages need. Offload leaves a
-    // dependency behind when a package that stays in AddonPackages uses it —
-    // directly, or through another dependency that is itself staying.
-    let mut selected: HashSet<usize> = order
+    // The safe set: a dependency is left out when a package outside the plan
+    // uses it, or a dependency that stays (left unselected) needs it. For
+    // Offload only packages in AddonPackages "stay" in the sense that matters.
+    let mut safe: HashSet<usize> = order
         .iter()
         .copied()
-        .filter(|&d| movable(d) && (restore || !used_by.contains_key(&d)))
+        .filter(|&d| movable(d) && !used_by.contains_key(&d))
         .collect();
-    if !restore {
-        loop {
-            let staying_user = |d: usize, selected: &HashSet<usize>| {
-                required_by.get(&d).is_some_and(|users| {
-                    users.iter().any(|&r| {
-                        !target_set.contains(&r)
-                            && location_of(&items[r]) == "active"
-                            && !selected.contains(&r)
-                    })
+    loop {
+        let staying_user = |d: usize, safe: &HashSet<usize>| {
+            required_by.get(&d).is_some_and(|users| {
+                users.iter().any(|&r| {
+                    !target_set.contains(&r)
+                        && (mode == PlanMode::Remove || location_of(&items[r]) == "active")
+                        && !safe.contains(&r)
                 })
-            };
-            let drop: Vec<usize> = selected.iter().copied().filter(|&d| staying_user(d, &selected)).collect();
-            if drop.is_empty() {
-                break;
-            }
-            for d in drop {
-                selected.remove(&d);
-            }
+            })
+        };
+        let drop: Vec<usize> = safe.iter().copied().filter(|&d| staying_user(d, &safe)).collect();
+        if drop.is_empty() {
+            break;
+        }
+        for d in drop {
+            safe.remove(&d);
         }
     }
+    // Restore brings back everything the packages need; Offload takes what is
+    // safe; Remove starts with nothing.
+    let selected = |i: usize, is_target: bool| match mode {
+        PlanMode::Restore => movable(i),
+        PlanMode::Offload => (is_target && movable(i)) || safe.contains(&i),
+        PlanMode::Remove => false,
+    };
 
     let paths = |list: Option<&Vec<usize>>| -> Vec<String> {
         list.map(|v| v.iter().map(|&i| items[i].file_path.clone()).collect()).unwrap_or_default()
@@ -253,7 +285,8 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], restor
             required_by: paths(required_by.get(&i)),
             used_by: ids(used_by.get(&i)),
             movable: movable(i),
-            default_selected: if is_target { movable(i) } else { selected.contains(&i) },
+            safe: !is_target && safe.contains(&i),
+            default_selected: selected(i, is_target),
         }
     };
 
@@ -265,19 +298,19 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], restor
     });
     missing.sort_by_key(|k| k.to_lowercase());
     OffloadPlan {
-        restore,
+        mode,
         targets: targets.iter().map(|&i| entry(i, true)).collect(),
         deps,
         missing,
     }
 }
 
-/// What Offload (or Restore, with `restore`) would move for the picked
+/// What Offload, Restore or Remove Dependencies would act on for the picked
 /// packages, from the listing the VAR Packages page is showing.
 #[tauri::command(async)]
 pub(crate) fn plan_offload(
     file_paths: Vec<String>,
-    restore: bool,
+    mode: PlanMode,
     state: State<'_, AppState>,
 ) -> Result<OffloadPlan, String> {
     let cache = state
@@ -300,7 +333,7 @@ pub(crate) fn plan_offload(
             targets.push(i);
         }
     }
-    Ok(build_plan(items, &targets, restore))
+    Ok(build_plan(items, &targets, mode))
 }
 
 // ----------------------------------------------------------------------------

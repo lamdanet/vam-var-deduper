@@ -6108,7 +6108,7 @@ fn offload_plan_leaves_shared_dependencies_unselected() {
         offload_item("X.Scene.1", &["C.Hair.1"], false),
         offload_item("W.Scene.1", &["E.Mid.1"], false),
     ];
-    let plan = crate::offload::build_plan(&items, &[0], false);
+    let plan = crate::offload::build_plan(&items, &[0], crate::offload::PlanMode::Offload);
     let dep = |id: &str| plan.deps.iter().find(|d| d.package_id == id).unwrap();
     assert!(plan.targets[0].default_selected);
     assert!(dep("B.Look.1").default_selected && dep("B.Look.1").direct);
@@ -6129,7 +6129,7 @@ fn restore_plan_brings_back_offloaded_dependencies() {
         offload_item("B.Look.1", &[], true),
         offload_item("C.Hair.1", &[], false),
     ];
-    let plan = crate::offload::build_plan(&items, &[0], true);
+    let plan = crate::offload::build_plan(&items, &[0], crate::offload::PlanMode::Restore);
     let dep = |id: &str| plan.deps.iter().find(|d| d.package_id == id).unwrap();
     assert!(plan.targets[0].movable && plan.targets[0].default_selected);
     assert!(dep("B.Look.1").default_selected);
@@ -6178,4 +6178,23 @@ fn offload_moves_into_creator_folders_and_back() {
     assert!(move_package(&back, &addon, &offload, true, false).is_err());
     assert!(back.is_file());
     fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn remove_plan_marks_unshared_dependencies_safe_but_selects_nothing() {
+    let items = vec![
+        offload_item("A.Scene.1", &["B.Look.1", "C.Hair.1"], false),
+        offload_item("B.Look.1", &["D.Tex.1"], false),
+        offload_item("C.Hair.1", &[], false),
+        offload_item("D.Tex.1", &[], false),
+        // An offloaded package still counts as a user for a deletion.
+        offload_item("X.Scene.1", &["C.Hair.1"], true),
+    ];
+    let plan = crate::offload::build_plan(&items, &[0], crate::offload::PlanMode::Remove);
+    let dep = |id: &str| plan.deps.iter().find(|d| d.package_id == id).unwrap();
+    assert!(!plan.targets[0].movable, "the picked package itself is never removed");
+    assert!(plan.deps.iter().all(|d| d.movable && !d.default_selected));
+    assert!(dep("B.Look.1").safe && dep("D.Tex.1").safe);
+    assert!(!dep("C.Hair.1").safe);
+    assert_eq!(dep("C.Hair.1").used_by, vec!["X.Scene.1".to_string()]);
 }
