@@ -16,9 +16,10 @@ const THEMES = [
   "porcelain",
   "frost",
   "circuit",
-  "backstage",
   "modhub",
 ];
+// Themes that were removed, and what a saved choice of one becomes.
+const RETIRED_THEMES = { backstage: "modhub" };
 
 const state = {
   language: "en_US",
@@ -431,7 +432,6 @@ const I18N = {
     themeButtonNord: "Nord",
     themeButtonSolarized: "Solarized",
     themeButtonMonolith: "Monolith",
-    themeButtonBackstage: "Backstage",
     themeButtonModhub: "Obsidian ModHub",
     themeButtonAmber: "Amber Noir",
     themeButtonEmerald: "Emerald Dark",
@@ -2258,7 +2258,6 @@ function themeToggleLabel(theme) {
     porcelain: "themeButtonPorcelain",
     frost: "themeButtonFrost",
     circuit: "themeButtonCircuit",
-    backstage: "themeButtonBackstage",
     modhub: "themeButtonModhub",
   }[next];
   return labelKey ? t(labelKey) : "";
@@ -2417,7 +2416,6 @@ function applySettingsCopy() {
   setText("settings-theme-porcelain-label", t("themeButtonPorcelain"));
   setText("settings-theme-frost-label", t("themeButtonFrost"));
   setText("settings-theme-circuit-label", t("themeButtonCircuit"));
-  setText("settings-theme-backstage-label", t("themeButtonBackstage"));
   setText("settings-theme-modhub-label", t("themeButtonModhub"));
 
   setText("settings-scan-eyebrow", t("settingsScanEyebrow"));
@@ -13077,8 +13075,9 @@ async function initConfig() {
   if (config?.language) {
     state.language = config.language;
   }
-  if (typeof config?.theme === "string" && THEMES.includes(config.theme)) {
-    state.theme = config.theme;
+  const savedTheme = RETIRED_THEMES[config?.theme] ?? config?.theme;
+  if (typeof savedTheme === "string" && THEMES.includes(savedTheme)) {
+    state.theme = savedTheme;
   }
   applyConfigToInputs(config);
   // Same for the mode toggle: persist into the per-page slot so the first
@@ -13301,8 +13300,9 @@ async function resetSettingsFromDisk() {
   if (!invoke) throw new Error("Tauri runtime unavailable");
   const config = await invoke("load_config");
   if (config?.language) state.language = config.language;
-  if (typeof config?.theme === "string" && THEMES.includes(config.theme)) {
-    state.theme = config.theme;
+  const savedTheme = RETIRED_THEMES[config?.theme] ?? config?.theme;
+  if (typeof savedTheme === "string" && THEMES.includes(savedTheme)) {
+    state.theme = savedTheme;
   }
   applyConfigToInputs(config);
   updateStaticCopy();
