@@ -14202,12 +14202,27 @@ function hubActionHtml(r, { big = false, compact = false } = {}) {
       return `<button type="button" class="${cls} hub-btn-external" data-hub-act="open" data-hub-rid="${rid}">
           <span class="material-symbols-outlined">open_in_new</span><span class="hub-btn-text">${compact ? "Hub" : "Open on Hub"}</span></button>`;
     default: {
+      if (!big) {
+        return `<button type="button" class="${cls} hub-btn-install" data-hub-act="download" data-hub-rid="${rid}">
+          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">Download</span></button>`;
+      }
+      // Details panel: Download All (the package + its missing dependencies)
+      // in one click, plus the picker beside it to choose files instead.
       const detail = HUB.details.get(String(r.resource_id));
-      const size = big && detail ? hubFilesSize(detail) : 0;
-      return `<button type="button" class="${cls} hub-btn-install" data-hub-act="download" data-hub-rid="${rid}">
-          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">Download${
+      const missing = detail ? hubMissingDeps(detail) : [];
+      const size = detail ? hubFilesSize(detail) + missing.reduce((sum, d) => sum + d.size, 0) : 0;
+      const label = missing.length ? `Download All` : "Download";
+      const title = missing.length
+        ? `The package and its ${missing.length} missing ${missing.length === 1 ? "dependency" : "dependencies"}`
+        : "Download the package";
+      const main = `<button type="button" class="${cls} hub-btn-install" data-hub-act="download-all" data-hub-rid="${rid}" title="${escapeAttribute(title)}">
+          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">${label}${
             size ? ` · ${escapeHtml(formatBytesLocal(size))}` : ""
           }</span></button>`;
+      const deps = detail ? hubDependencyList(detail).length : 0;
+      if (!deps) return main;
+      return `<div class="hub-btn-row">${main}<button type="button" class="lib-btn lib-btn-outline hub-btn-pick" data-hub-act="download" data-hub-rid="${rid}" title="Choose what to download">
+          <span class="material-symbols-outlined">checklist</span></button></div>`;
     }
   }
 }
@@ -14425,6 +14440,22 @@ function hubDependencyList(detail) {
     }
   }
   return out;
+}
+
+// Dependencies Download All fetches: not on disk in any version (one that is
+// already has VaM fall back to it), and with a source to download from.
+function hubMissingDeps(detail) {
+  return hubDependencyList(detail).filter((d) => !d.installed && d.resolution !== "fallback" && (d.url || d.packageName));
+}
+
+// The package's own files plus every missing dependency, no picker.
+async function hubDownloadAll(rid) {
+  try {
+    const detail = await hubGetDetail(String(rid));
+    hubDownload(rid, { files: null, depRefs: hubMissingDeps(detail).map((d) => d.ref) });
+  } catch (e) {
+    hubToast(`Download failed: ${String(e?.message || e)}`, "error");
+  }
 }
 
 function hubFilesSize(detail) {
@@ -15452,6 +15483,7 @@ function hubRunAction(btn) {
   const r = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
   if (!r) return;
   if (act === "download") hubOpenDownloadPicker(rid);
+  else if (act === "download-all") hubDownloadAll(rid);
   else if (act === "cancel") hubCancelDownloads(rid);
   else if (act === "library") hubShowInLibrary(r);
   else if (act === "external") hubOpenUrl(hubResourceState(r).url || hubResourceUrl(rid));

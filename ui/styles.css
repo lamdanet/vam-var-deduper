@@ -13018,6 +13018,18 @@ button.lib-dep-ref:hover {
   flex: 1 1 auto;
 }
 
+.lib-btn.hub-btn-pick {
+  flex: 0 0 auto;
+  width: 36px;
+  height: auto;
+  min-height: 32px;
+  padding: 0;
+}
+
+.lib-btn.hub-btn-pick .material-symbols-outlined {
+  font-size: 17px;
+}
+
 .lib-btn.hub-btn-cancel {
   flex: 0 0 auto;
   height: auto;
