@@ -12122,14 +12122,29 @@ button.lib-dep-ref:hover {
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+  --bs-chrome: #111218;
+  --bs-surface: #111218;
   --bs-elevated: #191a22;
   --bs-hover: #1f2029;
+  --bs-active: #1f2029;
+  --bs-border: #1f2029;
+  --bs-border-bright: #2e303b;
+  --bs-text: #e8e9ed;
+  --bs-text-2: #82849a;
+  --bs-text-3: #6b6e84;
   --bs-aside: #57596e;
   --bs-placeholder: #4e5064;
+  --bs-accent: #4a91f1;
+  --bs-focus: rgba(74, 145, 241, 0.5);
+  --bs-selection: rgba(74, 145, 241, 0.4);
   --bs-gradient: linear-gradient(to bottom right, #3a7cf4, #c740e8);
+  --bs-cta: linear-gradient(to right, #3a7cf4, #c740e8);
   --bs-brand: linear-gradient(135deg, #4a91f1, #ef5bed);
+  --bs-rail-bar: linear-gradient(to bottom, #4a91f1, #ef5bed);
+  --bs-progress: linear-gradient(90deg, #3a7cf4, #c740e8, #3a7cf4);
   --bs-outline-bg: rgba(31, 32, 41, 0.3);
   --bs-outline-bg-hover: rgba(31, 32, 41, 0.55);
+  --bs-overlay-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
 }
 
 :root[data-theme="backstage"] body {
@@ -12137,8 +12152,8 @@ button.lib-dep-ref:hover {
 }
 
 :root[data-theme="backstage"] ::selection {
-  background: rgba(74, 145, 241, 0.4);
-  color: #e8e9ed;
+  background: var(--bs-selection);
+  color: var(--bs-text);
 }
 
 :root[data-theme="backstage"] ::-webkit-scrollbar {
@@ -12151,19 +12166,19 @@ button.lib-dep-ref:hover {
 }
 
 :root[data-theme="backstage"] ::-webkit-scrollbar-thumb {
-  background: #2e303b;
+  background: var(--bs-border-bright);
   border-radius: 3px;
 }
 
 :root[data-theme="backstage"] ::-webkit-scrollbar-thumb:hover {
-  background: #4e5064;
+  background: var(--bs-placeholder);
 }
 
 /* ---- Shell: header ------------------------------------------------------ */
 
 :root[data-theme="backstage"] .app-header {
-  background: #111218;
-  border-bottom-color: #1f2029;
+  background: var(--bs-chrome);
+  border-bottom-color: var(--bs-border);
   backdrop-filter: none;
 }
 
@@ -12192,9 +12207,9 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .app-header .icon-button {
   height: 30px;
   border-radius: 6px;
-  border-color: #1f2029;
+  border-color: var(--bs-border);
   background: var(--bs-outline-bg);
-  color: #82849a;
+  color: var(--bs-text-2);
   font-size: 12px;
 }
 
@@ -12209,14 +12224,14 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .app-header .icon-text-button:hover:not(:disabled),
 :root[data-theme="backstage"] .app-header .icon-button:hover:not(:disabled) {
   background: var(--bs-outline-bg-hover);
-  color: #e8e9ed;
+  color: var(--bs-text);
 }
 
 /* ---- Shell: navigation rail ------------------------------------------------ */
 
 :root[data-theme="backstage"] .app-sidebar {
-  background: #111218;
-  border-right-color: #1f2029;
+  background: var(--bs-surface);
+  border-right-color: var(--bs-border);
 }
 
 :root[data-theme="backstage"] .sidebar-toggle:hover {
@@ -12224,13 +12239,13 @@ button.lib-dep-ref:hover {
 }
 
 :root[data-theme="backstage"] .sidebar-divider {
-  background: #1f2029;
+  background: var(--bs-active);
 }
 
 :root[data-theme="backstage"] .sidebar-link {
   position: relative;
   border-radius: 8px;
-  color: #82849a;
+  color: var(--bs-text-2);
 }
 
 :root[data-theme="backstage"] .sidebar-link .material-symbols-outlined {
@@ -12239,20 +12254,20 @@ button.lib-dep-ref:hover {
 
 :root[data-theme="backstage"] .sidebar-link:hover {
   background: var(--bs-elevated);
-  color: #e8e9ed;
+  color: var(--bs-text);
 }
 
 :root[data-theme="backstage"] .sidebar-link:hover .material-symbols-outlined {
-  color: #82849a;
+  color: var(--bs-text-2);
 }
 
 :root[data-theme="backstage"] .sidebar-link.active {
-  background: #1f2029;
-  color: #e8e9ed;
+  background: var(--bs-active);
+  color: var(--bs-text);
 }
 
 :root[data-theme="backstage"] .sidebar-link.active .material-symbols-outlined {
-  color: #4a91f1;
+  color: var(--bs-accent);
 }
 
 /* Backstage's active marker: a 3px blue→pink bar on the rail's edge. */
@@ -12264,7 +12279,7 @@ button.lib-dep-ref:hover {
   bottom: 8px;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: linear-gradient(to bottom, #4a91f1, #ef5bed);
+  background: var(--bs-rail-bar);
 }
 
 /* ---- Type --------------------------------------------------------------- */
@@ -12279,7 +12294,7 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .settings-eyebrow {
   padding: 0;
   background: transparent;
-  color: #6b6e84;
+  color: var(--bs-text-3);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.05em;
@@ -12288,7 +12303,7 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .settings-subtitle,
 :root[data-theme="backstage"] .hero-copy {
   font-size: 13px;
-  color: #82849a;
+  color: var(--bs-text-2);
 }
 
 :root[data-theme="backstage"] .card-eyebrow,
@@ -12297,7 +12312,7 @@ button.lib-dep-ref:hover {
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.05em;
-  color: #6b6e84;
+  color: var(--bs-text-3);
 }
 
 :root[data-theme="backstage"] .build-db-card-title,
@@ -12313,8 +12328,8 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .settings-path-card,
 :root[data-theme="backstage"] .downloads-popover,
 :root[data-theme="backstage"] .console-drawer {
-  background: #111218;
-  border-color: #1f2029;
+  background: var(--bs-surface);
+  border-color: var(--bs-border);
 }
 
 :root[data-theme="backstage"] .card,
@@ -12336,19 +12351,19 @@ button.lib-dep-ref:hover {
 
 :root[data-theme="backstage"] .ghost-button,
 :root[data-theme="backstage"] .icon-button {
-  border-color: #1f2029;
+  border-color: var(--bs-border);
   background: var(--bs-outline-bg);
-  color: #e8e9ed;
+  color: var(--bs-text);
 }
 
 :root[data-theme="backstage"] .icon-button {
-  color: #82849a;
+  color: var(--bs-text-2);
 }
 
 :root[data-theme="backstage"] .ghost-button:hover:not(:disabled),
 :root[data-theme="backstage"] .icon-button:hover:not(:disabled) {
   background: var(--bs-outline-bg-hover);
-  color: #e8e9ed;
+  color: var(--bs-text);
 }
 
 /* Solid at rest, like Backstage's default button (it keeps a permanent
@@ -12358,7 +12373,7 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .primary-button,
 :root[data-theme="backstage"] .accent-button {
   border-color: transparent;
-  background: #4a91f1;
+  background: var(--bs-accent);
   color: #fff;
   box-shadow: none;
 }
@@ -12372,7 +12387,7 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .primary-button:active:not(:disabled),
 :root[data-theme="backstage"] .accent-button:active:not(:disabled) {
   border-color: transparent;
-  background: linear-gradient(to right, #3a7cf4, #c740e8) border-box;
+  background: var(--bs-cta) border-box;
 }
 
 :root[data-theme="backstage"] .primary-button:active:not(:disabled),
@@ -12383,7 +12398,7 @@ button.lib-dep-ref:hover {
 
 :root[data-theme="backstage"] .primary-button:disabled,
 :root[data-theme="backstage"] .accent-button:disabled {
-  background: #4a91f1;
+  background: var(--bs-accent);
   color: #fff;
   opacity: 0.45;
 }
@@ -12396,9 +12411,9 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] textarea,
 :root[data-theme="backstage"] select {
   background: var(--bs-elevated);
-  border-color: #1f2029;
+  border-color: var(--bs-border);
   border-radius: 6px;
-  color: #e8e9ed;
+  color: var(--bs-text);
 }
 
 :root[data-theme="backstage"] input[type="text"]::placeholder,
@@ -12412,24 +12427,24 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] input[type="number"]:focus,
 :root[data-theme="backstage"] textarea:focus,
 :root[data-theme="backstage"] select:focus {
-  border-color: rgba(74, 145, 241, 0.5);
+  border-color: var(--bs-focus);
   box-shadow: none;
   outline: none;
 }
 
 :root[data-theme="backstage"] .input-leading-icon {
-  color: #6b6e84;
+  color: var(--bs-text-3);
 }
 
 :root[data-theme="backstage"] .check-row input[type="checkbox"] {
-  border-color: #2e303b;
+  border-color: var(--bs-border-bright);
   border-radius: 4px;
   background: var(--bs-elevated);
 }
 
 :root[data-theme="backstage"] .check-row input[type="checkbox"]:checked {
-  border-color: #4a91f1;
-  background: #4a91f1;
+  border-color: var(--bs-accent);
+  background: var(--bs-accent);
 }
 
 /* ---- Segmented controls, chips ----------------------------------------------- */
@@ -12448,13 +12463,13 @@ button.lib-dep-ref:hover {
 }
 
 :root[data-theme="backstage"] .mode-button:hover:not(:disabled) {
-  color: #82849a;
+  color: var(--bs-text-2);
 }
 
 :root[data-theme="backstage"] .mode-button.active {
   border-color: transparent;
-  background: #1f2029;
-  color: #e8e9ed;
+  background: var(--bs-active);
+  color: var(--bs-text);
 }
 
 :root[data-theme="backstage"] .chip {
@@ -12468,7 +12483,7 @@ button.lib-dep-ref:hover {
   font-weight: 500;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #6b6e84;
+  color: var(--bs-text-3);
 }
 
 /* ---- Overlays ---------------------------------------------------------------- */
@@ -12479,16 +12494,16 @@ button.lib-dep-ref:hover {
 }
 
 :root[data-theme="backstage"] .dialog-card {
-  border-color: #2e303b;
+  border-color: var(--bs-border-bright);
   border-radius: 12px;
-  background: #111218;
+  background: var(--bs-surface);
 }
 
 :root[data-theme="backstage"] .context-menu {
-  border-color: #2e303b;
+  border-color: var(--bs-border-bright);
   border-radius: 6px;
   background: var(--bs-elevated);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--bs-overlay-shadow);
 }
 
 :root[data-theme="backstage"] .context-menu-item {
@@ -12498,15 +12513,15 @@ button.lib-dep-ref:hover {
 }
 
 :root[data-theme="backstage"] .context-menu-item:hover {
-  background: #1f2029;
+  background: var(--bs-active);
 }
 
 :root[data-theme="backstage"] .context-menu-separator {
-  background: #1f2029;
+  background: var(--bs-active);
 }
 
 :root[data-theme="backstage"] .toast {
-  border-color: #2e303b;
+  border-color: var(--bs-border-bright);
   border-radius: 8px;
   background: var(--bs-elevated);
 }
@@ -12516,7 +12531,7 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .progress-bar,
 :root[data-theme="backstage"] .build-db-progress-fill,
 :root[data-theme="backstage"] .build-db-mini-progress-fill {
-  background: linear-gradient(90deg, #3a7cf4, #c740e8, #3a7cf4);
+  background: var(--bs-progress);
   background-size: 200% 100%;
   animation: bs-shimmer 2s linear infinite;
 }
