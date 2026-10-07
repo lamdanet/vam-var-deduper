@@ -3205,6 +3205,41 @@
       </div>
     </div>
 
+    <!-- Add download source: a Pixeldrain / MediaFire / direct link for one
+         package, saved with the imported mirror links. After the dialogs it
+         can open from (Download Dependencies) so it stacks above them. -->
+    <div id="src-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card hub-dl-card src-card" role="dialog" aria-modal="true" aria-labelledby="src-title">
+        <div class="hub-dl-headtext">
+          <h3 id="src-title">Add download source</h3>
+          <p id="src-sub" class="hub-dl-sub"></p>
+        </div>
+        <div id="src-existing" class="src-existing hidden"></div>
+        <div class="src-field">
+          <label class="settings-path-label" for="src-url">Link</label>
+          <div class="input-with-icon">
+            <span class="material-symbols-outlined input-leading-icon">link</span>
+            <input id="src-url" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="https://pixeldrain.com/u/… — or MediaFire, or a direct .var link" />
+          </div>
+          <p id="src-info" class="settings-path-hint"></p>
+        </div>
+        <div class="src-field">
+          <label class="settings-path-label" for="src-file">Package file</label>
+          <div class="input-with-icon">
+            <span class="material-symbols-outlined input-leading-icon">inventory_2</span>
+            <input id="src-file" type="text" spellcheck="false" autocomplete="off" placeholder="Creator.Package.3.var" />
+          </div>
+          <p id="src-file-hint" class="settings-path-hint">The exact .var the link downloads, version included.</p>
+        </div>
+        <div class="dialog-actions hub-dl-actions">
+          <span id="src-error" class="src-error"></span>
+          <button id="src-cancel" class="ghost-button" type="button">Close</button>
+          <button id="src-save" class="primary-button" type="button">Save source</button>
+        </div>
+      </div>
+    </div>
+
     <div id="dialog-backdrop" class="dialog-backdrop hidden">
       <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <h3 id="dialog-title"></h3>

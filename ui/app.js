@@ -3598,6 +3598,7 @@ function libRenderMissing() {
       <thead><tr>
         <th style="width:34%">Package</th><th style="width:16%">Version</th>
         <th style="width:16%">Author</th><th>Needed by</th><th style="width:96px">Status</th>
+        <th style="width:96px" aria-label="Download source"></th>
       </tr></thead>
       <tbody>${rows
         .map((row) => {
@@ -3624,6 +3625,9 @@ function libRenderMissing() {
             <td>${escapeHtml(deriveCreatorFromPackageId(id) ?? "—")}</td>
             <td>${users}${more}</td>
             <td>${pill}</td>
+            <td><button type="button" class="lib-small-link" data-lib-add-source="${escapeAttribute(id)}"
+                        title="Add a Pixeldrain, MediaFire or direct download link for it">
+                  <span class="material-symbols-outlined">add_link</span>Add link</button></td>
           </tr>`;
         })
         .join("")}</tbody>
@@ -3765,7 +3769,11 @@ function libDepsSectionHtml(item, details) {
       ? `<button type="button" class="lib-dep-ref is-resolved" data-lib-reveal="${escapeAttribute(dep.file_path ?? "")}" data-lib-reveal-id="${escapeAttribute(dep.resolved_id ?? "")}" title="${escapeAttribute(dep.id)}">${escapeHtml(dep.id)}</button>`
       : `<span class="lib-dep-ref" title="${escapeAttribute(dep.id)}">${escapeHtml(dep.id)}</span>`;
     const size = dep.size_bytes != null ? `<span class="lib-dep-size">${escapeHtml(formatBytesLocal(dep.size_bytes))}</span>` : "";
-    return `<div class="lib-dep-row">${ref}${size}${libDepPill(dep)}</div>`;
+    const addSource =
+      dep.status === "missing" || dep.status === "indexed"
+        ? `<button type="button" class="lib-icon-btn lib-icon-btn-sm" data-lib-add-source="${escapeAttribute(dep.id)}" title="Add a download link for it"><span class="material-symbols-outlined">add_link</span></button>`
+        : "";
+    return `<div class="lib-dep-row">${ref}${size}${libDepPill(dep)}${addSource}</div>`;
   });
   const body = rows.length
     ? `<div class="lib-box">${libCollapsible(rows, `deps:${item.file_path}`, rows.length)}</div>`
@@ -4853,6 +4861,220 @@ function setupOffload() {
   renderSettingsOffload();
 }
 
+// ---- Download sources ------------------------------------------------------------
+// A Pixeldrain (or MediaFire, or direct) link the user found for a package,
+// saved with the imported mirror links, so Download Dependencies, Find
+// Dependencies and the Hub fallback all use it. The Hub stays the first
+// choice; among stored links one for the exact version asked for wins.
+
+const SRC = { packageId: "", onSaved: null, token: 0, inspectTimer: null, info: null, fileAuto: true };
+
+// The family part of a package id or file name: Creator.Package.3(.var),
+// .latest and .minN all give Creator.Package.
+function srcFamily(id) {
+  const parts = String(id || "").trim().replace(/\.var$/i, "").split(".");
+  const last = parts[parts.length - 1] || "";
+  if (parts.length > 2 && (/^\d+$/.test(last) || /^latest$/i.test(last) || /^min\d+$/i.test(last))) parts.pop();
+  return parts.join(".");
+}
+
+function srcHostLabel(host) {
+  return host === "pixeldrain" ? "Pixeldrain" : host === "mediafire" ? "MediaFire" : host === "hub" ? "VaM Hub" : "Link";
+}
+
+function srcSetError(msg) {
+  vpSetText("src-error", msg || "");
+}
+
+async function srcRenderExisting() {
+  const host = $("src-existing");
+  if (!host || !invoke) return;
+  let rows = [];
+  try {
+    rows = await invoke("list_download_links", { packageId: SRC.packageId });
+  } catch (e) {
+    addLog(`Download sources: ${String(e)}`);
+  }
+  host.classList.toggle("hidden", !rows.length);
+  host.innerHTML = rows.length
+    ? `<div class="hub-dl-group-head"><span class="hub-dl-group-title">Saved sources <small>(${rows.length})</small></span></div>
+       <div class="hub-dl-list">${rows
+         .map(
+           (r, i) => `<div class="hub-dl-row src-row">
+             <span class="hub-dl-main">
+               <span class="hub-dl-name" title="${escapeAttribute(r.url)}">${escapeHtml(r.filename)}</span>
+               <span class="hub-dl-meta">${escapeHtml(srcHostLabel(r.host))}${r.size ? ` · ${escapeHtml(formatBytesLocal(r.size))}` : ""}</span>
+             </span>
+             <button type="button" class="icon-button" data-src-open="${i}" title="Open the link in your browser"><span class="material-symbols-outlined">open_in_new</span></button>
+             <button type="button" class="icon-button dep-scan-act-danger" data-src-remove="${i}" title="Forget this source"><span class="material-symbols-outlined">delete</span></button>
+           </div>`,
+         )
+         .join("")}</div>`
+    : "";
+  SRC.rows = rows;
+}
+
+function srcRenderInfo() {
+  const info = SRC.info;
+  const el = $("src-info");
+  if (!el) return;
+  el.classList.toggle("is-error", Boolean(info?.error));
+  if (!info) {
+    el.textContent = "Pixeldrain links download inside the app; MediaFire links open in your browser.";
+    return;
+  }
+  if (info.checking) {
+    el.textContent = "Checking the link…";
+    return;
+  }
+  const parts = [srcHostLabel(info.host)];
+  if (info.filename) parts.push(info.filename);
+  if (info.size) parts.push(formatBytesLocal(info.size));
+  el.textContent = info.error ? `${parts.join(" · ")} — ${info.error}` : parts.join(" · ");
+}
+
+// Looks the pasted link over (debounced): normalizes it and, for Pixeldrain,
+// reads the real file name so the Package file field fills itself.
+function srcInspectSoon() {
+  clearTimeout(SRC.inspectTimer);
+  const url = ($("src-url")?.value || "").trim();
+  srcSetError("");
+  if (!url) {
+    SRC.info = null;
+    srcRenderInfo();
+    return;
+  }
+  SRC.info = { checking: true };
+  srcRenderInfo();
+  const token = ++SRC.token;
+  SRC.inspectTimer = setTimeout(async () => {
+    let info;
+    try {
+      info = await invoke("inspect_download_link", { url });
+    } catch (e) {
+      info = { error: String(e) };
+    }
+    if (token !== SRC.token) return;
+    SRC.info = info;
+    const file = $("src-file");
+    if (file && info?.filename && (SRC.fileAuto || !file.value.trim())) {
+      file.value = info.filename;
+      SRC.fileAuto = true;
+    }
+    srcRenderInfo();
+  }, 450);
+}
+
+// Opens the dialog for one package. `onSaved(row)` runs after a link is saved
+// (Download Dependencies uses it to make the row downloadable at once).
+async function sourceOpen({ packageId, fileName = "", onSaved = null }) {
+  if (!invoke) return;
+  const id = String(packageId || "").trim().replace(/\.var$/i, "");
+  if (!id) return;
+  SRC.packageId = id;
+  SRC.onSaved = onSaved;
+  SRC.info = null;
+  SRC.token += 1;
+  const versioned = /\.\d+$/.test(id);
+  vpSetText(
+    "src-sub",
+    versioned ? `For ${id}` : `For ${srcFamily(id)} (any version — name the exact file below)`,
+  );
+  const url = $("src-url");
+  if (url) url.value = "";
+  const file = $("src-file");
+  if (file) file.value = fileName || (versioned ? `${id}.var` : "");
+  // A prefill is only a guess: the file name the link turns out to serve
+  // replaces it, until the user types their own.
+  SRC.fileAuto = true;
+  srcSetError("");
+  srcRenderInfo();
+  $("src-existing")?.classList.add("hidden");
+  $("src-backdrop")?.classList.remove("hidden");
+  url?.focus();
+  await srcRenderExisting();
+}
+
+function sourceClose() {
+  SRC.token += 1;
+  clearTimeout(SRC.inspectTimer);
+  $("src-backdrop")?.classList.add("hidden");
+}
+
+async function sourceSave() {
+  const url = ($("src-url")?.value || "").trim();
+  let filename = ($("src-file")?.value || "").trim();
+  if (!url) return srcSetError("Paste the link first.");
+  if (!filename) return srcSetError("Name the package file the link downloads.");
+  if (!/\.var$/i.test(filename)) filename += ".var";
+  const want = srcFamily(SRC.packageId).toLowerCase();
+  const got = srcFamily(filename).toLowerCase();
+  if (want && got !== want) {
+    return srcSetError(`${filename} is a different package — expected ${srcFamily(SRC.packageId)}.<version>.var`);
+  }
+  if (SRC.info?.filename && SRC.info.filename.toLowerCase() !== filename.toLowerCase()) {
+    const ok = await showAppConfirm(
+      `The link serves ${SRC.info.filename}, not ${filename}. Save it as ${filename} anyway?`,
+    );
+    if (!ok) return;
+  }
+  const save = $("src-save");
+  if (save) save.disabled = true;
+  try {
+    const row = await invoke("add_download_link", { filename, url });
+    if (SRC.info?.size && !row.size) row.size = SRC.info.size;
+    showToast(`Saved a ${srcHostLabel(row.host)} source for ${row.filename}`, "success");
+    if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
+    const done = SRC.onSaved;
+    sourceClose();
+    if (done) done(row);
+  } catch (e) {
+    srcSetError(String(e?.message || e));
+  } finally {
+    if (save) save.disabled = false;
+  }
+}
+
+function setupSources() {
+  const backdrop = $("src-backdrop");
+  if (!backdrop) return;
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) sourceClose();
+  });
+  $("src-cancel")?.addEventListener("click", sourceClose);
+  $("src-save")?.addEventListener("click", () => sourceSave().catch((e) => srcSetError(String(e))));
+  $("src-url")?.addEventListener("input", srcInspectSoon);
+  $("src-file")?.addEventListener("input", () => {
+    SRC.fileAuto = false;
+    srcSetError("");
+  });
+  for (const id of ["src-url", "src-file"]) {
+    $(id)?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sourceSave().catch((err) => srcSetError(String(err)));
+    });
+  }
+  $("src-existing")?.addEventListener("click", async (e) => {
+    const open = e.target.closest?.("[data-src-open]");
+    const remove = e.target.closest?.("[data-src-remove]");
+    const row = SRC.rows?.[Number((open || remove)?.getAttribute(open ? "data-src-open" : "data-src-remove"))];
+    if (!row) return;
+    if (open) {
+      invoke("open_url", { url: row.url }).catch((err) => addLog(`Download sources: ${String(err)}`));
+    } else {
+      try {
+        await invoke("remove_download_link", { filename: row.filename, url: row.url });
+        if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
+        await srcRenderExisting();
+      } catch (err) {
+        srcSetError(String(err));
+      }
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !backdrop.classList.contains("hidden")) sourceClose();
+  });
+}
+
 // ---- Selection ---------------------------------------------------------------
 
 function vpSelectOnly(item, { render = true } = {}) {
@@ -5149,6 +5371,10 @@ function libContextMenu(event, item) {
             depStartScan({ filePath, packageId }).catch((e) => addLog(`Download Dependencies: ${String(e)}`)),
         },
         { label: "Find Dependencies Locally…", action: () => dcOpen({ filePath, packageId }) },
+        {
+          label: "Add download source…",
+          action: () => sourceOpen({ packageId, fileName: item.file_name || `${packageId}.var` }),
+        },
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
         // Offloaded packages are filed by Restore, not moved into AddonPackages here.
         ...(item.offloaded
@@ -5217,6 +5443,12 @@ function libHandleSharedClick(event) {
   if (url) {
     const href = url.getAttribute("data-lib-url");
     if (href && invoke) invoke("open_url", { url: href }).catch((e) => addLog(`Open link: ${String(e)}`));
+    return true;
+  }
+  const addSource = target.closest?.("[data-lib-add-source]");
+  if (addSource) {
+    event.stopPropagation();
+    sourceOpen({ packageId: addSource.getAttribute("data-lib-add-source") });
     return true;
   }
   const offload = target.closest?.("[data-lib-offload]");
@@ -8105,9 +8337,9 @@ function depRenderList() {
           `<button class="icon-button" type="button" data-dep-reveal="${escapeAttribute(it.pkg)}" title="Show in Explorer"><span class="material-symbols-outlined">folder_open</span></button>` +
           `<button class="icon-button dep-scan-act-danger" type="button" data-dep-delete="${escapeAttribute(it.pkg)}" title="Send ${escapeAttribute(localName)} to the Recycle Bin" aria-label="Send ${escapeAttribute(localName)} to the Recycle Bin"><span class="material-symbols-outlined">delete</span></button>`;
       } else if (it.status === "missing" && !it.url) {
-        // Neither the Hub nor an imported mirror link resolved a source for it.
-        // Say so rather than leave a blank slot.
-        action = `<span class="dep-scan-act-note">No source</span>`;
+        // Neither the Hub nor a stored mirror link resolved a source for it:
+        // offer to add one.
+        action = `<span class="dep-scan-act-note">No source</span><button class="ghost-button dep-scan-action" type="button" data-dep-add-source="${escapeAttribute(it.pkg)}" title="Add a Pixeldrain, MediaFire or direct link for it">Add link</button>`;
       }
       return `<div class="dep-scan-row" data-dep-idx="${i}" data-dep-list="scan">
   ${depCardHtml("scan", it)}
@@ -8324,6 +8556,21 @@ function setupVarDetailsDeps() {
 
   // Delegated, because rows are re-rendered on every scan/download.
   $("dep-scan-list")?.addEventListener("click", (event) => {
+    const add = event.target.closest?.("[data-dep-add-source]");
+    if (add) {
+      const it = DEP_SCAN.items.find((x) => x.pkg === add.getAttribute("data-dep-add-source"));
+      if (it) {
+        sourceOpen({
+          packageId: it.pkg,
+          // The row becomes downloadable straight away.
+          onSaved: (row) => {
+            Object.assign(it, { url: row.url, host: row.host, filename: row.filename, size: Number(row.size) || it.size });
+            depRenderList();
+          },
+        });
+      }
+      return;
+    }
     const dl = event.target.closest?.("[data-dep-download]");
     if (dl) {
       depDownloadOne(dl.getAttribute("data-dep-download")).catch((e) =>
@@ -16887,6 +17134,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   setupVamDir();
   setupOffload();
+  setupSources();
   setupLibraryView();
   setupDatabasePackages();
   setupHubView();

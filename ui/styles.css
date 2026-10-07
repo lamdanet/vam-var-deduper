@@ -14287,3 +14287,52 @@ button.lib-dep-ref:hover {
   content-visibility: auto;
   contain-intrinsic-size: auto 300px;
 }
+
+/* =========================================================
+   Add download source dialog
+   ========================================================= */
+.src-card {
+  width: min(560px, 100%);
+}
+
+.src-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.src-field .settings-path-hint {
+  margin: 0;
+}
+
+#src-info.is-error,
+.src-error {
+  color: var(--lib-warning);
+}
+
+.src-error {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.src-existing {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.src-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.src-row .hub-dl-main {
+  flex: 1 1 auto;
+}
+
+/* Download Dependencies: "No source" with its Add link button beside it. */
+.dep-scan-act-note + .dep-scan-action {
+  margin-left: 8px;
+}
