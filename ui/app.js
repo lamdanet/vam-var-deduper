@@ -7425,13 +7425,16 @@ function depRenderList() {
   const all = $("dep-scan-download-all");
   const downloadable = depMissingDownloadable();
   const pending = downloadable.filter((it) => !findDownloadJob(it.pkg)).length;
+  const active = depActiveJobs().length;
   if (all) {
-    all.disabled = DEP_SCAN.running || pending === 0;
-    if (downloadable.length && pending === 0) {
-      all.textContent = "Downloading…";
-    } else {
-      all.textContent = pending ? `Download All Missing (${pending})` : "Download All Missing";
-    }
+    // While its downloads run, the same button cancels them.
+    all.dataset.mode = active ? "cancel" : "download";
+    all.disabled = active ? false : DEP_SCAN.running || pending === 0;
+    all.textContent = active
+      ? `Cancel Downloads (${active})`
+      : pending
+        ? `Download All Missing (${pending})`
+        : "Download All Missing";
   }
 }
 
@@ -7537,6 +7540,18 @@ async function depDeleteOne(pkg) {
   if (flipped) depRenderList();
 }
 
+// Active download jobs for this modal's dependencies.
+function depActiveJobs() {
+  return DEP_SCAN.items.map((it) => findDownloadJob(it.pkg)).filter(Boolean);
+}
+
+function depCancelDownloads() {
+  const jobs = depActiveJobs();
+  for (const job of jobs.filter((j) => j.status === "queued")) cancelDownload(job.id);
+  for (const job of jobs.filter((j) => j.status === "downloading")) cancelDownload(job.id);
+  depRenderList();
+}
+
 async function depDownloadAllMissing() {
   const queue = depMissingDownloadable().filter((it) => !findDownloadJob(it.pkg));
   if (queue.length === 0) {
@@ -7560,7 +7575,8 @@ function setupVarDetailsDeps() {
     depAnalyzeText().catch((e) => addLog(`Find Dependencies: ${String(e)}`));
   });
 
-  $("dep-scan-download-all")?.addEventListener("click", () => {
+  $("dep-scan-download-all")?.addEventListener("click", (event) => {
+    if (event.currentTarget.dataset.mode === "cancel") return depCancelDownloads();
     depDownloadAllMissing().catch((e) => addLog(`Download Dependencies: ${String(e)}`));
   });
 
