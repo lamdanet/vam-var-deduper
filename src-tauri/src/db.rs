@@ -694,6 +694,19 @@ pub(crate) fn count_download_links(db: &Db) -> Result<i64> {
     Ok(n)
 }
 
+/// Removes one stored link. Returns whether a row was deleted.
+pub(crate) fn remove_download_link(db: &Db, filename: &str, url: &str) -> Result<bool> {
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|_| anyhow!("database connection poisoned"))?;
+    let n = conn.execute(
+        "DELETE FROM download_links WHERE filename = ?1 AND url = ?2",
+        params![filename, url],
+    )?;
+    Ok(n > 0)
+}
+
 pub(crate) fn clear_download_links(db: &Db) -> Result<()> {
     let conn = db
         .conn

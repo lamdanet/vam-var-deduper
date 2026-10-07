@@ -17,7 +17,7 @@ use anyhow::{anyhow, Result};
 const API_URL: &str = "https://hub.virtamate.com/citizenx/api.php";
 const VAM_USER_AGENT: &str = "UnityPlayer/2018.1.9f2 (UnityWebRequest/1.0, libcurl/7.51.0-DEV)";
 const X_UNITY_VERSION: &str = "2018.1.9f2";
-const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+pub(crate) const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 /// Timeout for the small Hub API (findPackages) requests.

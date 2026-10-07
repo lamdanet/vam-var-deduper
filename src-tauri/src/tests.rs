@@ -6294,3 +6294,53 @@ fn deleting_the_last_package_removes_its_creator_folder() {
     assert!(addon.exists());
     fs::remove_dir_all(&root).expect("cleanup");
 }
+
+#[test]
+fn download_links_normalize_pixeldrain_share_pages() {
+    use crate::sources::normalize_link;
+    assert_eq!(
+        normalize_link(" https://pixeldrain.com/u/AbC123xY "),
+        Some(("https://pixeldrain.com/api/file/AbC123xY?download".to_string(), "pixeldrain"))
+    );
+    assert_eq!(
+        normalize_link("https://pixeldrain.com/api/file/AbC123xY?download").map(|(u, _)| u),
+        Some("https://pixeldrain.com/api/file/AbC123xY?download".to_string())
+    );
+    assert_eq!(normalize_link("https://www.mediafire.com/file/x/A.B.1.var/file").map(|(_, h)| h), Some("mediafire"));
+    assert_eq!(normalize_link("https://example.com/A.B.1.var").map(|(_, h)| h), Some("other"));
+    assert_eq!(normalize_link("pixeldrain.com/u/abc"), None, "not http(s)");
+
+    // Imported lists get the same treatment.
+    let row = crate::tasks::parse_link_line("Acid.Look.3.var https://pixeldrain.com/u/Zz9").unwrap();
+    assert_eq!(row.url, "https://pixeldrain.com/api/file/Zz9?download");
+    assert_eq!((row.package_base.as_str(), row.version), ("acid.look", Some(3)));
+}
+
+#[test]
+fn download_link_inspect_reads_the_file_name_from_a_direct_url() {
+    let info = crate::sources::inspect_link("https://files.example.com/vars/Acid.My%20Look.3.var?x=1");
+    assert_eq!(info.filename.as_deref(), Some("Acid.My Look.3.var"));
+    assert_eq!(info.host, "other");
+    assert!(info.error.is_none());
+    let bad = crate::sources::inspect_link("ftp://x");
+    assert!(bad.error.is_some());
+}
+
+#[test]
+fn stored_link_for_the_exact_version_wins() {
+    let db = crate::db::open_in_memory().expect("db");
+    let rows: Vec<_> = [
+        "Acid.Look.5.var https://pixeldrain.com/u/five",
+        "Acid.Look.3.var https://example.com/Acid.Look.3.var",
+    ]
+    .iter()
+    .map(|l| crate::tasks::parse_link_line(l).unwrap())
+    .collect();
+    crate::db::insert_download_links(&db, &rows).unwrap();
+    let pick = |want| crate::tasks::pick_db_link(&db, "acid.look", want).unwrap().filename;
+    assert_eq!(pick(Some(3)), "Acid.Look.3.var", "exact version, even though not Pixeldrain");
+    assert_eq!(pick(None), "Acid.Look.5.var", ".latest: Pixeldrain, newest");
+    assert_eq!(pick(Some(9)), "Acid.Look.5.var", "no exact match: same as before");
+    assert!(crate::db::remove_download_link(&db, "Acid.Look.3.var", "https://example.com/Acid.Look.3.var").unwrap());
+    assert_eq!(pick(Some(3)), "Acid.Look.5.var");
+}

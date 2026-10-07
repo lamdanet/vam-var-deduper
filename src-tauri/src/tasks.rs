@@ -4745,7 +4745,7 @@ fn attach_hub_sources(
         }
         // 2. Imported mirror links (DB).
         let base = dependency_package_base(&item.package_id).to_ascii_lowercase();
-        if let Some(link) = pick_db_link(db, &base) {
+        if let Some(link) = pick_db_link(db, &base, wanted_version(&item.package_id)) {
             item.download_url = Some(link.url);
             item.filename = Some(link.filename);
             item.source_host = Some(link.host);
@@ -4756,18 +4756,24 @@ fn attach_hub_sources(
     }
 }
 
-/// Picks the best imported mirror link for a package family: the auto-downloadable
-/// Pixeldrain mirror if any, else the newest link of any host. Shared by the
+/// The numeric version a package id asks for (`Pkg.3` -> 3; `.latest` -> none).
+fn wanted_version(package_id: &str) -> Option<i64> {
+    dependency_version_segment(package_id).and_then(|v| v.parse().ok())
+}
+
+/// Picks the best stored mirror link for a package family: among links for
+/// the exact version asked for when there are any (a source added for
+/// `Pkg.3` beats an imported `Pkg.5`), else among all; within those the
+/// auto-downloadable Pixeldrain mirror first, else the newest. Shared by the
 /// dependency analysis and the single-VAR resolver so they can't drift.
-fn pick_db_link(db: &Db, base_lc: &str) -> Option<DownloadLinkRow> {
-    match crate::db::find_download_links(db, base_lc) {
-        Ok(links) => links
-            .iter()
-            .find(|l| l.host == "pixeldrain")
-            .or_else(|| links.first())
-            .cloned(),
-        Err(_) => None,
-    }
+pub(crate) fn pick_db_link(db: &Db, base_lc: &str, want: Option<i64>) -> Option<DownloadLinkRow> {
+    let links = crate::db::find_download_links(db, base_lc).ok()?;
+    let exact: Vec<&DownloadLinkRow> = links.iter().filter(|l| want.is_some() && l.version == want).collect();
+    let pool: Vec<&DownloadLinkRow> = if exact.is_empty() { links.iter().collect() } else { exact };
+    pool.iter()
+        .find(|l| l.host == "pixeldrain")
+        .or_else(|| pool.first())
+        .map(|l| (*l).clone())
 }
 
 /// Resolves the download source for ONE package id: VaM Hub first, then the
@@ -4800,7 +4806,7 @@ fn resolve_one_source(db: &Db, package_id: &str) -> VarSourceInfo {
     }
     // 2. Imported mirror links (DB).
     let base = dependency_package_base(package_id).to_ascii_lowercase();
-    if let Some(link) = pick_db_link(db, &base) {
+    if let Some(link) = pick_db_link(db, &base, wanted_version(package_id)) {
         info.download_url = Some(link.url);
         info.filename = Some(link.filename);
         info.host = Some(link.host);
@@ -5298,14 +5304,16 @@ pub(crate) fn start_download_one_task(
 
 /// Parses one `<filename>.var   <url>` line from a download-links file. Mirrors
 /// the reference's `.*https:` split. Returns None for blank/garbage lines.
-fn parse_link_line(line: &str) -> Option<DownloadLinkRow> {
+pub(crate) fn parse_link_line(line: &str) -> Option<DownloadLinkRow> {
     let line = line.trim();
     if line.is_empty() {
         return None;
     }
     // The URL is everything from the first http(s); the filename precedes it.
     let url_start = line.find("http")?;
-    let url = line[url_start..].trim().to_string();
+    // Normalized like a hand-added source: a Pixeldrain share page becomes the
+    // file's direct download URL.
+    let (url, host) = crate::sources::normalize_link(&line[url_start..])?;
     let name = line[..url_start]
         .trim()
         .trim_matches(|c| c == '"' || c == '\'')
@@ -5319,14 +5327,6 @@ fn parse_link_line(line: &str) -> Option<DownloadLinkRow> {
         return None;
     }
     let version = dependency_version_segment(stem).and_then(|v| v.parse::<i64>().ok());
-    let lower_url = url.to_ascii_lowercase();
-    let host = if lower_url.contains("pixeldrain.com") {
-        "pixeldrain"
-    } else if lower_url.contains("mediafire.com") {
-        "mediafire"
-    } else {
-        "other"
-    };
     Some(DownloadLinkRow {
         package_base: base,
         version,

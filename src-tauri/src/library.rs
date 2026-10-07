@@ -1437,7 +1437,7 @@ static HUB_API_CACHE: std::sync::OnceLock<
 
 /// Runs blocking Hub I/O on a plain OS thread (never a tokio worker, see
 /// hub.rs), awaited from the blocking pool.
-async fn on_hub_thread<T: Send + 'static>(
+pub(crate) async fn on_hub_thread<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(move || {
