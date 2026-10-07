@@ -12344,9 +12344,10 @@ button.lib-dep-ref:hover {
   color: #e8e9ed;
 }
 
-/* Solid, like Backstage's default button: it keeps the gradient for the
-   Download / Install call to action only (.lib-btn-gradient, .hub-btn-install).
-   On a wide button the diagonal gradient read as a stretched image. */
+/* Solid at rest, like Backstage's default button (it keeps a permanent
+   gradient for the Download / Install call to action: .lib-btn-gradient,
+   .hub-btn-install). A wide button painted with the diagonal gradient all the
+   time read as a stretched image. */
 :root[data-theme="backstage"] .primary-button,
 :root[data-theme="backstage"] .accent-button {
   border-color: transparent;
@@ -12355,10 +12356,16 @@ button.lib-dep-ref:hover {
   box-shadow: none;
 }
 
+/* Pointing at / pressing / keyboard-focusing one lights it up with Backstage's
+   gradient. Left to right, so a wide button reads as one sweep. */
 :root[data-theme="backstage"] .primary-button:hover:not(:disabled),
-:root[data-theme="backstage"] .accent-button:hover:not(:disabled) {
+:root[data-theme="backstage"] .accent-button:hover:not(:disabled),
+:root[data-theme="backstage"] .primary-button:focus-visible,
+:root[data-theme="backstage"] .accent-button:focus-visible,
+:root[data-theme="backstage"] .primary-button:active:not(:disabled),
+:root[data-theme="backstage"] .accent-button:active:not(:disabled) {
   border-color: transparent;
-  background: #5c9cf3;
+  background: linear-gradient(to right, #3a7cf4, #c740e8);
 }
 
 :root[data-theme="backstage"] .primary-button:active:not(:disabled),
