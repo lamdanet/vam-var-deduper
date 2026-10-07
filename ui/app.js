@@ -17,6 +17,7 @@ const THEMES = [
   "frost",
   "circuit",
   "backstage",
+  "modhub",
 ];
 
 const state = {
@@ -431,6 +432,7 @@ const I18N = {
     themeButtonSolarized: "Solarized",
     themeButtonMonolith: "Monolith",
     themeButtonBackstage: "Backstage",
+    themeButtonModhub: "Obsidian ModHub",
     themeButtonAmber: "Amber Noir",
     themeButtonEmerald: "Emerald Dark",
     themeButtonMidnight: "Midnight Blue",
@@ -2257,6 +2259,7 @@ function themeToggleLabel(theme) {
     frost: "themeButtonFrost",
     circuit: "themeButtonCircuit",
     backstage: "themeButtonBackstage",
+    modhub: "themeButtonModhub",
   }[next];
   return labelKey ? t(labelKey) : "";
 }
@@ -2415,6 +2418,7 @@ function applySettingsCopy() {
   setText("settings-theme-frost-label", t("themeButtonFrost"));
   setText("settings-theme-circuit-label", t("themeButtonCircuit"));
   setText("settings-theme-backstage-label", t("themeButtonBackstage"));
+  setText("settings-theme-modhub-label", t("themeButtonModhub"));
 
   setText("settings-scan-eyebrow", t("settingsScanEyebrow"));
   setText("settings-scan-title", t("settingsScanTitle"));
@@ -15320,9 +15324,9 @@ function hubDetailHtml(r, detail) {
         ${type ? `<span class="lib-chip lib-chip-type" style="background:${hubTypeColor(type)}cc">${escapeHtml(type)}</span>` : ""}
         ${
           category === "Free"
-            ? `<span class="lib-chip lib-chip-type" style="background:#34d399cc">Free</span>`
+            ? `<span class="lib-chip lib-chip-type is-free" style="background:#34d399cc">Free</span>`
             : category === "Paid"
-              ? `<span class="lib-chip lib-chip-type" style="background:#fbbf24cc">Paid</span>`
+              ? `<span class="lib-chip lib-chip-type is-paid" style="background:#fbbf24cc">Paid</span>`
               : category
                 ? `<span class="lib-chip lib-chip-plain">${escapeHtml(category)}</span>`
                 : ""

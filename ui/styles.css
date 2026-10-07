@@ -328,6 +328,34 @@
     "Microsoft YaHei UI", sans-serif;
 }
 
+/* Obsidian ModHub — obsidian layers (#090B10 → #1F2636), hairline white
+   borders, a blue → violet → magenta accent; Inter, Space Grotesk headings,
+   JetBrains Mono figures. Component styling below ("Obsidian ModHub"). */
+:root[data-theme="modhub"] {
+  color-scheme: dark;
+  --bg: #090b10;
+  --bg-elev: #0d1117;
+  --surface: #12161f;
+  --surface-2: #161b26;
+  --surface-3: #1f2636;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+  --primary: #7a5af8;
+  --primary-fg: #ffffff;
+  --primary-hover: #8a6cf9;
+  --accent-success: #34d399;
+  --accent-warn: #fbbf24;
+  --accent-danger: #ffb4ab;
+  --accent-emerald-dim: #064e3b;
+  --ring: rgba(122, 90, 248, 0.2);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI",
+    sans-serif;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -9517,6 +9545,30 @@ tr.is-selected td {
     "Courier New", monospace;
 }
 
+:root[data-theme="modhub"] .lib-view,
+:root[data-theme="modhub"] .db-pkgs,
+:root[data-theme="modhub"] .hub-dl-card {
+  --lib-base: #090b10;
+  --lib-surface: #12161f;
+  --lib-elevated: #161b26;
+  --lib-hover: #1f2636;
+  --lib-border: rgba(255, 255, 255, 0.08);
+  --lib-border-bright: rgba(255, 255, 255, 0.14);
+  --lib-text: #f8fafc;
+  --lib-text-2: #94a3b8;
+  --lib-text-3: #64748b;
+  --lib-text-aside: #4b5567;
+  --lib-placeholder: #4b5567;
+  --lib-accent: #8a6cf9;
+  --lib-accent-fg: #ffffff;
+  --lib-success: #34d399;
+  --lib-warning: #fbbf24;
+  --lib-error: #ffb4ab;
+  --lib-gradient: linear-gradient(135deg, #4e7bff 0%, #7a5af8 50%, #c04cfd 100%);
+  --lib-gradient-fg: #ffffff;
+  --lib-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+}
+
 /* ---- Shell ------------------------------------------------------------- */
 
 .app-main.lib-view {
@@ -11706,6 +11758,18 @@ button.lib-dep-ref:hover {
   margin: 0 4px;
 }
 
+/* Obsidian ModHub theme preview swatch */
+.theme-preview-modhub {
+  background: #090b10;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.theme-preview-modhub .theme-preview-bar {
+  background: linear-gradient(90deg, #4e7bff, #7a5af8, #c04cfd);
+}
+.theme-preview-modhub .theme-preview-line {
+  background: #1f2636;
+}
+
 /* Backstage theme preview swatch */
 .theme-preview-backstage {
   background: #0a0b10;
@@ -12113,7 +12177,9 @@ button.lib-dep-ref:hover {
    VaM Backstage's component styling — rail-style navigation with the
    blue→pink active bar, gradient primary actions, translucent outline
    buttons, raised inputs, 8px cards, compact type — not only its palette.
-   Everything here is scoped to :root[data-theme="backstage"].
+   The Obsidian ModHub theme wears the same skin with its own palette: the
+   rules read --bs-* tokens, set per theme (Backstage's just below, ModHub's
+   in "Obsidian ModHub" after this section).
    ========================================================= */
 
 :root[data-theme="backstage"] {
@@ -12147,64 +12213,64 @@ button.lib-dep-ref:hover {
   --bs-overlay-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
 }
 
-:root[data-theme="backstage"] body {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) body {
   letter-spacing: 0;
 }
 
-:root[data-theme="backstage"] ::selection {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) ::selection {
   background: var(--bs-selection);
   color: var(--bs-text);
 }
 
-:root[data-theme="backstage"] ::-webkit-scrollbar {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-:root[data-theme="backstage"] ::-webkit-scrollbar-track {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-:root[data-theme="backstage"] ::-webkit-scrollbar-thumb {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) ::-webkit-scrollbar-thumb {
   background: var(--bs-border-bright);
   border-radius: 3px;
 }
 
-:root[data-theme="backstage"] ::-webkit-scrollbar-thumb:hover {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) ::-webkit-scrollbar-thumb:hover {
   background: var(--bs-placeholder);
 }
 
 /* ---- Shell: header ------------------------------------------------------ */
 
-:root[data-theme="backstage"] .app-header {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-header {
   background: var(--bs-chrome);
   border-bottom-color: var(--bs-border);
   backdrop-filter: none;
 }
 
-:root[data-theme="backstage"] .brand-mark {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .brand-mark {
   background: var(--bs-brand);
   color: #fff;
   border-radius: 8px;
 }
 
-:root[data-theme="backstage"] .brand-eyebrow {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .brand-eyebrow {
   color: var(--bs-aside);
   letter-spacing: 0.08em;
 }
 
-:root[data-theme="backstage"] .brand-title {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .brand-title {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-:root[data-theme="backstage"] .header-right {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .header-right {
   gap: 8px;
 }
 
-:root[data-theme="backstage"] .app-header .icon-text-button,
-:root[data-theme="backstage"] .app-header .icon-button {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-header .icon-text-button,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-header .icon-button {
   height: 30px;
   border-radius: 6px;
   border-color: var(--bs-border);
@@ -12213,65 +12279,65 @@ button.lib-dep-ref:hover {
   font-size: 12px;
 }
 
-:root[data-theme="backstage"] .app-header .icon-button {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-header .icon-button {
   width: 30px;
 }
 
-:root[data-theme="backstage"] .app-header .icon-text-button .material-symbols-outlined {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-header .icon-text-button .material-symbols-outlined {
   font-size: 17px;
 }
 
-:root[data-theme="backstage"] .app-header .icon-text-button:hover:not(:disabled),
-:root[data-theme="backstage"] .app-header .icon-button:hover:not(:disabled) {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-header .icon-text-button:hover:not(:disabled),
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-header .icon-button:hover:not(:disabled) {
   background: var(--bs-outline-bg-hover);
   color: var(--bs-text);
 }
 
 /* ---- Shell: navigation rail ------------------------------------------------ */
 
-:root[data-theme="backstage"] .app-sidebar {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-sidebar {
   background: var(--bs-surface);
   border-right-color: var(--bs-border);
 }
 
-:root[data-theme="backstage"] .sidebar-toggle:hover {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-toggle:hover {
   background: var(--bs-elevated);
 }
 
-:root[data-theme="backstage"] .sidebar-divider {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-divider {
   background: var(--bs-active);
 }
 
-:root[data-theme="backstage"] .sidebar-link {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-link {
   position: relative;
   border-radius: 8px;
   color: var(--bs-text-2);
 }
 
-:root[data-theme="backstage"] .sidebar-link .material-symbols-outlined {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-link .material-symbols-outlined {
   color: var(--bs-aside);
 }
 
-:root[data-theme="backstage"] .sidebar-link:hover {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-link:hover {
   background: var(--bs-elevated);
   color: var(--bs-text);
 }
 
-:root[data-theme="backstage"] .sidebar-link:hover .material-symbols-outlined {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-link:hover .material-symbols-outlined {
   color: var(--bs-text-2);
 }
 
-:root[data-theme="backstage"] .sidebar-link.active {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-link.active {
   background: var(--bs-active);
   color: var(--bs-text);
 }
 
-:root[data-theme="backstage"] .sidebar-link.active .material-symbols-outlined {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-link.active .material-symbols-outlined {
   color: var(--bs-accent);
 }
 
 /* Backstage's active marker: a 3px blue→pink bar on the rail's edge. */
-:root[data-theme="backstage"] .sidebar-link.active::before {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .sidebar-link.active::before {
   content: "";
   position: absolute;
   left: -12px;
@@ -12284,14 +12350,14 @@ button.lib-dep-ref:hover {
 
 /* ---- Type --------------------------------------------------------------- */
 
-:root[data-theme="backstage"] .app-main h1,
-:root[data-theme="backstage"] .settings-title {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-main h1,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-title {
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
 
-:root[data-theme="backstage"] .settings-eyebrow {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-eyebrow {
   padding: 0;
   background: transparent;
   color: var(--bs-text-3);
@@ -12300,68 +12366,68 @@ button.lib-dep-ref:hover {
   letter-spacing: 0.05em;
 }
 
-:root[data-theme="backstage"] .settings-subtitle,
-:root[data-theme="backstage"] .hero-copy {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-subtitle,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .hero-copy {
   font-size: 13px;
   color: var(--bs-text-2);
 }
 
-:root[data-theme="backstage"] .card-eyebrow,
-:root[data-theme="backstage"] .settings-path-label,
-:root[data-theme="backstage"] .settings-section-tag {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .card-eyebrow,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-path-label,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-section-tag {
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.05em;
   color: var(--bs-text-3);
 }
 
-:root[data-theme="backstage"] .build-db-card-title,
-:root[data-theme="backstage"] .dbf-section-title,
-:root[data-theme="backstage"] .settings-section-title {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .build-db-card-title,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .dbf-section-title,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-section-title {
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
 /* ---- Surfaces ------------------------------------------------------------- */
 
-:root[data-theme="backstage"] .card,
-:root[data-theme="backstage"] .settings-path-card,
-:root[data-theme="backstage"] .downloads-popover,
-:root[data-theme="backstage"] .console-drawer {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .card,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-path-card,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .downloads-popover,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .console-drawer {
   background: var(--bs-surface);
   border-color: var(--bs-border);
 }
 
-:root[data-theme="backstage"] .card,
-:root[data-theme="backstage"] .settings-path-card {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .card,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .settings-path-card {
   border-radius: 8px;
   box-shadow: none;
 }
 
 /* ---- Buttons ---------------------------------------------------------------- */
 
-:root[data-theme="backstage"] .icon-button,
-:root[data-theme="backstage"] .icon-text-button,
-:root[data-theme="backstage"] .ghost-button,
-:root[data-theme="backstage"] .primary-button,
-:root[data-theme="backstage"] .accent-button {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .icon-button,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .icon-text-button,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .ghost-button,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .primary-button,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .accent-button {
   border-radius: 8px;
   font-size: 12px;
 }
 
-:root[data-theme="backstage"] .ghost-button,
-:root[data-theme="backstage"] .icon-button {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .ghost-button,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .icon-button {
   border-color: var(--bs-border);
   background: var(--bs-outline-bg);
   color: var(--bs-text);
 }
 
-:root[data-theme="backstage"] .icon-button {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .icon-button {
   color: var(--bs-text-2);
 }
 
-:root[data-theme="backstage"] .ghost-button:hover:not(:disabled),
-:root[data-theme="backstage"] .icon-button:hover:not(:disabled) {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .ghost-button:hover:not(:disabled),
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .icon-button:hover:not(:disabled) {
   background: var(--bs-outline-bg-hover);
   color: var(--bs-text);
 }
@@ -12370,8 +12436,8 @@ button.lib-dep-ref:hover {
    gradient for the Download / Install call to action: .lib-btn-gradient,
    .hub-btn-install). A wide button painted with the diagonal gradient all the
    time read as a stretched image. */
-:root[data-theme="backstage"] .primary-button,
-:root[data-theme="backstage"] .accent-button {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .primary-button,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .accent-button {
   border-color: transparent;
   background: var(--bs-accent);
   color: #fff;
@@ -12380,24 +12446,24 @@ button.lib-dep-ref:hover {
 
 /* Pointing at / pressing / keyboard-focusing one lights it up with Backstage's
    gradient. Left to right, so a wide button reads as one sweep. */
-:root[data-theme="backstage"] .primary-button:hover:not(:disabled),
-:root[data-theme="backstage"] .accent-button:hover:not(:disabled),
-:root[data-theme="backstage"] .primary-button:focus-visible,
-:root[data-theme="backstage"] .accent-button:focus-visible,
-:root[data-theme="backstage"] .primary-button:active:not(:disabled),
-:root[data-theme="backstage"] .accent-button:active:not(:disabled) {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .primary-button:hover:not(:disabled),
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .accent-button:hover:not(:disabled),
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .primary-button:focus-visible,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .accent-button:focus-visible,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .primary-button:active:not(:disabled),
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .accent-button:active:not(:disabled) {
   border-color: transparent;
   background: var(--bs-cta) border-box;
 }
 
-:root[data-theme="backstage"] .primary-button:active:not(:disabled),
-:root[data-theme="backstage"] .accent-button:active:not(:disabled),
-:root[data-theme="backstage"] .ghost-button:active:not(:disabled) {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .primary-button:active:not(:disabled),
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .accent-button:active:not(:disabled),
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .ghost-button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-:root[data-theme="backstage"] .primary-button:disabled,
-:root[data-theme="backstage"] .accent-button:disabled {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .primary-button:disabled,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .accent-button:disabled {
   background: var(--bs-accent);
   color: #fff;
   opacity: 0.45;
@@ -12405,51 +12471,51 @@ button.lib-dep-ref:hover {
 
 /* ---- Inputs ---------------------------------------------------------------- */
 
-:root[data-theme="backstage"] input[type="text"],
-:root[data-theme="backstage"] input[type="search"],
-:root[data-theme="backstage"] input[type="number"],
-:root[data-theme="backstage"] textarea,
-:root[data-theme="backstage"] select {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="text"],
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="search"],
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="number"],
+:root:is([data-theme="backstage"], [data-theme="modhub"]) textarea,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) select {
   background: var(--bs-elevated);
   border-color: var(--bs-border);
   border-radius: 6px;
   color: var(--bs-text);
 }
 
-:root[data-theme="backstage"] input[type="text"]::placeholder,
-:root[data-theme="backstage"] input[type="search"]::placeholder,
-:root[data-theme="backstage"] textarea::placeholder {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="text"]::placeholder,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="search"]::placeholder,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) textarea::placeholder {
   color: var(--bs-placeholder);
 }
 
-:root[data-theme="backstage"] input[type="text"]:focus,
-:root[data-theme="backstage"] input[type="search"]:focus,
-:root[data-theme="backstage"] input[type="number"]:focus,
-:root[data-theme="backstage"] textarea:focus,
-:root[data-theme="backstage"] select:focus {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="text"]:focus,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="search"]:focus,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) input[type="number"]:focus,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) textarea:focus,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) select:focus {
   border-color: var(--bs-focus);
   box-shadow: none;
   outline: none;
 }
 
-:root[data-theme="backstage"] .input-leading-icon {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .input-leading-icon {
   color: var(--bs-text-3);
 }
 
-:root[data-theme="backstage"] .check-row input[type="checkbox"] {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .check-row input[type="checkbox"] {
   border-color: var(--bs-border-bright);
   border-radius: 4px;
   background: var(--bs-elevated);
 }
 
-:root[data-theme="backstage"] .check-row input[type="checkbox"]:checked {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .check-row input[type="checkbox"]:checked {
   border-color: var(--bs-accent);
   background: var(--bs-accent);
 }
 
 /* ---- Segmented controls, chips ----------------------------------------------- */
 
-:root[data-theme="backstage"] .mode-switch {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .mode-switch {
   padding: 2px;
   gap: 1px;
   border-color: transparent;
@@ -12457,28 +12523,28 @@ button.lib-dep-ref:hover {
   background: var(--bs-elevated);
 }
 
-:root[data-theme="backstage"] .mode-button {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .mode-button {
   border-radius: 4px;
   color: var(--bs-aside);
 }
 
-:root[data-theme="backstage"] .mode-button:hover:not(:disabled) {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .mode-button:hover:not(:disabled) {
   color: var(--bs-text-2);
 }
 
-:root[data-theme="backstage"] .mode-button.active {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .mode-button.active {
   border-color: transparent;
   background: var(--bs-active);
   color: var(--bs-text);
 }
 
-:root[data-theme="backstage"] .chip {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .chip {
   border-radius: 4px;
 }
 
 /* ---- Tables --------------------------------------------------------------- */
 
-:root[data-theme="backstage"] .app-main th {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .app-main th {
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.05em;
@@ -12488,39 +12554,39 @@ button.lib-dep-ref:hover {
 
 /* ---- Overlays ---------------------------------------------------------------- */
 
-:root[data-theme="backstage"] .dialog-backdrop {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .dialog-backdrop {
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(8px);
 }
 
-:root[data-theme="backstage"] .dialog-card {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .dialog-card {
   border-color: var(--bs-border-bright);
   border-radius: 12px;
   background: var(--bs-surface);
 }
 
-:root[data-theme="backstage"] .context-menu {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .context-menu {
   border-color: var(--bs-border-bright);
   border-radius: 6px;
   background: var(--bs-elevated);
   box-shadow: var(--bs-overlay-shadow);
 }
 
-:root[data-theme="backstage"] .context-menu-item {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .context-menu-item {
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 12px;
 }
 
-:root[data-theme="backstage"] .context-menu-item:hover {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .context-menu-item:hover {
   background: var(--bs-active);
 }
 
-:root[data-theme="backstage"] .context-menu-separator {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .context-menu-separator {
   background: var(--bs-active);
 }
 
-:root[data-theme="backstage"] .toast {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .toast {
   border-color: var(--bs-border-bright);
   border-radius: 8px;
   background: var(--bs-elevated);
@@ -12528,9 +12594,9 @@ button.lib-dep-ref:hover {
 
 /* ---- Progress ---------------------------------------------------------------- */
 
-:root[data-theme="backstage"] .progress-bar,
-:root[data-theme="backstage"] .build-db-progress-fill,
-:root[data-theme="backstage"] .build-db-mini-progress-fill {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .progress-bar,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .build-db-progress-fill,
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .build-db-mini-progress-fill {
   background: var(--bs-progress);
   background-size: 200% 100%;
   animation: bs-shimmer 2s linear infinite;
@@ -12543,6 +12609,249 @@ button.lib-dep-ref:hover {
   100% {
     background-position: -200% 0;
   }
+}
+
+/* =========================================================
+   Obsidian ModHub. The Backstage skin above with ModHub's palette (the
+   --bs-* tokens here), plus what the ModHub spec adds: gradient primary
+   actions with a violet glow, violet focus rings, layered modals, Space
+   Grotesk headings, JetBrains Mono figures, the mono status bar and tinted
+   badges. Scoped to :root[data-theme="modhub"].
+   ========================================================= */
+
+:root[data-theme="modhub"] {
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --bs-chrome: #0d1117;
+  --bs-surface: #12161f;
+  --bs-elevated: #161b26;
+  --bs-hover: #1f2636;
+  --bs-active: #1f2636;
+  --bs-border: rgba(255, 255, 255, 0.08);
+  --bs-border-bright: rgba(255, 255, 255, 0.15);
+  --bs-text: #f8fafc;
+  --bs-text-2: #94a3b8;
+  --bs-text-3: #64748b;
+  --bs-aside: #64748b;
+  --bs-placeholder: #4b5567;
+  --bs-accent: #7a5af8;
+  --bs-focus: #7a5af8;
+  --bs-selection: rgba(122, 90, 248, 0.4);
+  --bs-gradient: linear-gradient(135deg, #4e7bff 0%, #7a5af8 50%, #c04cfd 100%);
+  --bs-cta: linear-gradient(90deg, #4e7bff 0%, #7a5af8 50%, #b038ee 100%);
+  --bs-cta-hover: linear-gradient(90deg, #618bff 0%, #8a6cf9 50%, #cd67fd 100%);
+  --bs-cta-active: linear-gradient(90deg, #3c67ec 0%, #6848e5 50%, #b038ee 100%);
+  --bs-brand: linear-gradient(135deg, #4e7bff 0%, #7a5af8 50%, #c04cfd 100%);
+  --bs-rail-bar: linear-gradient(to bottom, #4e7bff, #7a5af8, #c04cfd);
+  --bs-progress: linear-gradient(90deg, #4e7bff, #7a5af8, #c04cfd, #4e7bff);
+  --bs-outline-bg: rgba(255, 255, 255, 0.04);
+  --bs-outline-bg-hover: rgba(255, 255, 255, 0.08);
+  --bs-overlay-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.65);
+  --mh-modal: #1a202c;
+  --mh-glow: 0 4px 20px -2px rgba(122, 90, 248, 0.45);
+  --mh-glow-hover: 0 0 16px rgba(122, 90, 248, 0.6);
+}
+
+/* ---- Type --------------------------------------------------------------- */
+
+:root[data-theme="modhub"] .app-main h1,
+:root[data-theme="modhub"] .settings-title,
+:root[data-theme="modhub"] .brand-title,
+:root[data-theme="modhub"] .dialog-card h3,
+:root[data-theme="modhub"] .settings-section-title,
+:root[data-theme="modhub"] .dbf-section-title,
+:root[data-theme="modhub"] .build-db-card-title,
+:root[data-theme="modhub"] .lib-dh-title,
+:root[data-theme="modhub"] .hub-page-title,
+:root[data-theme="modhub"] .downloads-title-row h3 {
+  font-family: var(--font-display);
+}
+
+/* Figures: sizes, counts, versions, metrics. */
+:root[data-theme="modhub"] .lib-count,
+:root[data-theme="modhub"] .lib-ver,
+:root[data-theme="modhub"] .lib-dep-size,
+:root[data-theme="modhub"] .hub-stats-row,
+:root[data-theme="modhub"] .hub-stats,
+:root[data-theme="modhub"] .hub-dl-size,
+:root[data-theme="modhub"] .hub-dl-total,
+:root[data-theme="modhub"] .hub-page-pos,
+:root[data-theme="modhub"] .dv-row-pct,
+:root[data-theme="modhub"] .dv-row-detail,
+:root[data-theme="modhub"] .downloads-badge {
+  font-family: var(--lib-mono, var(--font-mono));
+  letter-spacing: 0.02em;
+}
+
+/* ---- Primary actions: the gradient, with a violet glow ------------------ */
+
+:root[data-theme="modhub"] .primary-button,
+:root[data-theme="modhub"] .accent-button {
+  border-color: transparent;
+  border-radius: 6px;
+  background: var(--bs-cta) border-box;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: var(--mh-glow);
+}
+
+:root[data-theme="modhub"] .primary-button:hover:not(:disabled),
+:root[data-theme="modhub"] .accent-button:hover:not(:disabled),
+:root[data-theme="modhub"] .primary-button:focus-visible,
+:root[data-theme="modhub"] .accent-button:focus-visible {
+  background: var(--bs-cta-hover) border-box;
+  box-shadow: var(--mh-glow-hover);
+}
+
+:root[data-theme="modhub"] .primary-button:active:not(:disabled),
+:root[data-theme="modhub"] .accent-button:active:not(:disabled) {
+  background: var(--bs-cta-active) border-box;
+  box-shadow: none;
+}
+
+:root[data-theme="modhub"] .primary-button:disabled,
+:root[data-theme="modhub"] .accent-button:disabled {
+  background: var(--bs-cta) border-box;
+  box-shadow: none;
+  opacity: 0.4;
+}
+
+:root[data-theme="modhub"] .lib-btn-gradient,
+:root[data-theme="modhub"] .hub-btn-install {
+  background: var(--bs-cta) border-box;
+  font-weight: 600;
+  box-shadow: var(--mh-glow);
+}
+
+:root[data-theme="modhub"] .lib-btn-gradient:hover:not(:disabled),
+:root[data-theme="modhub"] .hub-btn-install:hover {
+  background: var(--bs-cta-hover) border-box;
+  box-shadow: var(--mh-glow-hover);
+}
+
+:root[data-theme="modhub"] .hub-btn.is-big.hub-btn-install {
+  min-height: 36px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* Secondary / ghost actions. */
+:root[data-theme="modhub"] .ghost-button,
+:root[data-theme="modhub"] .icon-button {
+  color: var(--bs-text-2);
+}
+
+:root[data-theme="modhub"] .ghost-button:hover:not(:disabled),
+:root[data-theme="modhub"] .icon-button:hover:not(:disabled) {
+  color: #fff;
+}
+
+/* ---- Inputs: violet focus ring --------------------------------------------- */
+
+:root[data-theme="modhub"] input[type="text"],
+:root[data-theme="modhub"] input[type="search"],
+:root[data-theme="modhub"] input[type="number"],
+:root[data-theme="modhub"] textarea,
+:root[data-theme="modhub"] select {
+  border-radius: 4px;
+}
+
+:root[data-theme="modhub"] input[type="text"]:focus,
+:root[data-theme="modhub"] input[type="search"]:focus,
+:root[data-theme="modhub"] input[type="number"]:focus,
+:root[data-theme="modhub"] textarea:focus,
+:root[data-theme="modhub"] select:focus,
+:root[data-theme="modhub"] .hub-page-address:focus-within {
+  border-color: #7a5af8;
+  box-shadow: 0 0 0 2px rgba(122, 90, 248, 0.2);
+}
+
+/* ---- Layered overlays ------------------------------------------------------------ */
+
+:root[data-theme="modhub"] .dialog-card,
+:root[data-theme="modhub"] .context-menu,
+:root[data-theme="modhub"] .downloads-popover,
+:root[data-theme="modhub"] .toast {
+  border-color: var(--bs-border-bright);
+  background: var(--mh-modal);
+  box-shadow: var(--bs-overlay-shadow);
+}
+
+:root[data-theme="modhub"] .dialog-card {
+  border-radius: 8px;
+}
+
+/* ---- Library / Hub ----------------------------------------------------------------- */
+
+:root[data-theme="modhub"] .lib-statusbar {
+  min-height: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: #090b10;
+  font-family: var(--lib-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+:root[data-theme="modhub"] .lib-filterbar,
+:root[data-theme="modhub"] .hub-page-head,
+:root[data-theme="modhub"] .hub-page-toolbar {
+  background: #0d1117;
+}
+
+:root[data-theme="modhub"] .hub-hero {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: #000;
+}
+
+:root[data-theme="modhub"] .hub-author-card {
+  border-radius: 6px;
+  background: #161b26;
+}
+
+/* Badges: compact, all caps, tinted with a matching hairline. */
+:root[data-theme="modhub"] .hub-badges .lib-chip {
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+:root[data-theme="modhub"] .hub-badges .lib-chip-type {
+  border: 1px solid rgba(78, 123, 255, 0.3);
+  background: #101828 !important;
+  color: #82a8ff;
+}
+
+:root[data-theme="modhub"] .hub-badges .lib-chip-type.is-free {
+  border-color: rgba(52, 211, 153, 0.3);
+  background: #052e16 !important;
+  color: #34d399;
+}
+
+:root[data-theme="modhub"] .hub-badges .lib-chip-type.is-paid {
+  border-color: rgba(251, 191, 36, 0.3);
+  background: #2a1d05 !important;
+  color: #fbbf24;
+}
+
+:root[data-theme="modhub"] .hub-badges .lib-license {
+  border: 1px solid rgba(110, 231, 183, 0.3);
+  background: #064e3b;
+  color: #6ee7b7;
+}
+
+:root[data-theme="modhub"] .hub-badges .lib-license.is-restricted {
+  border-color: rgba(255, 180, 171, 0.3);
+  background: #3b0d0c;
+  color: #ffb4ab;
 }
 
 /* =========================================================
@@ -13224,7 +13533,7 @@ button.lib-dep-ref:hover {
 }
 
 .hub-page-address input,
-:root[data-theme="backstage"] .hub-page-address input {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .hub-page-address input {
   flex: 1 1 auto;
   min-width: 0;
   height: 100%;
@@ -13486,7 +13795,7 @@ button.lib-dep-ref:hover {
   transform: translateY(-50%);
 }
 
-:root[data-theme="backstage"] .check-row input[type="checkbox"]:indeterminate {
+:root:is([data-theme="backstage"], [data-theme="modhub"]) .check-row input[type="checkbox"]:indeterminate {
   border-color: #4a91f1;
   background: #4a91f1;
 }
