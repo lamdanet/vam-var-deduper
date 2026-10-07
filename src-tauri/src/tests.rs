@@ -6694,3 +6694,38 @@ fn archive_password_is_verified_over_ranges() {
     let (_, none) = crate::archives::inspect_remote(&url, &["nope".to_string()]).unwrap();
     assert_eq!(none, None);
 }
+
+/// Writes two password-protected test zips into $VAM_FIXTURE_DIR (manual UI testing).
+#[test]
+#[ignore]
+fn write_password_zip_fixtures() {
+    use std::io::Write;
+    use zip::unstable::write::FileOptionsExt;
+    use zip::write::SimpleFileOptions;
+    let dir = PathBuf::from(std::env::var("VAM_FIXTURE_DIR").expect("VAM_FIXTURE_DIR"));
+    fs::create_dir_all(&dir).unwrap();
+    let var = |scene: &str| {
+        let mut v = std::io::Cursor::new(Vec::new());
+        let mut w = zip::ZipWriter::new(&mut v);
+        w.start_file("meta.json", SimpleFileOptions::default()).unwrap();
+        w.write_all(b"{}").unwrap();
+        w.start_file(format!("Saves/scene/{scene}.json"), SimpleFileOptions::default()).unwrap();
+        w.write_all(b"{}").unwrap();
+        w.finish().unwrap();
+        v.into_inner()
+    };
+    let write = |name: &str, opts: SimpleFileOptions, files: Vec<(&str, Vec<u8>)>| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        let mut w = zip::ZipWriter::new(&mut out);
+        for (n, bytes) in files {
+            w.start_file(n, opts).unwrap();
+            w.write_all(&bytes).unwrap();
+        }
+        w.finish().unwrap();
+        fs::write(dir.join(name), out.into_inner()).unwrap();
+    };
+    write("Pack1.zip", SimpleFileOptions::default().with_aes_encryption(zip::AesMode::Aes256, "alpha1"),
+        vec![("ZzTest.LookA.1.var", var("a"))]);
+    write("Pack2.zip", SimpleFileOptions::default().with_deprecated_encryption(b"beta2"),
+        vec![("Looks/ZzTest.HairB.2.var", var("b")), ("preview.png", b"png".to_vec())]);
+}
