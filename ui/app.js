@@ -114,6 +114,11 @@ const state = {
   },
   // Settings → VaM directory (see applyVamDir) and its last inspect_vam_dir result.
   vamDir: "",
+  // Settings → offload folder. Blank = AddonPackages_offload beside
+  // AddonPackages (see offloadDir). `offloadExists` gates scanning it.
+  offloadDirSetting: "",
+  offloadByCreator: true,
+  offloadExists: false,
   vamDirInfo: null,
   // VAR Packages (library view). Rows loaded so far — the grid grows in chunks
   // as it scrolls, so this is a prefix of the full matching set.
@@ -138,12 +143,12 @@ const state = {
   varPackagesScannedDeep: true,
   // Filter selections; null means "no filter". `status` is the Status list
   // (favorites | dependency | standalone | broken | missing | outdated |
-  // indexed | unindexed), `pkgType` a LIB_TYPES key, `enabled` "enabled" |
-  // "disabled", `sizeBucket` "sm" | "md" | "lg", `scene` "with" | "without".
+  // indexed | unindexed), `pkgType` a LIB_TYPES key, `location` "active" |
+  // "offloaded", `sizeBucket` "sm" | "md" | "lg", `scene` "with" | "without".
   varPackagesFilters: {
     status: null,
     pkgType: null,
-    enabled: null,
+    location: null,
     sizeBucket: null,
     creator: null,
     scene: null,
@@ -2993,7 +2998,21 @@ function libType(item) {
 
 // Inactive packages are drawn dimmed, like Backstage's disabled/offloaded ones.
 function libIsDim(item) {
-  return Boolean(item?.disabled);
+  return Boolean(item?.disabled || item?.offloaded);
+}
+
+// The Offload / Restore button on a card, a table row and the details panel.
+// Offloaded packages sit in the offload folder, where VaM doesn't load them.
+function libOffloadButtonHtml(it, { compact = false, big = false } = {}) {
+  const fp = escapeAttribute(it.file_path ?? "");
+  const cls = `hub-btn lib-offload-btn${compact ? " is-compact" : ""}${big ? " is-big" : ""}`;
+  return it.offloaded
+    ? `<button type="button" class="${cls} is-restore" data-lib-offload="restore" data-offload-path="${fp}"
+              title="Move it back into AddonPackages, with the dependencies you pick">
+        <span class="material-symbols-outlined">unarchive</span><span class="hub-btn-text">Restore</span></button>`
+    : `<button type="button" class="${cls}" data-lib-offload="offload" data-offload-path="${fp}"
+              title="Move it out of AddonPackages so VaM stops loading it, with the dependencies you pick">
+        <span class="material-symbols-outlined">archive</span><span class="hub-btn-text">Offload</span></button>`;
 }
 
 function libFindItem(filePath) {
@@ -3234,6 +3253,11 @@ function libCardHtml(it, idx) {
   }
 
   const icons = [];
+  if (it.offloaded) {
+    icons.push(
+      `<span class="lib-thumb-glyph" title="Offloaded — VaM will not load it"><span class="material-symbols-outlined">archive</span></span>`,
+    );
+  }
   if (it.disabled) {
     icons.push(
       `<span class="lib-thumb-glyph" title="Disabled — VaM will not load it"><span class="material-symbols-outlined">power_settings_new</span></span>`,
@@ -3250,9 +3274,12 @@ function libCardHtml(it, idx) {
 
   const author = `<button type="button" class="lib-author-link" data-lib-author="${escapeAttribute(creator)}" title="Filter by ${escapeAttribute(creator)}">${escapeHtml(creator)}</button>`;
   const footer = compact
-    ? `<div class="lib-card-scrim">
-         <div class="lib-card-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</div>
-         <span class="lib-by">by ${author}</span>
+    ? `<div class="lib-card-scrim lib-scrim-actions">
+         <div class="lib-scrim-text">
+           <div class="lib-card-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</div>
+           <span class="lib-by">by ${author}</span>
+         </div>
+         ${libOffloadButtonHtml(it, { compact: true })}
        </div>`
     : "";
   const stats = compact
@@ -3277,7 +3304,8 @@ function libCardHtml(it, idx) {
                : ""
            }
          </div>
-       </div>`;
+       </div>
+       <div class="lib-card-actions">${libOffloadButtonHtml(it)}</div>`;
 
   return `
     <div class="lib-card${picked ? " is-picked" : ""}${picked && state.vpSelected.size > 1 ? " is-checked" : ""}${libIsDim(it) ? " is-dim" : ""}${state.vpSelected.size > 1 && state.vpLead === fp ? " is-lead" : ""}"
@@ -3297,6 +3325,7 @@ function libCardHtml(it, idx) {
 function libStatusCellHtml(it) {
   const parts = [];
   if (!it.readable) parts.push(`<span class="lib-status-err">Corrupted</span>`);
+  else if (it.offloaded) parts.push(`<span class="lib-status-warn">Offloaded</span>`);
   else if (it.disabled) parts.push(`<span class="lib-status-warn">Disabled</span>`);
   else if (it.used_by_count > 0) parts.push(`<span class="lib-status-dep">Dep</span>`);
   else parts.push(`<span class="lib-status-ok">Top-level</span>`);
@@ -3341,6 +3370,7 @@ function libRowHtml(it, idx) {
           ? `<span class="lib-status-warn" title="${it.missing_dep_count} missing">⚠ ${it.missing_dep_count}</span>`
           : `<span class="lib-status-muted">${Number(it.dep_count) || 0}</span>`
       }</td>
+      <td class="lib-action-cell">${libOffloadButtonHtml(it, { compact: true })}</td>
     </tr>`;
 }
 
@@ -3500,7 +3530,7 @@ function libRenderStatusBar() {
   const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
   const sep = `<span class="lib-sb-sep">·</span>`;
   const dir = vpResolveInputDir();
-  const extra = getAdditionalDirs("varPackages").length;
+  const extra = getUserAdditionalDirs("varPackages").length;
   bar.innerHTML = `
     <span class="lib-sb-item" title="Packages matching the current filters"><span class="material-symbols-outlined">inventory_2</span>${total.toLocaleString()} packages</span>${sep}
     <span class="lib-sb-item" title="Of those, packages another scanned package depends on"><span class="material-symbols-outlined">account_tree</span>${Number(f.total_deps || 0).toLocaleString()} deps</span>${sep}
@@ -3673,6 +3703,9 @@ function libDepRank(status) {
 }
 
 function libDepPill(dep) {
+  if (dep.offloaded && (dep.status === "found" || dep.status === "other_version")) {
+    return `<span class="lib-pill lib-pill-info" title="In the offload folder — VaM can't load it until it is restored">Offloaded</span>`;
+  }
   switch (dep.status) {
     case "found":
       return `<span class="lib-pill lib-pill-ok">Present</span>`;
@@ -3818,6 +3851,11 @@ function libDetailHeaderHtml(item, details) {
   ];
   if (item.used_by_count > 0) chips.push(`<span class="lib-chip lib-chip-depchip">Dep</span>`);
   if (item.newer_version) chips.push(`<span class="lib-chip lib-chip-storage">Old</span>`);
+  if (item.offloaded) {
+    chips.push(
+      `<span class="lib-chip lib-chip-storage" title="In the offload folder — VaM will not load it"><span class="material-symbols-outlined">archive</span>Offloaded</span>`,
+    );
+  }
   if (item.disabled) {
     chips.push(
       `<span class="lib-chip lib-chip-storage"><span class="material-symbols-outlined">power_settings_new</span>Disabled</span>`,
@@ -3867,16 +3905,13 @@ function libDetailHeaderHtml(item, details) {
         </div>
       </div>
       <div class="lib-actions">
+        ${libOffloadButtonHtml(item, { big: true })}
         <button type="button" class="lib-btn lib-btn-accent lib-btn-full" data-lib-action="open-details">
           <span class="material-symbols-outlined">open_in_new</span>Open in VAR Details
         </button>
         <div class="lib-actions-row">
           <button type="button" class="lib-btn lib-btn-destructive" data-lib-action="delete">
             <span class="material-symbols-outlined">delete</span>Delete · ${escapeHtml(formatBytesLocal(item.size_bytes))}
-          </button>
-          <button type="button" class="lib-btn lib-btn-quiet${item.disabled ? " is-warn" : ""}" data-lib-action="toggle-disabled"
-                  title="${item.disabled ? "Remove the .disabled marker so VaM loads it again" : "Add a .disabled marker so VaM skips it"}">
-            <span class="material-symbols-outlined">${item.disabled ? "power" : "power_settings_new"}</span>${item.disabled ? "Enable" : "Disable"}
           </button>
           <button type="button" class="lib-icon-btn${fav ? " lib-btn-quiet is-on" : ""}" data-vp-fav="${escapeAttribute(item.package_id)}" title="${fav ? "Remove from favorites" : "Add to favorites"}">
             <span class="material-symbols-outlined" ${fav ? `style="font-variation-settings:'FILL' 1"` : ""}>star</span>
@@ -3946,7 +3981,7 @@ function libRenderDetail() {
 function libSelectionPanelHtml() {
   const snaps = [...state.vpSelected.values()];
   const bytes = snaps.reduce((sum, s) => sum + (Number(s.size_bytes) || 0), 0);
-  const disabled = snaps.filter((s) => s.disabled).length;
+  const offloaded = snaps.filter((s) => s.offloaded).length;
   const broken = snaps.filter((s) => s.missing_dep_count > 0).length;
   const rows = snaps
     .slice(0, 200)
@@ -3962,7 +3997,7 @@ function libSelectionPanelHtml() {
     <section class="lib-ds">
       <div class="lib-dh-title">${snaps.length.toLocaleString()} packages selected</div>
       <p class="lib-aside" style="margin-top:4px">${escapeHtml(formatBytesLocal(bytes))}${
-        disabled ? ` · ${disabled} disabled` : ""
+        offloaded ? ` · ${offloaded} offloaded` : ""
       }${broken ? ` · ${broken} with missing dependencies` : ""}</p>
       <div class="lib-actions">
         <div class="lib-actions-row">
@@ -3971,8 +4006,16 @@ function libSelectionPanelHtml() {
           </button>
         </div>
         <div class="lib-actions-row">
-          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-disable"><span class="material-symbols-outlined">power_settings_new</span>Disable</button>
-          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-enable"><span class="material-symbols-outlined">power</span>Enable</button>
+          ${
+            offloaded < snaps.length
+              ? `<button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-offload"><span class="material-symbols-outlined">archive</span>Offload</button>`
+              : ""
+          }
+          ${
+            offloaded
+              ? `<button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-restore"><span class="material-symbols-outlined">unarchive</span>Restore</button>`
+              : ""
+          }
           <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-favorite"><span class="material-symbols-outlined">star</span>Favorite</button>
         </div>
         <div class="lib-actions-row">
@@ -4082,6 +4125,7 @@ async function refreshVarPackagesFromFolder({
       forceRescan,
       // The committed depth, never the switch position — see varPackagesScannedDeep.
       deepScan: state.varPackagesScannedDeep !== false,
+      offloadDir: offloadDir() || null,
     });
     const items = Array.isArray(page?.items) ? page.items : [];
     state.varPackagesItems = append ? [...(state.varPackagesItems ?? []), ...items] : items;
@@ -4181,49 +4225,458 @@ async function vpRefreshAfterMutation() {
   if (typeof dbPkgsRefreshIfVisible === "function") dbPkgsRefreshIfVisible();
 }
 
-// ---- Enable / disable --------------------------------------------------------
+// ---- Offload / Restore ---------------------------------------------------------
+// Offload moves packages out of AddonPackages into the offload folder, where
+// VaM doesn't load them; Restore moves them back. The dialog lists the picked
+// packages and everything they need (plan_offload). For Offload, a dependency
+// that a package staying in AddonPackages still uses starts unticked; Restore
+// ticks every offloaded dependency.
 
-async function libSetDisabled(snaps, disabled) {
-  if (!invoke) return;
-  const targets = snaps.filter((s) => s?.file_path && Boolean(s.disabled) !== disabled);
-  if (!targets.length) return;
-  let failed = 0;
-  for (const s of targets) {
-    try {
-      await invoke("set_var_package_disabled", { filePath: s.file_path, disabled });
-      s.disabled = disabled;
-      const live = (state.varPackagesItems ?? []).find((it) => it.file_path === s.file_path);
-      if (live) live.disabled = disabled;
-      const sel = state.vpSelected.get(s.file_path);
-      if (sel) sel.disabled = disabled;
-    } catch (err) {
-      failed += 1;
-      addLog(`${disabled ? "Disable" : "Enable"} ${s.file_name ?? s.file_path}: ${String(err)}`);
-    }
-  }
-  const done = targets.length - failed;
-  if (done) {
-    showToast(
-      `${disabled ? "Disabled" : "Enabled"} ${done} package${done === 1 ? "" : "s"}`,
-      failed ? "error" : "success",
-    );
-  } else if (failed) {
-    showToast(`Could not ${disabled ? "disable" : "enable"} the package — see Console`, "error");
-  }
-  // The backend patched its cache, so a requery just refreshes the facets and
-  // drops rows that no longer match an Enabled filter.
-  await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true });
+const OFFLOAD = {
+  restore: false,
+  items: [],
+  targets: [],
+  deps: [],
+  missing: [],
+  token: 0,
+  running: false,
+  taskId: null,
+};
+
+function offloadSize(entries) {
+  return entries.reduce((sum, e) => sum + (Number(e.size_bytes) || 0), 0);
 }
 
-// ---- Selection ---------------------------------------------------------------
+function offloadNames(paths, limit = 2) {
+  const all = [...OFFLOAD.targets, ...OFFLOAD.deps];
+  const names = paths.map((fp) => all.find((e) => e.file_path === fp)?.package_id ?? fp);
+  return `${names.slice(0, limit).join(", ")}${names.length > limit ? ` +${names.length - limit}` : ""}`;
+}
 
-function vpSelectOnly(item, { render = true } = {}) {
-  if (!vpSelectableItem(item)) return;
-  state.vpSelected.clear();
-  state.vpSelected.set(item.file_path, vpSnapshotItem(item));
-  state.vpSelAnchor = item.file_path;
-  state.vpLead = item.file_path;
-  if (render) vpSyncSelectionUi();
+function offloadListText(ids, limit = 2) {
+  return `${ids.slice(0, limit).join(", ")}${ids.length > limit ? ` +${ids.length - limit}` : ""}`;
+}
+
+// Plan members that stay in AddonPackages (unticked) yet need this one.
+function offloadStayingRequesters(e) {
+  return (e.required_by ?? []).filter((fp) => {
+    const dep = OFFLOAD.deps.find((d) => d.file_path === fp);
+    return dep && dep.location === "active" && !dep.checked;
+  });
+}
+
+function offloadMeta(e, kind) {
+  const parts = [];
+  let warn = false;
+  if (!e.movable) {
+    if (e.location === "other") parts.push("In another folder — not moved");
+    else if (OFFLOAD.restore) parts.push("Already in AddonPackages");
+    else parts.push("Already offloaded");
+  }
+  if (kind === "dep") {
+    if (!e.direct && e.required_by?.length) parts.push(`via ${offloadNames(e.required_by)}`);
+    if (e.other_version) parts.push("another version than the one asked for");
+  }
+  if (!OFFLOAD.restore && e.movable && e.used_by?.length) {
+    parts.push(
+      kind === "dep"
+        ? `Also used by ${offloadListText(e.used_by)} in AddonPackages`
+        : `${offloadListText(e.used_by)} in AddonPackages ${e.used_by.length === 1 ? "uses" : "use"} it`,
+    );
+    warn = e.checked;
+  }
+  if (!OFFLOAD.restore && kind === "dep" && e.checked) {
+    const staying = offloadStayingRequesters(e);
+    if (staying.length) {
+      parts.push(`still needed by ${offloadNames(staying)}, which stays`);
+      warn = true;
+    }
+  }
+  return { text: parts.join(" · "), warn };
+}
+
+function offloadChip(e) {
+  if (e.location === "other") return `<span class="lib-pill">Other folder</span>`;
+  if (e.location === "offloaded") return `<span class="lib-pill lib-pill-info">Offloaded</span>`;
+  if (!OFFLOAD.restore && e.used_by?.length) {
+    return `<span class="lib-pill lib-pill-warn" title="Packages staying in AddonPackages use it">Shared</span>`;
+  }
+  return `<span class="lib-pill lib-pill-ok">In AddonPackages</span>`;
+}
+
+function offloadRowHtml(kind, i, e) {
+  const meta = offloadMeta(e, kind);
+  return `<label class="check-row hub-dl-row${e.movable ? "" : " is-off"}">
+      <input type="checkbox" data-offload="${kind}" data-offload-idx="${i}"${e.checked ? " checked" : ""}${e.movable ? "" : " disabled"} />
+      <span class="hub-dl-main">
+        <span class="hub-dl-name" title="${escapeAttribute(e.file_path)}">${escapeHtml(e.package_id)}</span>
+        ${meta.text ? `<span class="hub-dl-meta${meta.warn ? " is-warn" : ""}">${escapeHtml(meta.text)}</span>` : ""}
+      </span>
+      <span class="hub-dl-size">${escapeHtml(formatBytesLocal(e.size_bytes))}</span>
+      <span class="hub-dl-chip">${offloadChip(e)}</span>
+    </label>`;
+}
+
+function offloadRenderHead() {
+  const items = OFFLOAD.items;
+  const one = items.length === 1 ? items[0] : null;
+  const verb = OFFLOAD.restore ? "Restore" : "Offload";
+  const title = one ? `${verb} ${libTitle(one)}` : `${verb} ${items.length} packages`;
+  vpSetText("offload-title", title);
+  $("offload-title").title = title;
+  const sub = one
+    ? [libCreator(one), libVersion(one) && `v${libVersion(one)}`, formatBytesLocal(one.size_bytes)]
+    : [formatBytesLocal(offloadSize(items))];
+  vpSetText("offload-sub", sub.filter(Boolean).join(" · "));
+  const thumb = $("offload-thumb");
+  if (thumb) {
+    thumb.innerHTML = one
+      ? `${libThumbHtml(one.file_path, libGradient(one.file_name || one.package_id), "hub-dl-thumb-img")}</div>`
+      : "";
+    libThumbWatch(thumb);
+  }
+  vpSetText(
+    "offload-intro",
+    OFFLOAD.restore
+      ? "Moves the package and the dependencies you tick back into AddonPackages, so VaM loads them again."
+      : "Moves the package and the dependencies you tick out of AddonPackages, so VaM stops loading them. " +
+          "Dependencies that packages staying in AddonPackages still use start unticked.",
+  );
+}
+
+function offloadRenderBody() {
+  const body = $("offload-body");
+  if (!body) return;
+  const scroll = body.scrollTop;
+  const movable = OFFLOAD.deps.filter((d) => d.movable);
+  const targetRows = OFFLOAD.targets.map((e, i) => offloadRowHtml("target", i, e)).join("");
+  const depRows = OFFLOAD.deps.map((e, i) => offloadRowHtml("dep", i, e)).join("");
+  const missing = OFFLOAD.missing.length
+    ? `<p class="hub-dl-empty">${OFFLOAD.missing.length} ${
+        OFFLOAD.missing.length === 1 ? "dependency isn't" : "dependencies aren't"
+      } in your library: ${escapeHtml(offloadListText(OFFLOAD.missing, 4))}</p>`
+    : "";
+  body.innerHTML = `
+    <div class="hub-dl-group">
+      <div class="hub-dl-group-head"><span class="hub-dl-group-title">${
+        OFFLOAD.targets.length === 1 ? "Package" : "Packages"
+      } <small>(${OFFLOAD.targets.length})</small></span></div>
+      <div class="hub-dl-list">${targetRows}</div>
+    </div>
+    <div class="hub-dl-group">
+      <div class="hub-dl-group-head">
+        <span class="hub-dl-group-title">Dependencies <small>(${OFFLOAD.deps.length})</small></span>
+        ${
+          movable.length
+            ? `<label class="check-row hub-dl-all"><input type="checkbox" id="offload-all" /><span>Select all (${movable.length})</span></label>`
+            : ""
+        }
+      </div>
+      ${depRows ? `<div class="hub-dl-list">${depRows}</div>` : `<p class="hub-dl-empty">No dependencies in your library</p>`}
+      ${missing}
+    </div>`;
+  body.scrollTop = scroll;
+}
+
+// Select-all state, the selection total and the confirm button.
+function offloadSync() {
+  const all = $("offload-all");
+  if (all) {
+    const movable = OFFLOAD.deps.filter((d) => d.movable);
+    const on = movable.filter((d) => d.checked).length;
+    all.checked = on > 0 && on === movable.length;
+    all.indeterminate = on > 0 && on < movable.length;
+  }
+  const picked = [...OFFLOAD.targets, ...OFFLOAD.deps].filter((e) => e.checked && e.movable);
+  const size = offloadSize(picked);
+  vpSetText(
+    "offload-total",
+    picked.length
+      ? `${picked.length} package${picked.length === 1 ? "" : "s"} · ${formatBytesLocal(size)}`
+      : "Nothing selected",
+  );
+  const verb = OFFLOAD.restore ? "Restore" : "Offload";
+  const confirm = $("offload-confirm");
+  if (confirm) {
+    const dest = ($("offload-dest-input")?.value || "").trim();
+    confirm.disabled = OFFLOAD.running || !picked.length || !dest;
+    confirm.textContent = OFFLOAD.running ? `${verb}ing…` : picked.length > 1 ? `${verb} (${picked.length})` : verb;
+  }
+  vpSetText("offload-cancel", OFFLOAD.running ? "Stop" : "Cancel");
+  for (const id of ["offload-dest-input", "offload-dest-browse", "offload-by-creator"]) {
+    const el = $(id);
+    if (el) el.disabled = OFFLOAD.running;
+  }
+  $("offload-body")?.classList.toggle("is-busy", OFFLOAD.running);
+}
+
+function offloadRenderDest() {
+  const restore = OFFLOAD.restore;
+  vpSetText("offload-dest-label", restore ? "Restore to" : "Offload to");
+  const input = $("offload-dest-input");
+  if (input) {
+    input.value = restore ? vamAddonPackagesDir() : offloadDir();
+    input.readOnly = restore;
+    input.placeholder = restore ? "" : "Pick a folder outside AddonPackages";
+  }
+  $("offload-dest-browse")?.classList.toggle("hidden", restore);
+  vpSetText(
+    "offload-dest-hint",
+    restore
+      ? "AddonPackages, the folder VaM loads."
+      : "The offload folder. Changing it here changes it in Settings too.",
+  );
+  const box = $("offload-by-creator");
+  if (box) box.checked = state.offloadByCreator !== false;
+}
+
+async function offloadOpen(items, restore) {
+  const picked = (items ?? []).filter((it) => it?.file_path && Boolean(it.offloaded) === Boolean(restore));
+  if (!invoke || !picked.length || OFFLOAD.running) return;
+  if (!vamAddonPackagesDir()) {
+    showToast("Set your VaM directory in Settings first.", "error");
+    openVamDirSettings();
+    return;
+  }
+  const token = ++OFFLOAD.token;
+  Object.assign(OFFLOAD, { restore: Boolean(restore), items: picked, targets: [], deps: [], missing: [] });
+  offloadRenderHead();
+  offloadRenderDest();
+  $("offload-progress")?.classList.add("hidden");
+  $("offload-body").innerHTML = `<div class="hub-dl-loading"><div class="lib-skeleton" style="width:70%"></div><div class="lib-skeleton" style="width:50%"></div></div>`;
+  offloadSync();
+  $("offload-backdrop")?.classList.remove("hidden");
+  try {
+    const plan = await invoke("plan_offload", { filePaths: picked.map((it) => it.file_path), restore: OFFLOAD.restore });
+    if (token !== OFFLOAD.token) return;
+    const withCheck = (e) => ({ ...e, checked: Boolean(e.default_selected) });
+    OFFLOAD.targets = (plan?.targets ?? []).map(withCheck);
+    OFFLOAD.deps = (plan?.deps ?? []).map(withCheck);
+    OFFLOAD.missing = plan?.missing ?? [];
+    offloadRenderBody();
+  } catch (e) {
+    if (token !== OFFLOAD.token) return;
+    $("offload-body").innerHTML = `<p class="hub-dl-empty is-error">Couldn't work out what to move: ${escapeHtml(String(e?.message || e))}</p>`;
+  }
+  offloadSync();
+}
+
+function offloadClose() {
+  if (OFFLOAD.running) return;
+  OFFLOAD.token += 1;
+  $("offload-backdrop")?.classList.add("hidden");
+}
+
+function offloadProgress(fraction, message) {
+  const bar = $("offload-progress-bar");
+  if (bar) bar.style.width = `${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`;
+  vpSetText("offload-progress-message", message ?? "");
+}
+
+async function offloadConfirm() {
+  if (OFFLOAD.running || !invoke) return;
+  const restore = OFFLOAD.restore;
+  const paths = [...OFFLOAD.targets, ...OFFLOAD.deps].filter((e) => e.checked && e.movable).map((e) => e.file_path);
+  if (!paths.length) return;
+  const addonDir = vamAddonPackagesDir();
+  let target = offloadDir();
+  if (!restore) {
+    const typed = ($("offload-dest-input")?.value || "").trim();
+    if (!typed) return;
+    if (typed.toLowerCase() !== target.toLowerCase()) {
+      // The folder picked here becomes the offload folder, so later scans
+      // (and Restore) find what is moved there.
+      const def = vamDir() ? vamJoin(vamDir(), "AddonPackages_offload") : "";
+      state.offloadDirSetting = typed.toLowerCase() === def.toLowerCase() ? "" : typed;
+      target = typed;
+      await persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
+      renderSettingsOffload();
+    }
+  }
+  const byCreator = Boolean($("offload-by-creator")?.checked);
+
+  OFFLOAD.running = true;
+  $("offload-progress")?.classList.remove("hidden");
+  offloadProgress(0, "Starting…");
+  offloadSync();
+  let result = null;
+  let failure = null;
+  try {
+    const handle = await invoke("start_offload_task", {
+      filePaths: paths,
+      restore,
+      addonDir,
+      offloadDir: target,
+      byCreator,
+    });
+    OFFLOAD.taskId = handle?.id ?? null;
+    if (OFFLOAD.taskId == null) throw new Error("task did not start");
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, TASK_POLL_MS));
+      const payload = await invoke("get_task_progress", { taskId: OFFLOAD.taskId });
+      if (!payload) break;
+      offloadProgress(Number(payload.progress ?? 0), payload.message);
+      if (payload.error) throw new Error(String(payload.error));
+      if (payload.done) {
+        result = payload.offload_result ?? null;
+        break;
+      }
+    }
+  } catch (e) {
+    failure = e;
+  } finally {
+    const id = OFFLOAD.taskId;
+    OFFLOAD.taskId = null;
+    OFFLOAD.running = false;
+    if (id != null) invoke("clear_task", { taskId: id }).catch(() => {});
+  }
+
+  if (failure) {
+    $("offload-progress")?.classList.add("hidden");
+    offloadSync();
+    showToast(`${restore ? "Restore" : "Offload"} failed: ${String(failure?.message || failure)}`, "error", 6000);
+    return;
+  }
+  offloadClose();
+
+  const moved = result?.moved ?? [];
+  const failed = result?.failed ?? [];
+  for (const f of failed) addLog(`${restore ? "Restore" : "Offload"} ${f.package_id}: ${f.error}`);
+  for (const note of result?.notes ?? []) addLog(`${restore ? "Restore" : "Offload"}: ${note}`);
+  const verb = restore ? "Restored" : "Offloaded";
+  if (moved.length) {
+    showToast(
+      `${verb} ${moved.length} package${moved.length === 1 ? "" : "s"} · ${formatBytesLocal(result.moved_bytes || 0)}${
+        failed.length ? ` — ${failed.length} failed, see Console` : ""
+      }${result.was_cancelled ? " (stopped)" : ""}`,
+      failed.length ? "error" : "success",
+      failed.length ? 6000 : 3200,
+    );
+  } else if (failed.length) {
+    showToast(`Nothing was moved: ${failed[0].error}${failed.length > 1 ? " (see Console)" : ""}`, "error", 6000);
+  } else if (result?.was_cancelled) {
+    showToast("Stopped before anything moved.", "info");
+  }
+
+  // Keep the moved package in view: it is now at its new path.
+  const lead = moved.find((m) => OFFLOAD.items.some((it) => it.file_path === m.from));
+  if (lead) state.vpRevealPath = lead.to;
+  await refreshOffloadExists({ refresh: false });
+  await vpRefreshAfterMutation();
+}
+
+// ---- Settings → Offload folder -------------------------------------------------
+
+function renderSettingsOffload() {
+  const dir = offloadDir();
+  const text = $("settings-offload-text");
+  if (text) {
+    text.textContent = dir || "Set the VaM directory first";
+    text.classList.toggle("is-empty", !dir);
+    text.title = dir;
+  }
+  $("settings-reset-offload")?.classList.toggle("hidden", !state.offloadDirSetting);
+  vpSetText(
+    "settings-offload-status",
+    !dir
+      ? "Defaults to AddonPackages_offload beside AddonPackages once the VaM directory is set."
+      : state.offloadExists
+        ? `${state.offloadDirSetting ? "Custom folder" : "Default folder, beside AddonPackages"}.`
+        : `${state.offloadDirSetting ? "Custom folder" : "Default folder, beside AddonPackages"} — created the first time you offload a package.`,
+  );
+  const box = $("settings-offload-by-creator");
+  if (box) box.checked = state.offloadByCreator !== false;
+}
+
+// The offload folder must be outside AddonPackages, or VaM would still load
+// what is moved there.
+function offloadDirProblem(dir) {
+  const norm = (p) => String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const d = norm(dir);
+  const addon = norm(vamAddonPackagesDir());
+  if (!addon) return "";
+  if (d === addon || d.startsWith(`${addon}\\`)) return "Pick a folder outside AddonPackages — VaM loads everything inside it.";
+  if (addon.startsWith(`${d}\\`)) return "That folder contains AddonPackages — pick another one.";
+  return "";
+}
+
+async function setOffloadDir(dir) {
+  state.offloadDirSetting = String(dir || "").trim();
+  await persistAllConfig();
+  renderSettingsOffload();
+  await refreshOffloadExists();
+}
+
+function setupOffload() {
+  $("settings-pick-offload")?.addEventListener("click", async () => {
+    if (!invoke) return;
+    try {
+      const picked = await invoke("pick_folder");
+      if (!picked) return;
+      const problem = offloadDirProblem(picked);
+      if (problem) {
+        showToast(problem, "error", 6000);
+        return;
+      }
+      await setOffloadDir(picked);
+    } catch (e) {
+      addLog(`Offload folder: ${String(e)}`);
+    }
+  });
+  $("settings-reset-offload")?.addEventListener("click", () => {
+    setOffloadDir("").catch((e) => addLog(`Offload folder: ${String(e)}`));
+  });
+  $("settings-offload-by-creator")?.addEventListener("change", (e) => {
+    state.offloadByCreator = Boolean(e.target.checked);
+    persistAllConfig().catch((err) => addLog(`Settings: ${String(err)}`));
+  });
+
+  const backdrop = $("offload-backdrop");
+  if (!backdrop) return;
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) offloadClose();
+  });
+  $("offload-cancel")?.addEventListener("click", () => {
+    if (OFFLOAD.running) {
+      if (OFFLOAD.taskId != null) invoke("cancel_task", { taskId: OFFLOAD.taskId }).catch(() => {});
+      return;
+    }
+    offloadClose();
+  });
+  $("offload-confirm")?.addEventListener("click", () => {
+    offloadConfirm().catch((e) => addLog(`Offload: ${String(e)}`));
+  });
+  $("offload-dest-browse")?.addEventListener("click", async () => {
+    if (!invoke) return;
+    const picked = await invoke("pick_folder").catch(() => null);
+    if (!picked) return;
+    const problem = offloadDirProblem(picked);
+    if (problem) {
+      showToast(problem, "error", 6000);
+      return;
+    }
+    $("offload-dest-input").value = picked;
+    offloadSync();
+  });
+  $("offload-dest-input")?.addEventListener("input", offloadSync);
+  $("offload-body")?.addEventListener("change", (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement) || OFFLOAD.running) return;
+    if (input.id === "offload-all") {
+      for (const d of OFFLOAD.deps) if (d.movable) d.checked = input.checked;
+    } else if (input.hasAttribute("data-offload")) {
+      const list = input.getAttribute("data-offload") === "target" ? OFFLOAD.targets : OFFLOAD.deps;
+      const entry = list[Number(input.getAttribute("data-offload-idx"))];
+      if (entry) entry.checked = input.checked;
+    }
+    // The warnings depend on what else is ticked.
+    offloadRenderBody();
+    offloadSync();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !backdrop.classList.contains("hidden")) offloadClose();
+  });
+  renderSettingsOffload();
 }
 
 function libItemAt(index) {
@@ -4383,9 +4836,6 @@ function libRunAction(action, trigger) {
     case "delete":
       if (item) vpDeleteOne(item.file_path, trigger).catch((e) => addLog(`VAR Packages: ${String(e)}`));
       break;
-    case "toggle-disabled":
-      if (item) libSetDisabled([libFindItem(item.file_path) ?? item], !item.disabled);
-      break;
     case "explorer":
       if (item && invoke) {
         invoke("show_in_explorer", { path: item.file_path }).catch((e) => addLog(`VAR Packages: ${String(e)}`));
@@ -4402,11 +4852,11 @@ function libRunAction(action, trigger) {
     case "bulk-delete":
       vpBulkDelete().catch((e) => addLog(`Bulk delete: ${String(e)}`));
       break;
-    case "bulk-disable":
-      libSetDisabled(libSelectedSnaps(), true);
+    case "bulk-offload":
+      offloadOpen(libSelectedSnaps().filter((s) => !s.offloaded), false);
       break;
-    case "bulk-enable":
-      libSetDisabled(libSelectedSnaps(), false);
+    case "bulk-restore":
+      offloadOpen(libSelectedSnaps().filter((s) => s.offloaded), true);
       break;
     case "bulk-favorite":
       (async () => {
@@ -4465,8 +4915,8 @@ function libContextMenu(event, item) {
   const multi = state.vpSelected.size > 1 && state.vpSelected.has(filePath);
   const items = multi
     ? [
-        { label: `Disable ${state.vpSelected.size} packages`, action: () => libRunAction("bulk-disable") },
-        { label: `Enable ${state.vpSelected.size} packages`, action: () => libRunAction("bulk-enable") },
+        { label: "Offload selected…", action: () => libRunAction("bulk-offload") },
+        { label: "Restore selected…", action: () => libRunAction("bulk-restore") },
         { label: "Add to favorites", action: () => libRunAction("bulk-favorite") },
         { separator: true },
         { label: "Clean Duplicates of selected…", action: () => libRunAction("bulk-clean") },
@@ -4494,8 +4944,8 @@ function libContextMenu(event, item) {
           action: () => togglePackageFavorite(packageId),
         },
         {
-          label: item.disabled ? "Enable" : "Disable",
-          action: () => libSetDisabled([item], !item.disabled),
+          label: item.offloaded ? "Restore to AddonPackages…" : "Offload…",
+          action: () => offloadOpen([item], Boolean(item.offloaded)),
         },
         { separator: true },
         {
@@ -4505,11 +4955,16 @@ function libContextMenu(event, item) {
         },
         { label: "Find Dependencies Locally…", action: () => dcOpen({ filePath, packageId }) },
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
-        {
-          label: "Move to creator folder",
-          action: () =>
-            vpMoveToCreatorFolder(filePath).catch((e) => addLog(`Move to creator folder: ${String(e)}`)),
-        },
+        // Offloaded packages are filed by Restore, not moved into AddonPackages here.
+        ...(item.offloaded
+          ? []
+          : [
+              {
+                label: "Move to creator folder",
+                action: () =>
+                  vpMoveToCreatorFolder(filePath).catch((e) => addLog(`Move to creator folder: ${String(e)}`)),
+              },
+            ]),
         {
           label: "Send to",
           submenu: [
@@ -4567,6 +5022,14 @@ function libHandleSharedClick(event) {
   if (url) {
     const href = url.getAttribute("data-lib-url");
     if (href && invoke) invoke("open_url", { url: href }).catch((e) => addLog(`Open link: ${String(e)}`));
+    return true;
+  }
+  const offload = target.closest?.("[data-lib-offload]");
+  if (offload) {
+    event.stopPropagation();
+    const fp = offload.getAttribute("data-offload-path");
+    const item = libFindItem(fp) ?? state.vpSelected.get(fp);
+    if (item) offloadOpen([item], offload.getAttribute("data-lib-offload") === "restore");
     return true;
   }
   const action = target.closest?.("[data-lib-action]");
@@ -4657,7 +5120,7 @@ function setupLibraryView() {
   const listField = {
     "lib-status-list": "status",
     "lib-type-list": "pkgType",
-    "lib-enabled-list": "enabled",
+    "lib-location-list": "location",
     "lib-size-list": "sizeBucket",
     "lib-scene-list": "scene",
   };
@@ -4731,9 +5194,9 @@ function setupLibraryView() {
     const btn = event.target.closest("[data-lib-action]");
     if (btn && !btn.disabled) libRunAction(btn.getAttribute("data-lib-action"), btn);
   });
-  $("lib-bulk-disable")?.addEventListener("click", () => libRunAction("bulk-disable"));
+  $("lib-bulk-offload")?.addEventListener("click", () => libRunAction("bulk-offload"));
   $("lib-bulk-clean")?.addEventListener("click", () => libRunAction("bulk-clean"));
-  $("lib-bulk-enable")?.addEventListener("click", () => libRunAction("bulk-enable"));
+  $("lib-bulk-restore")?.addEventListener("click", () => libRunAction("bulk-restore"));
   $("lib-bulk-close")?.addEventListener("click", () => libRunAction("bulk-clear"));
 
   // --- Grid / table -----------------------------------------------------------
@@ -5025,7 +5488,16 @@ async function vpStartPlan(kind, { limitPaths = null, deepOverride = null } = {}
     // deepScan = the page's folder-depth switch (walk subfolders or not).
     // deepPayloadScan = read text payloads inside each .var for version refs.
     // Two different knobs that both read as "deep"; keep them straight.
-    const args = { inputDir, additionalInputDirs, deepScan: deep };
+    // Organize files everything under AddonPackages, so it must never see
+    // the offload folder: it would move offloaded packages back.
+    const offload = offloadScanDir().toLowerCase();
+    const args = {
+      inputDir,
+      additionalInputDirs: isDupes
+        ? additionalInputDirs
+        : additionalInputDirs.filter((d) => d.toLowerCase() !== offload),
+      deepScan: deep,
+    };
     if (isDupes) args.deepPayloadScan = $("vp-plan-deep")?.checked !== false;
     else args.destRoot = orgRoot || null;
 
@@ -6205,8 +6677,8 @@ function renderVpSelectionBar() {
     "var-packages-bulk-organize",
     "var-packages-bulk-export",
     "var-packages-selection-clear",
-    "lib-bulk-disable",
-    "lib-bulk-enable",
+    "lib-bulk-offload",
+    "lib-bulk-restore",
     "lib-bulk-clean",
     "var-packages-select-all",
     "var-packages-select-page",
@@ -9866,7 +10338,7 @@ function serializeVarPackageFilters(filters) {
   const payload = {};
   if (filters.status && filters.status !== "missing") payload.status = filters.status;
   if (filters.pkgType) payload.pkgType = filters.pkgType;
-  if (filters.enabled) payload.enabled = filters.enabled;
+  if (filters.location) payload.location = filters.location;
   if (filters.sizeBucket) payload.sizeBucket = filters.sizeBucket;
   if (filters.creator) payload.creator = filters.creator;
   if (filters.scene) payload.sceneImage = filters.scene;
@@ -9879,7 +10351,7 @@ function activeVarPackageFilterCount(filters) {
   if (!filters) return 0;
   let n = 0;
   if (filters.pkgType) n += 1;
-  if (filters.enabled) n += 1;
+  if (filters.location) n += 1;
   if (filters.sizeBucket) n += 1;
   if (filters.creator) n += 1;
   if (filters.scene) n += 1;
@@ -9887,7 +10359,7 @@ function activeVarPackageFilterCount(filters) {
 }
 
 function emptyVarPackageFilters(status = null) {
-  return { status, pkgType: null, enabled: null, sizeBucket: null, creator: null, scene: null };
+  return { status, pkgType: null, location: null, sizeBucket: null, creator: null, scene: null };
 }
 
 /// Loads the Author suggestions: the creators of the scanned folders, read off
@@ -10050,22 +10522,22 @@ function renderVarPackagesFilterBar() {
     if (type) typeDot.style.setProperty("--dot", type.color);
   }
 
-  const enabledList = $("lib-enabled-list");
-  if (enabledList) {
-    const en = facets ? Number(facets.enabled || 0) : null;
-    const dis = facets ? Number(facets.disabled || 0) : null;
-    enabledList.innerHTML = [
-      { value: null, label: "All", count: facets ? en + dis : null },
-      { value: "enabled", label: "Enabled", count: en },
-      { value: "disabled", label: "Disabled", count: dis, title: "Have a .disabled marker — VaM skips them" },
+  const locationList = $("lib-location-list");
+  if (locationList) {
+    const active = facets ? Number(facets.active || 0) : null;
+    const off = facets ? Number(facets.offloaded || 0) : null;
+    locationList.innerHTML = [
+      { value: null, label: "All", count: facets ? active + off : null },
+      { value: "active", label: "In AddonPackages", count: active, title: "Packages VaM loads" },
+      { value: "offloaded", label: "Offloaded", count: off, title: "In the offload folder — VaM doesn't load them" },
     ]
-      .map((row) => libListRowHtml({ ...row, selected: (f.enabled ?? null) === row.value }))
+      .map((row) => libListRowHtml({ ...row, selected: (f.location ?? null) === row.value }))
       .join("");
   }
   libSetDropdown(
-    "enabled",
-    f.enabled === "enabled" ? "Enabled only" : f.enabled === "disabled" ? "Disabled only" : "Enabled",
-    Boolean(f.enabled),
+    "location",
+    f.location === "active" ? "In AddonPackages" : f.location === "offloaded" ? "Offloaded" : "Location",
+    Boolean(f.location),
   );
 
   const chips = $("lib-author-chips");
@@ -10185,7 +10657,7 @@ function libPickAuthor(name) {
 // Extra VAR folders live in a dropdown on the top bar; its trigger shows how
 // many there are.
 function libRenderFoldersBadge() {
-  const n = getAdditionalDirs("varPackages").length;
+  const n = getUserAdditionalDirs("varPackages").length;
   vpSetText("lib-folders-label", n ? `+${n} folder${n === 1 ? "" : "s"}` : "Folders");
   document.querySelector("[data-lib-dd-trigger='folders']")?.classList.toggle("is-active", n > 0);
 }
@@ -13243,10 +13715,14 @@ function applyConfigToInputs(config) {
     if (mrBackup && mrReplace) mrBackup.disabled = !mrReplace.checked;
   }
 
+  state.offloadDirSetting = typeof config.offload_dir === "string" ? config.offload_dir.trim() : "";
+  state.offloadByCreator = config.offload_by_creator !== false;
+
   // Last: every page's VAR folder is AddonPackages under the VaM directory,
   // whatever per-page folder an older config remembered.
   applyVamDir();
   refreshVamDirInfo();
+  refreshOffloadExists();
 }
 
 function buildCurrentConfig() {
@@ -13256,12 +13732,12 @@ function buildCurrentConfig() {
     vam_dir: vamDir() || null,
     input_dir: ($("input-dir")?.value || "").trim() || null,
     scan_additional_dirs: getScanAdditionalDirs().length ? getScanAdditionalDirs() : null,
-    var_details_additional_dirs: getAdditionalDirs("varDetails").length
-      ? getAdditionalDirs("varDetails")
+    var_details_additional_dirs: getUserAdditionalDirs("varDetails").length
+      ? getUserAdditionalDirs("varDetails")
       : null,
     var_packages_input_dir: ($("var-packages-input-dir")?.value || "").trim() || null,
-    var_packages_additional_dirs: getAdditionalDirs("varPackages").length
-      ? getAdditionalDirs("varPackages")
+    var_packages_additional_dirs: getUserAdditionalDirs("varPackages").length
+      ? getUserAdditionalDirs("varPackages")
       : null,
     // State-backed rather than DOM-backed: the control is a mode-switch, so
     // there is no checkbox to read the value off.
@@ -13272,14 +13748,14 @@ function buildCurrentConfig() {
     backup_changed: !!$("backup-changed")?.checked,
     process_vap: !!$("process-vap")?.checked,
     dbf_input_dir: ($("dbf-input-dir")?.value || "").trim() || null,
-    dbf_additional_dirs: getAdditionalDirs("dbf").length ? getAdditionalDirs("dbf") : null,
+    dbf_additional_dirs: getUserAdditionalDirs("dbf").length ? getUserAdditionalDirs("dbf") : null,
     dbf_output_dir: ($("dbf-output-dir")?.value || "").trim() || null,
     dbf_target_var_path: null,
     dbf_vap_dir: ($("dbf-vap-dir")?.value || "").trim() || null,
     dbf_mode: state.dbfMode === "local" ? "local" : "db",
     download_vars_folder: ($("settings-library-folder")?.value || "").trim() || null,
-    download_vars_additional_dirs: getAdditionalDirs("downloadVars").length
-      ? getAdditionalDirs("downloadVars")
+    download_vars_additional_dirs: getUserAdditionalDirs("downloadVars").length
+      ? getUserAdditionalDirs("downloadVars")
       : null,
     download_vars_downloads_folder:
       ($("settings-downloads-folder")?.value || "").trim() || null,
@@ -13288,8 +13764,8 @@ function buildCurrentConfig() {
       ((($("internalize-input-dir")?.value || "").trim()) ||
         state.internalize?.inputDir ||
         "").trim() || null,
-    internalize_additional_dirs: getAdditionalDirs("internalize").length
-      ? getAdditionalDirs("internalize")
+    internalize_additional_dirs: getUserAdditionalDirs("internalize").length
+      ? getUserAdditionalDirs("internalize")
       : null,
     internalize_output_dir:
       ((($("internalize-output-dir")?.value || "").trim()) ||
@@ -13303,6 +13779,8 @@ function buildCurrentConfig() {
         ? !!$("internalize-backup").checked
         : (state.internalize?.backup ?? true),
     dep_source_dirs: DEP_COLLECT.remember ? [...DEP_COLLECT.dirs] : null,
+    offload_dir: state.offloadDirSetting || null,
+    offload_by_creator: state.offloadByCreator !== false,
   };
 }
 
@@ -13384,6 +13862,39 @@ function vamAddonPackagesDir() {
   return dir ? vamJoin(dir, "AddonPackages") : "";
 }
 
+// Where Offload moves packages: the Settings folder, else
+// <VaM>\AddonPackages_offload beside AddonPackages.
+function offloadDir() {
+  if (state.offloadDirSetting) return state.offloadDirSetting;
+  const dir = vamDir();
+  return dir ? vamJoin(dir, "AddonPackages_offload") : "";
+}
+
+// The offload folder when it exists — what scans add to their folders. A
+// missing folder would fail the walk, and has nothing to list anyway.
+function offloadScanDir() {
+  return state.offloadExists ? offloadDir() : "";
+}
+
+// Re-checks whether the offload folder exists. When that flips, the folders
+// every scan walks change, so the VAR Packages listing is rescanned.
+async function refreshOffloadExists({ refresh = true } = {}) {
+  const dir = offloadDir();
+  let exists = false;
+  if (invoke && dir) {
+    try {
+      exists = Boolean(await invoke("path_exists", { path: dir }));
+    } catch (err) {
+      addLog(`Offload folder: ${String(err)}`);
+    }
+  }
+  const changed = exists !== state.offloadExists;
+  state.offloadExists = exists;
+  renderSettingsOffload();
+  if (refresh && changed && state.vpHasListing) vpRefreshAfterMutation().catch(() => {});
+  return exists;
+}
+
 // Older configs only know per-page VAR folders. Any of them that IS an
 // AddonPackages folder names the VaM directory (its parent).
 function vamDirFromLegacyConfig(config) {
@@ -13416,6 +13927,7 @@ function applyVamDir() {
   if (state.varDetails) state.varDetails.inputDir = addon;
   renderVamSources();
   renderSettingsVamDir();
+  renderSettingsOffload();
   libRenderStatusBar();
 }
 
@@ -13502,7 +14014,11 @@ async function setVamDir(info) {
   state.vamDirInfo = info;
   applyVamDir();
   await persistAllConfig();
-  if (changed) libOnVamDirChanged();
+  if (changed) {
+    // A default offload folder moves with the VaM directory.
+    await refreshOffloadExists({ refresh: false });
+    libOnVamDirChanged();
+  }
 }
 
 // ---- First run ---------------------------------------------------------------
@@ -13703,9 +14219,22 @@ function renderAllAdditionalDirs() {
   }
 }
 
+// The folders a section's scans walk besides its primary folder: the user's
+// list plus the offload folder, so offloaded packages are part of every scan.
+// Use getUserAdditionalDirs for what is shown and saved.
+function getAdditionalDirs(sectionId) {
+  const dirs = getUserAdditionalDirs(sectionId);
+  const cfg = ADDITIONAL_DIR_SECTIONS[sectionId];
+  const primary = ((cfg?.primaryInputId ? $(cfg.primaryInputId)?.value : "") || "").trim().toLowerCase();
+  const offload = offloadScanDir();
+  const key = offload.toLowerCase();
+  if (offload && key !== primary && !dirs.some((d) => d.toLowerCase() === key)) dirs.push(offload);
+  return dirs;
+}
+
 // Trimmed, deduped list with any entry equal to the section's primary folder
 // dropped (the backend dedups by canonical path anyway; this keeps requests clean).
-function getAdditionalDirs(sectionId) {
+function getUserAdditionalDirs(sectionId) {
   const cfg = ADDITIONAL_DIR_SECTIONS[sectionId];
   const primaryEl = cfg?.primaryInputId ? $(cfg.primaryInputId) : null;
   const primary = (primaryEl?.value || "").trim().toLowerCase();
@@ -13788,6 +14317,13 @@ function setAdditionalDirs(sectionId, dirs) {
     ? dirs.filter((dir) => typeof dir === "string" && dir.trim())
     : [];
   renderAllAdditionalDirs();
+}
+
+// Missing Resources has no folder list of its own; its scan, analysis and fix
+// all walk AddonPackages plus the offload folder (the cache key must match).
+function missingExtraDirs() {
+  const dir = offloadScanDir();
+  return dir ? [dir] : [];
 }
 
 // Back-compat thin wrapper — Overview call sites still use this name.
@@ -16132,6 +16668,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDownloadsManager();
 
   setupVamDir();
+  setupOffload();
   setupLibraryView();
   setupDatabasePackages();
   setupHubView();
@@ -20104,7 +20641,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     async function runScanTask(inputDir, targetVar, opts = {}) {
       const { base = 0, span = 1, title = "Scanning" } = opts;
       const handle = await invoke("start_scan_task", {
-        request: { input_dir: inputDir, target_var_path: targetVar, skip_db: true },
+        request: {
+          input_dir: inputDir,
+          additional_input_dirs: missingExtraDirs(),
+          target_var_path: targetVar,
+          skip_db: true,
+        },
       });
       const taskId = handle?.id;
       if (taskId == null) throw new Error("scan task did not return a handle");
@@ -20139,6 +20681,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       const { base = 0, span = 1, title = "Analyzing" } = opts;
       const handle = await invoke("start_scan_missing_resources_task", {
         inputDir,
+        additionalInputDirs: missingExtraDirs(),
         targetVarPath: targetVar,
       });
       const taskId = handle?.id;
@@ -20267,6 +20810,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       try {
         const handle = await invoke("start_apply_missing_resources_fix_task", {
           inputDir: mr().inputDir.trim(),
+          additionalInputDirs: missingExtraDirs(),
           targetVarPath: mr().targetVar.trim(),
           // Always forward the output folder — Rust uses it for `changed/`
           // in output-folder mode AND for `backup/` in replace-in-place mode.

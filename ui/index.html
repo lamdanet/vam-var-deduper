@@ -864,13 +864,13 @@
             </div>
           </div>
 
-          <div class="lib-dd" data-lib-dd="enabled">
-            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="enabled">
-              <span id="lib-dd-enabled-label">Enabled</span>
+          <div class="lib-dd" data-lib-dd="location">
+            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="location">
+              <span id="lib-dd-location-label">Location</span>
               <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
             </button>
-            <div class="lib-dd-menu hidden" data-lib-dd-menu="enabled">
-              <div class="lib-list" id="lib-enabled-list"></div>
+            <div class="lib-dd-menu hidden" data-lib-dd-menu="location">
+              <div class="lib-list" id="lib-location-list"></div>
             </div>
           </div>
 
@@ -968,11 +968,11 @@
               <button id="var-packages-select-page" class="lib-btn lib-btn-xs lib-btn-outline" type="button">Select loaded</button>
               <button id="var-packages-selection-clear" class="lib-btn lib-btn-xs lib-btn-outline" type="button">Deselect</button>
               <span class="vp-selection-spacer"></span>
-              <button id="lib-bulk-disable" class="lib-btn lib-btn-xs lib-btn-outline" type="button">
-                <span class="material-symbols-outlined">power_settings_new</span><span>Disable</span>
+              <button id="lib-bulk-offload" class="lib-btn lib-btn-xs lib-btn-outline" type="button" title="Move the selected packages out of AddonPackages">
+                <span class="material-symbols-outlined">archive</span><span>Offload</span>
               </button>
-              <button id="lib-bulk-enable" class="lib-btn lib-btn-xs lib-btn-outline" type="button">
-                <span class="material-symbols-outlined">power</span><span>Enable</span>
+              <button id="lib-bulk-restore" class="lib-btn lib-btn-xs lib-btn-outline" type="button" title="Move the selected offloaded packages back into AddonPackages">
+                <span class="material-symbols-outlined">unarchive</span><span>Restore</span>
               </button>
               <button id="lib-bulk-clean" class="lib-btn lib-btn-xs lib-btn-outline" type="button" title="Clean duplicates and older versions of the selected packages">
                 <span class="material-symbols-outlined">content_copy</span><span>Clean Duplicates</span>
@@ -1018,6 +1018,7 @@
                       <th class="lib-col-size">Size</th>
                       <th class="lib-col-items">Items</th>
                       <th class="lib-col-deps">Deps</th>
+                      <th class="lib-col-action" aria-label="Offload or restore"></th>
                     </tr>
                   </thead>
                   <tbody id="var-packages-tbody"></tbody>
@@ -2412,6 +2413,36 @@
                 <input id="settings-library-folder" type="hidden" />
               </div>
 
+              <!-- Offload folder: where Offload moves packages so VaM stops
+                   loading them. Every scan includes it. -->
+              <div class="settings-path-card" id="settings-offload-card">
+                <span class="settings-path-label">Offload folder</span>
+                <div class="input-with-button">
+                  <div class="vam-dir-display">
+                    <span class="material-symbols-outlined input-leading-icon">archive</span>
+                    <span id="settings-offload-text" class="vam-dir-text is-empty">Not configured</span>
+                  </div>
+                  <button id="settings-pick-offload" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">folder_open</span>
+                    <span>Browse</span>
+                  </button>
+                  <button id="settings-reset-offload" class="ghost-button hidden" type="button" title="Use AddonPackages_offload beside AddonPackages">
+                    <span class="material-symbols-outlined">restart_alt</span>
+                    <span>Default</span>
+                  </button>
+                </div>
+                <p class="settings-path-hint" id="settings-offload-status"></p>
+                <label class="check-row" for="settings-offload-by-creator">
+                  <input id="settings-offload-by-creator" type="checkbox" />
+                  <span>Organize offloaded and restored packages into creator folders</span>
+                </label>
+                <p class="settings-path-hint">
+                  Offload moves packages (and the dependencies you pick) out of AddonPackages into this folder, so
+                  VaM stops loading them; Restore moves them back. Unticked, a package keeps the subfolder it had.
+                  VAR Packages, Clean Duplicates, Missing Resources, Internalize and the other scans include this folder.
+                </p>
+              </div>
+
               <div class="settings-path-card">
                 <label class="settings-path-label" id="settings-path-output-label" for="settings-output-dir"></label>
                 <div class="input-with-button">
@@ -3120,6 +3151,49 @@
           <span id="hub-dl-total" class="hub-dl-total"></span>
           <button id="hub-dl-cancel" class="ghost-button" type="button">Cancel</button>
           <button id="hub-dl-confirm" class="primary-button" type="button">Download</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Offload / Restore: the picked packages, every dependency they need
+         (shared ones unticked for Offload), and where they go. -->
+    <div id="offload-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card hub-dl-card offload-card" role="dialog" aria-modal="true" aria-labelledby="offload-title">
+        <div class="hub-dl-head">
+          <div id="offload-thumb" class="hub-dl-thumb"></div>
+          <div class="hub-dl-headtext">
+            <h3 id="offload-title">Offload</h3>
+            <p id="offload-sub" class="hub-dl-sub"></p>
+          </div>
+        </div>
+        <p id="offload-intro" class="offload-intro"></p>
+        <div id="offload-body" class="hub-dl-body"></div>
+        <div class="offload-dest">
+          <label class="settings-path-label" id="offload-dest-label" for="offload-dest-input">Offload to</label>
+          <div class="input-with-button">
+            <div class="input-with-icon">
+              <span class="material-symbols-outlined input-leading-icon">archive</span>
+              <input id="offload-dest-input" type="text" spellcheck="false" />
+            </div>
+            <button id="offload-dest-browse" class="ghost-button" type="button">
+              <span class="material-symbols-outlined">folder_open</span>
+              <span>Browse</span>
+            </button>
+          </div>
+          <p id="offload-dest-hint" class="settings-path-hint"></p>
+          <label class="check-row" for="offload-by-creator">
+            <input id="offload-by-creator" type="checkbox" />
+            <span>Put each package in its creator's folder</span>
+          </label>
+        </div>
+        <div id="offload-progress" class="offload-progress hidden">
+          <div class="offload-progress-track"><div id="offload-progress-bar" class="offload-progress-bar"></div></div>
+          <span id="offload-progress-message" class="offload-progress-message"></span>
+        </div>
+        <div class="dialog-actions hub-dl-actions">
+          <span id="offload-total" class="hub-dl-total"></span>
+          <button id="offload-cancel" class="ghost-button" type="button">Cancel</button>
+          <button id="offload-confirm" class="primary-button" type="button">Offload</button>
         </div>
       </div>
     </div>
