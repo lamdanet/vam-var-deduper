@@ -2392,31 +2392,52 @@
         </header>
 
         <section class="sources-card">
-          <div class="sources-card-head"><h3>Find .var files</h3></div>
+          <div class="sources-card-head">
+            <h3>Find .var files</h3>
+            <button id="sources-clear" class="ghost-button" type="button" title="Clear the text and the results">
+              <span class="material-symbols-outlined">backspace</span><span>Clear</span>
+            </button>
+          </div>
           <textarea id="sources-text" class="sources-text" rows="6" spellcheck="false"
-                    placeholder="Paste a post, or links one per line…"></textarea>
+                    placeholder="Paste a post, or links one per line… (Ctrl+Enter to find)"></textarea>
           <div class="sources-row">
             <div class="input-with-icon sources-password">
               <span class="material-symbols-outlined input-leading-icon">key</span>
               <input id="sources-password" type="text" spellcheck="false" autocomplete="off"
-                     placeholder="Archive password, if the post gives one" />
+                     placeholder="Archive password (optional — passwords in the post are found by themselves)" />
             </div>
             <button id="sources-scan" class="primary-button" type="button">
               <span class="material-symbols-outlined">travel_explore</span><span>Find files</span>
             </button>
           </div>
+          <p class="settings-path-hint sources-hint">
+            Several links with different passwords? Passwords written in the post ("Password: …") are tried on each
+            protected zip — the one nearest its link first — and the one that opens it is filled in and marked
+            Verified. Otherwise type it in that zip's box and press Check.
+          </p>
           <div id="sources-progress" class="offload-progress hidden">
             <div class="offload-progress-track"><div id="sources-progress-bar" class="offload-progress-bar"></div></div>
             <span id="sources-progress-message" class="offload-progress-message"></span>
+          </div>
+          <div id="sources-toolbar" class="sources-toolbar hidden">
+            <label class="check-row sources-select-all">
+              <input id="sources-select-all" type="checkbox" /><span id="sources-select-all-label">Select all</span>
+            </label>
+            <div class="sources-filters" role="tablist" aria-label="Show">
+              <button type="button" class="sources-filter" data-sources-filter="all">All <small></small></button>
+              <button type="button" class="sources-filter" data-sources-filter="new">New <small></small></button>
+              <button type="button" class="sources-filter" data-sources-filter="library">In library <small></small></button>
+            </div>
+            <span id="sources-summary" class="sources-summary"></span>
           </div>
           <div id="sources-results" class="sources-results"></div>
           <div id="sources-result-actions" class="sources-row sources-result-actions hidden">
             <span id="sources-selection" class="sources-selection"></span>
             <button id="sources-save" class="ghost-button" type="button">
-              <span class="material-symbols-outlined">bookmark_add</span><span>Save as sources</span>
+              <span class="material-symbols-outlined">bookmark_add</span><span>Save selected</span>
             </button>
             <button id="sources-download" class="primary-button" type="button">
-              <span class="material-symbols-outlined">download</span><span>Save &amp; download</span>
+              <span class="material-symbols-outlined">download</span><span>Download selected</span>
             </button>
           </div>
         </section>
