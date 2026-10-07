@@ -14059,3 +14059,148 @@ button.lib-dep-ref:hover {
     opacity: 0.45;
   }
 }
+
+/* =========================================================
+   Offload / Restore — the button on every package (card, table row, details
+   panel) and its dialog. Offload is the quiet outline action; Restore, which
+   makes VaM load the package again, gets the gradient like Download.
+   ========================================================= */
+
+.lib-card-actions {
+  padding: 0 12px 12px;
+}
+
+.lib-offload-btn {
+  border-color: var(--lib-border);
+  color: var(--lib-text-2);
+}
+
+.lib-offload-btn:hover {
+  border-color: color-mix(in srgb, var(--lib-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--lib-accent) 10%, transparent);
+  color: var(--lib-accent);
+}
+
+.lib-offload-btn.is-restore {
+  border-color: transparent;
+  background: var(--lib-gradient) border-box;
+  color: var(--lib-gradient-fg);
+}
+
+.lib-offload-btn.is-restore:hover {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.08);
+}
+
+.lib-offload-btn.is-compact:not(.is-restore) {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  color: #fff;
+}
+
+/* Compact cards: the button sits on the thumbnail beside the title. */
+.lib-scrim-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.lib-scrim-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lib-scrim-actions .lib-offload-btn {
+  flex: 0 0 auto;
+  margin-bottom: 1.5px;
+}
+
+/* Table: a small button in the last column. */
+.lib-col-action {
+  width: 96px;
+}
+
+.lib-action-cell .lib-offload-btn.is-compact:not(.is-restore) {
+  border-color: var(--lib-border);
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
+  color: var(--lib-text-2);
+}
+
+.lib-action-cell .lib-offload-btn.is-compact {
+  box-shadow: none;
+}
+
+/* Details panel: full width, above Open in VAR Details. */
+.lib-actions > .lib-offload-btn.is-big {
+  width: 100%;
+}
+
+/* ---- Dialog ---------------------------------------------------------------- */
+
+.offload-intro {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--lib-text-2);
+}
+
+.hub-dl-meta.is-warn {
+  color: var(--lib-warning, #f59e0b);
+}
+
+.offload-card .hub-dl-body.is-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.offload-card .lib-pill:not(.lib-pill-ok):not(.lib-pill-warn):not(.lib-pill-info):not(.lib-pill-err) {
+  background: color-mix(in srgb, var(--lib-hover) 60%, transparent);
+  color: var(--lib-text-3);
+}
+
+.offload-dest {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--lib-border);
+}
+
+.offload-dest .settings-path-hint {
+  margin: 0;
+}
+
+.offload-dest input[readonly] {
+  color: var(--lib-text-2);
+}
+
+.offload-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.offload-progress-track {
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--lib-hover) 70%, transparent);
+}
+
+.offload-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--lib-gradient);
+  transition: width 200ms;
+}
+
+.offload-progress-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--lib-text-3);
+}
