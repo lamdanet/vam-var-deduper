@@ -780,6 +780,27 @@ pub(crate) struct DownloadLinkRow {
     /// The archive's password, when it has one.
     #[serde(default)]
     pub(crate) archive_password: Option<String>,
+    /// When a download through this link last worked (unix seconds).
+    #[serde(default)]
+    pub(crate) last_ok: Option<i64>,
+    /// Failed downloads through it since it last worked.
+    #[serde(default)]
+    pub(crate) fail_count: i64,
+    #[serde(default)]
+    pub(crate) last_error: Option<String>,
+}
+
+impl DownloadLinkRow {
+    /// 0 worked (and hasn't failed since), 1 untried, 2 worked once but
+    /// failing now, 3 never worked and failing — lower is tried first.
+    pub(crate) fn health_rank(&self) -> u8 {
+        match (self.last_ok.is_some(), self.fail_count > 0) {
+            (true, false) => 0,
+            (false, false) => 1,
+            (true, true) => 2,
+            (false, true) => 3,
+        }
+    }
 }
 
 /// Result of importing download links from a folder or text file.

@@ -4769,11 +4769,11 @@ fn wanted_version(package_id: &str) -> Option<i64> {
 pub(crate) fn pick_db_link(db: &Db, base_lc: &str, want: Option<i64>) -> Option<DownloadLinkRow> {
     let links = crate::db::find_download_links(db, base_lc).ok()?;
     let exact: Vec<&DownloadLinkRow> = links.iter().filter(|l| want.is_some() && l.version == want).collect();
-    let pool: Vec<&DownloadLinkRow> = if exact.is_empty() { links.iter().collect() } else { exact };
-    pool.iter()
-        .find(|l| l.host == "pixeldrain")
-        .or_else(|| pool.first())
-        .map(|l| (*l).clone())
+    let mut pool: Vec<&DownloadLinkRow> = if exact.is_empty() { links.iter().collect() } else { exact };
+    // Healthiest first (a link that worked beats an untried one, a failing
+    // one comes last), then the newest version, then Pixeldrain.
+    pool.sort_by_key(|l| (l.health_rank(), std::cmp::Reverse(l.version), l.host != "pixeldrain"));
+    pool.first().map(|l| (*l).clone())
 }
 
 /// Resolves the download source for ONE package id: VaM Hub first, then the
@@ -5191,11 +5191,31 @@ pub(crate) fn run_download_one_task(
         set_task_progress(tasks, task_id, "download_item", frac.clamp(0.0, 1.0), msg);
     };
 
-    // A source inside a .zip: fetch the archive (cached for the session, so
-    // several packages from it download it once) and extract the one member.
-    let fetched = match crate::db::find_link_archive(&db, &safe_name, &download_url) {
-        Some((entry, password)) => {
-            match crate::archives::ensure_cached(&download_url, &cancel, &mut report) {
+    // The link asked for first, then this file's other saved links (best
+    // first), so one dead mirror — say a new link that never worked — doesn't
+    // fail the download while an older one still does.
+    let mut links: Vec<String> = vec![download_url.clone()];
+    for link in crate::db::links_for_file(&db, &safe_name) {
+        if !links.contains(&link.url) {
+            links.push(link.url);
+        }
+    }
+    let mut errors: Vec<String> = Vec::new();
+    for (attempt, url) in links.iter().enumerate() {
+        if attempt > 0 {
+            set_task_progress(
+                tasks,
+                task_id,
+                "download_item",
+                0.0,
+                format!("That link failed — trying another ({} of {})", attempt + 1, links.len()),
+            );
+        }
+        // A source inside a .zip: fetch the archive (cached for the session,
+        // so several packages from it download it once) and extract the one
+        // member.
+        let fetched = match crate::db::find_link_archive(&db, &safe_name, url) {
+            Some((entry, password)) => match crate::archives::ensure_cached(url, &cancel, &mut report) {
                 Ok(zip) => {
                     set_task_progress(tasks, task_id, "download_item", 1.0, format!("Extracting {safe_name}"));
                     crate::archives::extract_entry(&zip, &entry, password.as_deref(), &tmp_path)
@@ -5204,20 +5224,18 @@ pub(crate) fn run_download_one_task(
                 }
                 Err(e) if e == "cancelled" => Ok(false),
                 Err(e) => Err(anyhow::anyhow!(e)),
-            }
-        }
-        None => crate::hub::download_to_file(&download_url, &tmp_path, &cancel, &mut report),
-    };
-    match fetched {
-        Ok(true) => {
-            if crate::hub::is_valid_var(&tmp_path) {
-                match std::fs::rename(&tmp_path, &final_path) {
+            },
+            None => crate::hub::download_to_file(url, &tmp_path, &cancel, &mut report),
+        };
+        let error = match fetched {
+            Ok(true) if crate::hub::is_valid_var(&tmp_path) => {
+                return match std::fs::rename(&tmp_path, &final_path) {
                     Ok(()) => {
+                        crate::db::record_link_result(&db, &safe_name, url, None);
                         // Record the real size so future analyses know it —
                         // especially for Pixeldrain, which has no size up front.
                         if let Ok(meta) = std::fs::metadata(&final_path) {
-                            let _ =
-                                crate::db::update_download_link_size(&db, &safe_name, meta.len());
+                            let _ = crate::db::update_download_link_size(&db, &safe_name, meta.len());
                         }
                         Ok(mk("downloaded", None))
                     }
@@ -5225,22 +5243,25 @@ pub(crate) fn run_download_one_task(
                         let _ = std::fs::remove_file(&tmp_path);
                         Ok(mk("failed", Some(format!("move failed: {e}"))))
                     }
-                }
-            } else {
-                let _ = std::fs::remove_file(&tmp_path);
-                Ok(mk("failed", Some("downloaded file is not a valid .var".to_string())))
+                };
             }
-        }
-        Ok(false) => {
-            // Cancelled mid-stream — discard the partial file.
-            let _ = std::fs::remove_file(&tmp_path);
-            Ok(mk("cancelled", None))
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            Ok(mk("failed", Some(e.to_string())))
-        }
+            Ok(true) => "downloaded file is not a valid .var".to_string(),
+            Ok(false) => {
+                // Cancelled mid-stream — discard the partial file.
+                let _ = std::fs::remove_file(&tmp_path);
+                return Ok(mk("cancelled", None));
+            }
+            Err(e) => e.to_string(),
+        };
+        let _ = std::fs::remove_file(&tmp_path);
+        crate::db::record_link_result(&db, &safe_name, url, Some(&error));
+        errors.push(error);
     }
+    let message = match errors.as_slice() {
+        [one] => one.clone(),
+        many => format!("all {} links failed — {}", many.len(), many.last().cloned().unwrap_or_default()),
+    };
+    Ok(mk("failed", Some(message)))
 }
 
 fn finish_download_vars_task(
@@ -5353,6 +5374,9 @@ pub(crate) fn parse_link_line(line: &str) -> Option<DownloadLinkRow> {
         size: None,
         archive_entry: None,
         archive_password: None,
+        last_ok: None,
+        fail_count: 0,
+        last_error: None,
     })
 }
 

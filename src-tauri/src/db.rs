@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 16;
+pub(crate) const SCHEMA_VERSION: i32 = 17;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -632,6 +632,31 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.commit().context("failed to commit v16 migration")?;
     }
 
+    if current < 17 {
+        // How each download link has fared: when a download through it last
+        // worked, how many times in a row it has failed since, and why — so
+        // a dead mirror stops being picked and the next one is tried.
+        let tx = conn.transaction().context("failed to start v17 tx")?;
+        for (column, ty) in [("last_ok", "INTEGER"), ("fail_count", "INTEGER NOT NULL DEFAULT 0"), ("last_error", "TEXT")] {
+            let present: bool = tx
+                .query_row(
+                    "SELECT 1 FROM pragma_table_info('download_links') WHERE name = ?1",
+                    [column],
+                    |_| Ok(true),
+                )
+                .or_else(|err| match err {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(false),
+                    other => Err(other),
+                })
+                .context("failed to inspect download_links columns")?;
+            if !present {
+                tx.execute(&format!("ALTER TABLE download_links ADD COLUMN {column} {ty}"), [])
+                    .context("failed to add a v17 download_links column")?;
+            }
+        }
+        tx.commit().context("failed to commit v17 migration")?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
@@ -694,7 +719,7 @@ pub(crate) fn update_download_link_size(db: &Db, filename: &str, size: u64) -> R
 pub(crate) fn find_download_links(db: &Db, package_base_lc: &str) -> Result<Vec<DownloadLinkRow>> {
     let handle = db.read()?;
     let mut stmt = handle.prepare(
-        "SELECT package_base, version, filename, host, url, size, archive_entry, archive_password
+        "SELECT package_base, version, filename, host, url, size, archive_entry, archive_password, last_ok, fail_count, last_error
          FROM download_links
          WHERE package_base = ?1
          ORDER BY version DESC,
@@ -711,6 +736,9 @@ pub(crate) fn find_download_links(db: &Db, package_base_lc: &str) -> Result<Vec<
                 size: r.get(5)?,
                 archive_entry: r.get(6)?,
                 archive_password: r.get(7)?,
+                last_ok: r.get(8)?,
+                fail_count: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
+                last_error: r.get(10)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -734,6 +762,54 @@ pub(crate) fn find_link_archive(db: &Db, filename: &str, url: &str) -> Option<(S
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
         )
         .ok()
+}
+
+/// Every stored link for exactly this file (any host), best first: links that
+/// last worked, then untried ones, then failing ones (fewest failures first).
+pub(crate) fn links_for_file(db: &Db, filename: &str) -> Vec<DownloadLinkRow> {
+    let Ok(handle) = db.read() else { return Vec::new() };
+    let Ok(mut stmt) = handle.prepare(&format!(
+        "SELECT {cols} FROM download_links WHERE filename = ?1 COLLATE NOCASE",
+        cols = "package_base, version, filename, host, url, size, archive_entry, archive_password, last_ok, fail_count, last_error"
+    )) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![filename], |r| {
+        Ok(DownloadLinkRow {
+            package_base: r.get(0)?,
+            version: r.get(1)?,
+            filename: r.get(2)?,
+            host: r.get(3)?,
+            url: r.get(4)?,
+            size: r.get(5)?,
+            archive_entry: r.get(6)?,
+            archive_password: r.get(7)?,
+            last_ok: r.get(8)?,
+            fail_count: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
+            last_error: r.get(10)?,
+        })
+    });
+    let mut out: Vec<DownloadLinkRow> = rows.map(|it| it.flatten().collect()).unwrap_or_default();
+    out.sort_by_key(|l| (l.health_rank(), l.fail_count, std::cmp::Reverse(l.last_ok)));
+    out
+}
+
+/// Records how a download through `url` for `filename` went. A success clears
+/// the failure count; links that aren't stored (the Hub's) are left alone.
+pub(crate) fn record_link_result(db: &Db, filename: &str, url: &str, error: Option<&str>) {
+    let Ok(conn) = db.conn.lock() else { return };
+    let _ = match error {
+        None => conn.execute(
+            "UPDATE download_links SET last_ok = strftime('%s','now'), fail_count = 0, last_error = NULL
+             WHERE filename = ?1 COLLATE NOCASE AND url = ?2",
+            params![filename, url],
+        ),
+        Some(e) => conn.execute(
+            "UPDATE download_links SET fail_count = COALESCE(fail_count, 0) + 1, last_error = ?3
+             WHERE filename = ?1 COLLATE NOCASE AND url = ?2",
+            params![filename, url, e],
+        ),
+    };
 }
 
 /// Sets an archive link's member and password (insert is `OR IGNORE`, so a
@@ -761,7 +837,7 @@ pub(crate) fn search_download_links(db: &Db, query: &str, limit: u32) -> Result<
         |r| r.get(0),
     )?;
     let mut stmt = handle.prepare(
-        "SELECT package_base, version, filename, host, url, size, archive_entry, archive_password
+        "SELECT package_base, version, filename, host, url, size, archive_entry, archive_password, last_ok, fail_count, last_error
          FROM download_links WHERE filename LIKE ?1 ESCAPE '\\' ORDER BY id DESC LIMIT ?2",
     )?;
     let rows = stmt
@@ -775,6 +851,9 @@ pub(crate) fn search_download_links(db: &Db, query: &str, limit: u32) -> Result<
                 size: r.get(5)?,
                 archive_entry: r.get(6)?,
                 archive_password: r.get(7)?,
+                last_ok: r.get(8)?,
+                fail_count: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
+                last_error: r.get(10)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

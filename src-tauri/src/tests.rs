@@ -6789,3 +6789,82 @@ fn masked_links_to_unsupported_hosts_are_skipped() {
     assert_eq!(crate::sources::extract_links(text), vec!["https://f95zone.to/masked/mega.nz/1/2/def"]);
     assert_eq!(crate::sources::unsupported_hosts(text), vec![("gofile.io".to_string(), 1)]);
 }
+
+/// Serves `body` at any path except ones containing "dead" (404).
+fn serve_or_404(body: Vec<u8>) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap() == 0 || h == "\r\n" {
+                    break;
+                }
+            }
+            let mut out = stream;
+            if line.contains("dead") {
+                write!(out, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            } else {
+                write!(out, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                out.write_all(&body).unwrap();
+            }
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[test]
+fn download_falls_back_to_a_working_link_and_remembers() {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    let mut var = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut var);
+        w.start_file("Saves/scene/a.json", SimpleFileOptions::default()).unwrap();
+        w.write_all(b"{}").unwrap();
+        w.finish().unwrap();
+    }
+    let base = serve_or_404(var.into_inner());
+    let good = format!("{base}/old/Acid.Look.3.var");
+    let dead = format!("{base}/dead/Acid.Look.3.var");
+
+    let db = crate::db::open_in_memory().expect("db");
+    let rows: Vec<_> = [&good, &dead]
+        .iter()
+        .map(|u| crate::tasks::parse_link_line(&format!("Acid.Look.3.var {u}")).unwrap())
+        .collect();
+    crate::db::insert_download_links(&db, &rows).unwrap();
+
+    let dest = std::env::temp_dir().join(format!("vam_fallback_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dest);
+    let tasks = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+    tasks.lock().unwrap().insert(1, crate::tasks::new_progress_payload("t", "t"));
+    // Asked for through the dead (newly added) link: the old one saves it.
+    let res = crate::tasks::run_download_one_task(
+        &tasks,
+        1,
+        "Acid.Look.3".to_string(),
+        dead.clone(),
+        "Acid.Look.3.var".to_string(),
+        dest.display().to_string(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        db.clone(),
+    )
+    .expect("task");
+    assert_eq!(res.items[0].status, "downloaded", "{:?}", res.items[0].error);
+    assert!(dest.join("Acid.Look.3.var").is_file());
+
+    let links = crate::db::links_for_file(&db, "acid.look.3.var");
+    assert_eq!(links[0].url, good, "the working link ranks first");
+    assert!(links[0].last_ok.is_some() && links[0].fail_count == 0);
+    assert_eq!(links[1].fail_count, 1);
+    assert!(links[1].last_error.as_deref().unwrap_or("").contains("404"));
+    // And it is the one picked for this file from now on.
+    assert_eq!(crate::tasks::pick_db_link(&db, "acid.look", Some(3)).unwrap().url, good);
+    fs::remove_dir_all(&dest).ok();
+}
