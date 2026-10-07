@@ -5305,7 +5305,13 @@ function sourcesRenderResults() {
         .map((i) => {
           const r = SOURCES.rows[i];
           const where = r.archive_entry && r.archive_entry.includes("/") ? r.archive_entry.slice(0, r.archive_entry.lastIndexOf("/")) : "";
-          const meta = [where, r.host === "mediafire" ? "MediaFire — downloads in your browser" : ""].filter(Boolean).join(" · ");
+          const meta = [
+            r.folder_path ? `in ${r.folder_path}` : "",
+            where ? `${r.folder_path ? "zip: " : ""}${where}` : "",
+            r.host === "mediafire" ? "MediaFire — downloads in your browser" : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
           const pill = r.inLibrary
             ? `<span class="lib-pill lib-pill-ok">In library</span>`
             : `<span class="lib-pill lib-pill-info">New</span>`;
