@@ -5787,10 +5787,12 @@ pub(crate) fn start_backfill_sizes_task(
 #[tauri::command]
 pub(crate) fn scan_missing_resources(
     input_dir: String,
+    additional_input_dirs: Option<Vec<String>>,
     target_var_path: String,
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<Vec<BrokenRef>, String> {
+    let additional = parse_additional_dirs(&additional_input_dirs.unwrap_or_default());
     let input_path = Path::new(&input_dir);
     let target_path = Path::new(&target_var_path);
     if !target_path.is_file() {
@@ -5800,7 +5802,7 @@ pub(crate) fn scan_missing_resources(
         ));
     }
 
-    let scanned = load_cached_scan_with_target(&state.scan_cache, input_path, &[], Some(target_path))
+    let scanned = load_cached_scan_with_target(&state.scan_cache, input_path, &additional, Some(target_path))
         .map_err(|err| err.to_string())?
         .ok_or_else(|| {
             "No cached scan for this input folder. Run a scan from the Overview or Missing \
@@ -5821,6 +5823,8 @@ pub(crate) fn scan_missing_resources(
 #[tauri::command]
 pub(crate) fn start_scan_missing_resources_task(
     input_dir: String,
+    // The extra folders the cached scan was made with (its cache key).
+    additional_input_dirs: Option<Vec<String>>,
     target_var_path: String,
     state: State<'_, AppState>,
     db: State<'_, Db>,
@@ -5836,6 +5840,7 @@ pub(crate) fn start_scan_missing_resources_task(
             new_progress_payload("missing_scan_starting", "Starting analysis"),
         );
     }
+    let additional = parse_additional_dirs(&additional_input_dirs.unwrap_or_default());
 
     let tasks = Arc::clone(&state.tasks);
     let scan_cache = Arc::clone(&state.scan_cache);
@@ -5858,7 +5863,7 @@ pub(crate) fn start_scan_missing_resources_task(
                 "Loading scan cache",
             );
             let scanned =
-                load_cached_scan_with_target(&scan_cache, input_path, &[], Some(target_path))
+                load_cached_scan_with_target(&scan_cache, input_path, &additional, Some(target_path))
                     .map_err(|err| err.to_string())?
                     .ok_or_else(|| {
                         "No cached scan for this input folder. Run a scan first.".to_string()
@@ -6043,6 +6048,7 @@ pub(crate) fn find_db_candidates_for_broken_ref(
 #[tauri::command]
 pub(crate) fn start_apply_missing_resources_fix_task(
     input_dir: String,
+    additional_input_dirs: Option<Vec<String>>,
     target_var_path: String,
     output_dir: Option<String>,
     replace_in_place: bool,
@@ -6062,6 +6068,7 @@ pub(crate) fn start_apply_missing_resources_fix_task(
             new_progress_payload("apply_fix_starting", "Starting fix"),
         );
     }
+    let additional = parse_additional_dirs(&additional_input_dirs.unwrap_or_default());
 
     let tasks = Arc::clone(&state.tasks);
     let scan_cache = Arc::clone(&state.scan_cache);
@@ -6078,7 +6085,7 @@ pub(crate) fn start_apply_missing_resources_fix_task(
             }
             set_task_progress(&tasks, task_id, "apply_fix_loading", 0.05, "Loading scan cache");
             let scanned =
-                load_cached_scan_with_target(&scan_cache, input_path, &[], Some(target_path))
+                load_cached_scan_with_target(&scan_cache, input_path, &additional, Some(target_path))
                     .map_err(|err| err.to_string())?
                     .ok_or_else(|| {
                         "No cached scan for this input folder. Run a scan first.".to_string()
