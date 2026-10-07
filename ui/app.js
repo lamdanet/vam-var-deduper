@@ -1092,6 +1092,11 @@ async function runDownloadJob(job) {
     });
     job.taskId = handle && handle.id != null ? handle.id : null;
     if (job.taskId == null) throw new Error("failed to start download");
+    // Cancel was clicked while the task was still starting (no task id to
+    // signal yet): stop it now.
+    if (job.status === "cancelling") {
+      try { await invoke("cancel_task", { taskId: job.taskId }); } catch (_e) {}
+    }
     while (true) {
       await new Promise((r) => setTimeout(r, 300));
       let payload;
@@ -1169,6 +1174,14 @@ async function cancelDownload(id) {
   }
 }
 
+// Queued jobs go first, so finishing cancels can't start them.
+function cancelAllDownloads() {
+  const queued = state.downloads.filter((j) => j.status === "queued");
+  const running = state.downloads.filter((j) => j.status === "downloading");
+  for (const job of queued) cancelDownload(job.id);
+  for (const job of running) cancelDownload(job.id);
+}
+
 function retryDownload(id) {
   const job = state.downloads.find((j) => j.id === id);
   if (!job) return;
@@ -1187,6 +1200,17 @@ function clearFinishedDownloads() {
   state.downloads = state.downloads.filter((j) => downloadJobActive(j));
   renderDownloadsPanel();
   updateDownloadsBadge();
+}
+
+function syncDownloadsHeadActions() {
+  const active = state.downloads.filter((j) => j.status === "queued" || j.status === "downloading").length;
+  const cancelAll = $("downloads-cancel-all");
+  if (cancelAll) {
+    cancelAll.classList.toggle("hidden", active === 0);
+    cancelAll.textContent = active > 1 ? `Cancel all (${active})` : "Cancel all";
+  }
+  const clear = $("downloads-clear");
+  if (clear) clear.disabled = !state.downloads.some((j) => !downloadJobActive(j));
 }
 
 function dlItemInner(job) {
@@ -1254,6 +1278,7 @@ function dlItemInner(job) {
 }
 
 function renderDownloadsPanel() {
+  syncDownloadsHeadActions();
   const list = $("downloads-list");
   if (!list) return;
   if (!state.downloads.length) {
@@ -1323,6 +1348,7 @@ function setupDownloadsManager() {
   if (closeBtn) closeBtn.addEventListener("click", closeDownloadsPanel);
   const clearBtn = $("downloads-clear");
   if (clearBtn) clearBtn.addEventListener("click", clearFinishedDownloads);
+  $("downloads-cancel-all")?.addEventListener("click", cancelAllDownloads);
   // Top-bar button: opens the shared dependency modal in paste-text mode
   // (defined in the VAR Details dep-scan block); its downloads land in this panel.
   $("find-deps-toggle")?.addEventListener("click", () => {
