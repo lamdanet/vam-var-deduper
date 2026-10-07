@@ -18,6 +18,8 @@ const THEMES = [
   "circuit",
   "modhub",
 ];
+// Themes wearing the Obsidian skin (styles.css: :root[data-skin="obsidian"]).
+const OBSIDIAN_THEMES = new Set(["modhub"]);
 // Themes that were removed, and what a saved choice of one becomes.
 const RETIRED_THEMES = { backstage: "modhub" };
 
@@ -2266,6 +2268,7 @@ function themeToggleLabel(theme) {
 function updateStaticCopy() {
   document.documentElement.lang = "en";
   document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.skin = OBSIDIAN_THEMES.has(state.theme) ? "obsidian" : "";
   document.title = t("appTitle");
   $("eyebrow").textContent = t("eyebrow");
   $("app-title").textContent = t("appTitle");
