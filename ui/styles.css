@@ -10158,12 +10158,19 @@ body.lib-resizing * {
 }
 
 .lib-btn-gradient {
-  background: var(--lib-gradient);
+  background: var(--lib-gradient) border-box;
   color: var(--lib-gradient-fg);
 }
 
-.lib-btn-gradient:hover:not(:disabled) {
-  filter: brightness(1.1);
+/* Gradient buttons keep a 1px transparent border. Painted from the padding box
+   (the default) the gradient tiles into that border, leaving a sliver of the
+   far colour on each edge, so every bordered gradient is painted from the
+   border box (the `border-box` in its background shorthand; Backstage's
+   bg-clip-padding does the same job). Hover lightens with an inset overlay —
+   a brightness filter blurs the label and edges in WebView2. */
+.lib-btn-gradient:hover:not(:disabled),
+.hub-btn-install:hover {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.08);
 }
 
 .lib-btn-outline {
@@ -12365,7 +12372,7 @@ button.lib-dep-ref:hover {
 :root[data-theme="backstage"] .primary-button:active:not(:disabled),
 :root[data-theme="backstage"] .accent-button:active:not(:disabled) {
   border-color: transparent;
-  background: linear-gradient(to right, #3a7cf4, #c740e8);
+  background: linear-gradient(to right, #3a7cf4, #c740e8) border-box;
 }
 
 :root[data-theme="backstage"] .primary-button:active:not(:disabled),
@@ -12718,13 +12725,10 @@ button.lib-dep-ref:hover {
 }
 
 .hub-btn-install {
-  background: var(--lib-gradient);
+  background: var(--lib-gradient) border-box;
   color: var(--lib-gradient-fg);
 }
 
-.hub-btn-install:hover {
-  filter: brightness(1.1);
-}
 
 .hub-btn-installed,
 .hub-btn-external {
