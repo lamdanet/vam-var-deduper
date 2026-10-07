@@ -679,6 +679,15 @@ fn parse_dep(dep: &str) -> (String, VersionSpec) {
     (lc, VersionSpec::Latest)
 }
 
+/// The family part of a dependency key in its original spelling — what
+/// `parse_dep` returns lowercased.
+fn dep_base(dep: &str) -> &str {
+    let trimmed = dep.trim();
+    // Lowercasing ASCII keeps byte lengths, so the lowercased base's length
+    // marks the same prefix of the original.
+    &trimmed[..parse_dep(dep).0.len()]
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DepResolution {
     /// The requested version (or a satisfying one) is present.
@@ -1147,18 +1156,11 @@ pub(crate) fn get_var_package_details(
     // Anything not in the folder may still be known to the database index.
     if !unresolved.is_empty() {
         if let Ok(conn) = db.read() {
-            if let Ok(known) = crate::tasks::load_known_package_ids(&conn) {
-                let known_lc: HashMap<String, String> = known
-                    .into_iter()
-                    .map(|id| (naming::package_base(&id).to_ascii_lowercase(), id))
-                    .collect();
-                for i in unresolved {
-                    let dep = &mut details.dependencies[i];
-                    let (base, _) = parse_dep(&dep.id);
-                    if let Some(id) = known_lc.get(&base) {
-                        dep.status = "indexed".to_string();
-                        dep.resolved_id = Some(id.clone());
-                    }
+            for i in unresolved {
+                let dep = &mut details.dependencies[i];
+                if let Ok(Some(id)) = crate::tasks::known_package_in_family(&conn, dep_base(&dep.id)) {
+                    dep.status = "indexed".to_string();
+                    dep.resolved_id = Some(id);
                 }
             }
         }
@@ -1298,15 +1300,8 @@ pub(crate) fn list_missing_dependencies(
     }
     if !grouped.is_empty() {
         if let Ok(conn) = db.read() {
-            if let Ok(known) = crate::tasks::load_known_package_ids(&conn) {
-                let bases: HashSet<String> = known
-                    .iter()
-                    .map(|id| naming::package_base(id).to_ascii_lowercase())
-                    .collect();
-                for dep in grouped.values_mut() {
-                    let (base, _) = parse_dep(&dep.id);
-                    dep.indexed = bases.contains(&base);
-                }
+            for dep in grouped.values_mut() {
+                dep.indexed = matches!(crate::tasks::known_package_in_family(&conn, dep_base(&dep.id)), Ok(Some(_)));
             }
         }
     }

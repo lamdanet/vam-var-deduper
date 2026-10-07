@@ -1531,9 +1531,15 @@ pub(crate) fn list_var_packages(
         let entries = crate::utils::collect_var_files_multi_with_depth(&roots, depth)
             .map_err(|err| err.to_string())?;
 
+        // Point lookups for just these files: loading every id in a large
+        // index (tens of thousands) cost most of a rescan.
         let known_ids = {
             let conn = db.read().map_err(|err| err.to_string())?;
-            load_known_package_ids(&conn).map_err(|err| err.to_string())?
+            let stems: Vec<&str> = entries
+                .iter()
+                .filter_map(|e| e.path.file_stem().and_then(|s| s.to_str()))
+                .collect();
+            known_package_ids_among(&conn, stems)?
         };
 
         // Opens only archives that are new or changed since they were last
@@ -1720,6 +1726,50 @@ fn matches_var_package_filters(
         return false;
     }
     true
+}
+
+/// Which of `ids` the database knows, by indexed point lookups — for when only
+/// a few hundred ids matter and loading all of them would dominate.
+pub(crate) fn known_package_ids_among<'a>(
+    conn: &rusqlite::Connection,
+    ids: impl IntoIterator<Item = &'a str>,
+) -> Result<HashSet<String>, String> {
+    let mut stmt = conn
+        .prepare_cached("SELECT 1 FROM packages WHERE package_id = ?1")
+        .map_err(|err| err.to_string())?;
+    let mut set = HashSet::new();
+    for id in ids {
+        if stmt.exists([id]).map_err(|err| err.to_string())? {
+            set.insert(id.to_string());
+        }
+    }
+    Ok(set)
+}
+
+/// A database package id in the family `base` (compared case-insensitively),
+/// found by a range scan of `idx_packages_id_lower` over ids starting `base.`
+/// rather than by loading every id.
+pub(crate) fn known_package_in_family(
+    conn: &rusqlite::Connection,
+    base: &str,
+) -> Result<Option<String>, String> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT package_id FROM packages WHERE lower(package_id) >= ?1 AND lower(package_id) < ?2",
+        )
+        .map_err(|err| err.to_string())?;
+    // SQLite's lower() folds ASCII only, matching to_ascii_lowercase.
+    let lower = base.to_ascii_lowercase();
+    // '/' sorts right after '.', so this is exactly the ids prefixed `base.`.
+    let rows = stmt
+        .query_map([format!("{lower}."), format!("{lower}/")], |row| row.get::<_, String>(0))
+        .map_err(|err| err.to_string())?;
+    for id in rows.flatten() {
+        if crate::naming::package_base(&id).eq_ignore_ascii_case(base) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn load_known_package_ids(conn: &rusqlite::Connection) -> Result<HashSet<String>, String> {

@@ -6198,3 +6198,37 @@ fn remove_plan_marks_unshared_dependencies_safe_but_selects_nothing() {
     assert!(!dep("C.Hair.1").safe);
     assert_eq!(dep("C.Hair.1").used_by, vec!["X.Scene.1".to_string()]);
 }
+
+#[test]
+fn known_package_lookups_use_only_the_ids_asked_for() {
+    use crate::tasks::{known_package_ids_among, known_package_in_family};
+    let db = crate::db::open_in_memory().expect("db");
+    let conn = db.conn.lock().unwrap();
+    for (i, id) in ["Acid.Look.2", "Acid.LookPack.1", "Bee.Hair.latest", "Cat.Scene.3"].iter().enumerate() {
+        conn.execute(
+            "INSERT INTO packages (package_id, file_path, size_bytes, modified_ns, last_scanned_at) \
+             VALUES (?1, ?2, 1, '0', 0)",
+            rusqlite::params![id, format!("f{i}.var")],
+        )
+        .expect("insert");
+    }
+    let known = known_package_ids_among(&conn, ["Acid.Look.2", "Acid.Look.3", "Cat.Scene.3"]).unwrap();
+    assert_eq!(known.len(), 2);
+    assert!(known.contains("Acid.Look.2") && known.contains("Cat.Scene.3"));
+
+    assert_eq!(known_package_in_family(&conn, "Acid.Look").unwrap().as_deref(), Some("Acid.Look.2"));
+    // A different family that merely shares the prefix doesn't count.
+    assert_eq!(known_package_in_family(&conn, "Acid.LookP").unwrap(), None);
+    assert_eq!(known_package_in_family(&conn, "acid.look").unwrap().as_deref(), Some("Acid.Look.2"));
+    assert_eq!(known_package_in_family(&conn, "Bee.Hair").unwrap().as_deref(), Some("Bee.Hair.latest"));
+    assert_eq!(known_package_in_family(&conn, "Dog.Pose").unwrap(), None);
+    let plan: String = conn
+        .query_row(
+            "EXPLAIN QUERY PLAN SELECT package_id FROM packages \
+             WHERE lower(package_id) >= 'a.' AND lower(package_id) < 'a/'",
+            [],
+            |row| row.get(3),
+        )
+        .expect("plan");
+    assert!(plan.contains("idx_packages_id_lower"), "{plan}");
+}

@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 14;
+pub(crate) const SCHEMA_VERSION: i32 = 15;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -596,6 +596,16 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         )
         .context("failed to create v14 hub_wishlist table")?;
         tx.commit().context("failed to commit v14 migration")?;
+    }
+
+    if current < 15 {
+        // Case-insensitive package-id lookups by prefix (is any version of
+        // this dependency indexed?) as an index range scan, instead of loading
+        // every package id — tens of thousands on a full index.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_packages_id_lower ON packages (lower(package_id));",
+        )
+        .context("failed to create v15 package id index")?;
     }
 
     if current != SCHEMA_VERSION {
