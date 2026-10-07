@@ -3438,7 +3438,7 @@ function renderVarPackages() {
 
   if (items.length === 0) {
     if (table) {
-      tbody.innerHTML = `<tr><td colspan="8">${libEmptyHtml()}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9">${libEmptyHtml()}</td></tr>`;
     } else {
       grid.innerHTML = libEmptyHtml();
     }
@@ -4704,6 +4704,17 @@ function setupOffload() {
     if (e.key === "Escape" && !backdrop.classList.contains("hidden")) offloadClose();
   });
   renderSettingsOffload();
+}
+
+// ---- Selection ---------------------------------------------------------------
+
+function vpSelectOnly(item, { render = true } = {}) {
+  if (!vpSelectableItem(item)) return;
+  state.vpSelected.clear();
+  state.vpSelected.set(item.file_path, vpSnapshotItem(item));
+  state.vpSelAnchor = item.file_path;
+  state.vpLead = item.file_path;
+  if (render) vpSyncSelectionUi();
 }
 
 function libItemAt(index) {
