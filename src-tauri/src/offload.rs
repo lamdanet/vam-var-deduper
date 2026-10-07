@@ -434,6 +434,26 @@ pub(crate) fn move_package(
     Ok((dest, notes))
 }
 
+/// Removes the folders in `dirs` that moving packages out of left empty, and
+/// then any parent that became empty with them — up to, never including,
+/// `root` (AddonPackages or the offload folder). `fs::remove_dir` only ever
+/// removes an empty folder, so anything still holding a file stays.
+pub(crate) fn prune_empty_dirs(dirs: impl IntoIterator<Item = PathBuf>, root: &Path) {
+    let mut dirs: Vec<PathBuf> = dirs.into_iter().collect();
+    // Deepest first, so a parent is tried after its children are gone.
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    dirs.dedup();
+    for dir in dirs {
+        let mut current = Some(dir.as_path());
+        while let Some(d) = current {
+            if !path_is_under(d, root) || fs::remove_dir(d).is_err() {
+                break;
+            }
+            current = d.parent();
+        }
+    }
+}
+
 /// Points the database's `packages.file_path` at the new location so the
 /// database pages keep opening moved packages. Best effort.
 fn repoint_db_paths(db: &Db, moves: &[OffloadMove]) {
@@ -494,6 +514,7 @@ pub(crate) fn start_offload_task(
 
     thread::spawn(move || {
         let mut response = OffloadResponse { restore, ..Default::default() };
+        let mut left_dirs: Vec<PathBuf> = Vec::new();
         let total = file_paths.len().max(1) as f64;
         for (n, fp) in file_paths.iter().enumerate() {
             if cancel.load(Ordering::SeqCst) {
@@ -515,6 +536,9 @@ pub(crate) fn start_offload_task(
             let size = fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
             match move_package(&src, &src_root, &dest_root, by_creator, restore) {
                 Ok((dest, notes)) => {
+                    if let Some(parent) = src.parent() {
+                        left_dirs.push(parent.to_path_buf());
+                    }
                     response.moved_bytes += size;
                     response
                         .notes
@@ -532,6 +556,9 @@ pub(crate) fn start_offload_task(
                 }),
             }
         }
+
+        // A creator folder whose last package just left shouldn't linger.
+        prune_empty_dirs(left_dirs, &src_root);
 
         let renamed: Vec<(String, String)> =
             response.moved.iter().map(|m| (m.from.clone(), m.to.clone())).collect();

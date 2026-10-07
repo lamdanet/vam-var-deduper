@@ -6232,3 +6232,31 @@ fn known_package_lookups_use_only_the_ids_asked_for() {
         .expect("plan");
     assert!(plan.contains("idx_packages_id_lower"), "{plan}");
 }
+
+#[test]
+fn offload_prunes_folders_left_empty_but_never_the_root() {
+    use crate::offload::prune_empty_dirs;
+    let root = std::env::temp_dir().join(format!("vam_prune_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let addon = root.join("AddonPackages");
+    fs::create_dir_all(addon.join("Qing").join("Sub")).unwrap();
+    fs::create_dir_all(addon.join("Kept")).unwrap();
+    fs::write(addon.join("Kept").join("Other.Pkg.1.var"), b"x").unwrap();
+    fs::create_dir_all(addon.join("Empty")).unwrap();
+
+    prune_empty_dirs(
+        vec![addon.join("Qing").join("Sub"), addon.join("Kept"), addon.clone()],
+        &addon,
+    );
+    assert!(!addon.join("Qing").exists(), "Sub and then Qing became empty");
+    assert!(addon.join("Kept").exists(), "still holds a package");
+    assert!(addon.join("Empty").exists(), "never asked about it");
+    assert!(addon.exists(), "the root itself always stays");
+
+    // Even when the root ends up empty.
+    let lone = root.join("Offload");
+    fs::create_dir_all(lone.join("A")).unwrap();
+    prune_empty_dirs(vec![lone.join("A")], &lone);
+    assert!(!lone.join("A").exists() && lone.exists());
+    fs::remove_dir_all(&root).expect("cleanup");
+}
