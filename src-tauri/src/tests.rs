@@ -6407,3 +6407,86 @@ fn mega_folder_node_keys_unwrap_and_name_the_file() {
         Some("Looks")
     );
 }
+
+#[test]
+#[ignore]
+fn bench_mega_decrypt_throughput() {
+    let key = crate::mega::testing::file_key([7u8; 32]);
+    let mut data = vec![0u8; 32 * 1024 * 1024];
+    let mut d = key.decryptor();
+    let t = std::time::Instant::now();
+    for chunk in data.chunks_mut(16 * 1024) {
+        d.apply(chunk);
+    }
+    let secs = t.elapsed().as_secs_f64();
+    println!("MEGA decrypt: {:.1} MB/s", 32.0 / secs);
+}
+
+#[test]
+fn mega_ctr_can_start_mid_stream() {
+    let key = crate::mega::testing::file_key([5u8; 32]);
+    let plain: Vec<u8> = (0..200u32).map(|i| (i * 7) as u8).collect();
+    let mut cipher = plain.clone();
+    key.decryptor().apply(&mut cipher);
+    // Any start offset, aligned or not, decrypts the rest correctly.
+    for start in [0usize, 16, 37, 96, 199] {
+        let mut tail = cipher[start..].to_vec();
+        key.decryptor_at(start as u64).apply(&mut tail);
+        assert_eq!(tail, plain[start..], "from {start}");
+    }
+}
+
+/// A stand-in for MEGA's storage server: serves `<anything>/<a>-<b>` byte
+/// ranges (inclusive) of `body`, one connection per request.
+fn serve_ranges(body: Vec<u8>) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body = std::sync::Arc::new(body);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let body = std::sync::Arc::clone(&body);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap() == 0 || h == "\r\n" {
+                        break;
+                    }
+                }
+                let path = line.split_whitespace().nth(1).unwrap_or("");
+                let range = path.rsplit('/').next().unwrap();
+                let (a, b) = range.split_once('-').unwrap();
+                let (a, b): (usize, usize) = (a.parse().unwrap(), b.parse().unwrap());
+                let slice = &body[a..=b];
+                let mut out = stream;
+                write!(out, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", slice.len()).unwrap();
+                // In pieces, like a network would.
+                for piece in slice.chunks(50_000) {
+                    out.write_all(piece).unwrap();
+                }
+            });
+        }
+    });
+    format!("http://{addr}/dl/abc")
+}
+
+#[test]
+fn mega_parallel_download_reassembles_and_decrypts() {
+    let key = crate::mega::testing::file_key(core::array::from_fn(|i| (i * 11) as u8));
+    let plain: Vec<u8> = (0..10_000_003u32).map(|i| (i % 251) as u8).collect();
+    let mut encrypted = plain.clone();
+    key.decryptor().apply(&mut encrypted);
+    let address = serve_ranges(encrypted);
+    let dir = std::env::temp_dir().join(format!("vam_mega_par_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let dest = dir.join("out.bin");
+    let m = crate::mega::testing::download(address, key, plain.len() as u64);
+    assert!(crate::hub::download_mega_for_test(&m, &dest).expect("download"));
+    let got = fs::read(&dest).unwrap();
+    assert_eq!(got.len(), plain.len());
+    assert!(got == plain, "decrypted bytes differ");
+    fs::remove_dir_all(&dir).ok();
+}

@@ -269,17 +269,144 @@ pub(crate) fn download_to_file(
     // A MEGA link is resolved first (blocking API calls, so before the async
     // runtime starts) to a temporary address for the encrypted bytes, which
     // are decrypted as they stream in.
-    let (fetch_url, decrypt) = if crate::mega::is_mega(url) {
-        let (address, decryptor) = crate::mega::open_download(url).map_err(|e| anyhow!(e))?;
-        (address, Some(decryptor))
+    let mega = if crate::mega::is_mega(url) {
+        Some(crate::mega::open_download(url).map_err(|e| anyhow!(e))?)
     } else {
-        (url.to_string(), None)
+        None
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| anyhow!("failed to start download runtime: {e}"))?;
-    rt.block_on(download_async(&fetch_url, decrypt, dest_path, cancel, progress))
+    match mega {
+        // MEGA limits each connection's speed, so a sizeable file is fetched as
+        // several ranges at once, as MEGA's own apps do.
+        Some(m) if m.size.is_some_and(|s| s >= MEGA_PARALLEL_MIN) => {
+            rt.block_on(download_mega_parallel(&m, dest_path, cancel, progress))
+        }
+        Some(m) => rt.block_on(download_async(&m.address, Some(m.key.decryptor()), dest_path, cancel, progress)),
+        None => rt.block_on(download_async(url, None, dest_path, cancel, progress)),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn download_mega_for_test(m: &crate::mega::MegaDownload, dest: &Path) -> Result<bool> {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    rt.block_on(download_mega_parallel(m, dest, &cancel, &mut |_, _| {}))
+}
+
+/// Files below this download over one connection.
+const MEGA_PARALLEL_MIN: u64 = 4 * 1024 * 1024;
+/// Parallel connections for one MEGA file.
+const MEGA_CONNECTIONS: u64 = 6;
+
+/// Writes `buf` at `offset` without moving a shared cursor, so several ranges
+/// can write into one file.
+fn write_at(file: &std::fs::File, mut buf: &[u8], mut offset: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        #[cfg(windows)]
+        let n = std::os::windows::fs::FileExt::seek_write(file, buf, offset)?;
+        #[cfg(unix)]
+        let n = std::os::unix::fs::FileExt::write_at(file, buf, offset)?;
+        if n == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "wrote nothing"));
+        }
+        buf = &buf[n..];
+        offset += n as u64;
+    }
+    Ok(())
+}
+
+/// A MEGA file as `MEGA_CONNECTIONS` concurrent ranges (`<address>/<a>-<b>`,
+/// inclusive), each decrypted from its own offset and written in place.
+/// Progress and cancel are polled ~twice a second; a range that gets no bytes
+/// for `IDLE_TIMEOUT_SECS` fails the download.
+async fn download_mega_parallel(
+    m: &crate::mega::MegaDownload,
+    dest_path: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<bool> {
+    use futures_util::future::{select, try_join_all, Either};
+    use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    let size = m.size.unwrap_or(0);
+    let client = download_client(false)?;
+    let file = std::fs::File::create(dest_path)
+        .map_err(|e| anyhow!("cannot create {}: {e}", dest_path.display()))?;
+    file.set_len(size).map_err(|e| anyhow!("cannot size {}: {e}", dest_path.display()))?;
+    let done = AtomicU64::new(0);
+    let stop = AtomicBool::new(false);
+    // Range starts on 16-byte boundaries (not required by CTR, but tidy).
+    let part = ((size / MEGA_CONNECTIONS) / 16 + 1) * 16;
+    let ranges: Vec<(u64, u64)> = (0..MEGA_CONNECTIONS)
+        .map(|i| (i * part, ((i + 1) * part).min(size)))
+        .filter(|(a, b)| a < b)
+        .collect();
+
+    let fetch = |start: u64, end: u64| {
+        let (client, file, done, stop) = (&client, &file, &done, &stop);
+        async move {
+            let resp = client
+                .get(format!("{}/{}-{}", m.address, start, end - 1))
+                .send()
+                .await
+                .map_err(|e| anyhow!("download request failed: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(anyhow!("download returned HTTP {}", resp.status()));
+            }
+            let mut decrypt = m.key.decryptor_at(start);
+            let mut offset = start;
+            let mut stream = resp.bytes_stream();
+            let idle_limit = Duration::from_secs(IDLE_TIMEOUT_SECS);
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                match tokio::time::timeout(idle_limit, stream.next()).await {
+                    Err(_) => {
+                        return Err(anyhow!("download stalled — no data received for {IDLE_TIMEOUT_SECS}s"))
+                    }
+                    Ok(None) => break,
+                    Ok(Some(Err(e))) => return Err(anyhow!("download read error: {e}")),
+                    Ok(Some(Ok(chunk))) => {
+                        let mut plain = chunk.to_vec();
+                        decrypt.apply(&mut plain);
+                        write_at(file, &plain, offset).map_err(|e| anyhow!("write error: {e}"))?;
+                        offset += plain.len() as u64;
+                        done.fetch_add(plain.len() as u64, Ordering::Relaxed);
+                    }
+                }
+            }
+            if offset != end {
+                return Err(anyhow!("MEGA ended a range early ({offset} of {end} bytes)"));
+            }
+            Ok(())
+        }
+    };
+
+    let mut work = Box::pin(try_join_all(ranges.iter().map(|&(a, b)| fetch(a, b))));
+    loop {
+        let tick = Box::pin(tokio::time::sleep(Duration::from_millis(400)));
+        match select(work, tick).await {
+            Either::Left((result, _)) => {
+                result?;
+                break;
+            }
+            Either::Right((_, pending)) => {
+                work = pending;
+                progress(done.load(Ordering::Relaxed), Some(size));
+                if cancel.load(Ordering::Relaxed) {
+                    stop.store(true, Ordering::Relaxed);
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    progress(size, Some(size));
+    Ok(true)
 }
 
 async fn download_async(

@@ -43,9 +43,17 @@ impl FileKey {
     }
 
     pub(crate) fn decryptor(&self) -> CtrDecryptor {
+        self.decryptor_at(0)
+    }
+
+    /// A decryptor for the bytes from `offset` on — CTR can start anywhere,
+    /// which is what lets a file download in parallel ranges.
+    pub(crate) fn decryptor_at(&self, offset: u64) -> CtrDecryptor {
         let mut nonce = [0u8; 8];
         nonce.copy_from_slice(&self.0[16..24]);
-        CtrDecryptor::new(self.aes_key(), nonce)
+        let mut d = CtrDecryptor::new(self.aes_key(), nonce);
+        d.seek(offset);
+        d
     }
 }
 
@@ -209,15 +217,26 @@ impl CtrDecryptor {
         Self { cipher: aes(&key), nonce, offset: 0, keystream: [0; 16] }
     }
 
+    fn block_keystream(&self, block_index: u64) -> [u8; 16] {
+        let mut block = [0u8; 16];
+        block[..8].copy_from_slice(&self.nonce);
+        block[8..].copy_from_slice(&block_index.to_be_bytes());
+        self.cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
+        block
+    }
+
+    fn seek(&mut self, offset: u64) {
+        self.offset = offset;
+        if offset % 16 != 0 {
+            self.keystream = self.block_keystream(offset / 16);
+        }
+    }
+
     pub(crate) fn apply(&mut self, data: &mut [u8]) {
         for byte in data.iter_mut() {
             let pos = (self.offset % 16) as usize;
             if pos == 0 {
-                let mut block = [0u8; 16];
-                block[..8].copy_from_slice(&self.nonce);
-                block[8..].copy_from_slice(&(self.offset / 16).to_be_bytes());
-                self.cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
-                self.keystream = block;
+                self.keystream = self.block_keystream(self.offset / 16);
             }
             *byte ^= self.keystream[pos];
             self.offset += 1;
@@ -406,18 +425,25 @@ pub(crate) fn inspect(url: &str) -> Result<Inspected, String> {
     }
 }
 
-/// Where to fetch a file's encrypted bytes, and the decryptor for them.
-pub(crate) fn open_download(url: &str) -> Result<(String, CtrDecryptor), String> {
+/// Where to fetch a file's encrypted bytes, its key and its size.
+pub(crate) struct MegaDownload {
+    /// The temporary address; `<address>/<start>-<end>` fetches a byte range.
+    pub(crate) address: String,
+    pub(crate) key: FileKey,
+    pub(crate) size: Option<u64>,
+}
+
+pub(crate) fn open_download(url: &str) -> Result<MegaDownload, String> {
     match parse(url)? {
         MegaRef::File { handle, key } => {
-            let (address, _) = download_address(&api(json!({ "a": "g", "g": 1, "ssl": 2, "p": handle }), None)?)?;
-            Ok((address, key.decryptor()))
+            let (address, size) = download_address(&api(json!({ "a": "g", "g": 1, "ssl": 2, "p": handle }), None)?)?;
+            Ok(MegaDownload { address, key, size })
         }
         MegaRef::FolderFile { handle, key, node } => {
-            let (file_key, _, _) = folder_file(&handle, &key, &node)?;
-            let (address, _) =
+            let (file_key, _, node_size) = folder_file(&handle, &key, &node)?;
+            let (address, size) =
                 download_address(&api(json!({ "a": "g", "g": 1, "ssl": 2, "n": node }), Some(&handle))?)?;
-            Ok((address, file_key.decryptor()))
+            Ok(MegaDownload { address, key: file_key, size: size.or(node_size) })
         }
         MegaRef::Folder { .. } => {
             Err("That's a MEGA folder — pick the .var inside it in Add download source.".to_string())
@@ -435,6 +461,10 @@ pub(crate) mod testing {
 
     pub(crate) fn file_key(bytes: [u8; 32]) -> FileKey {
         FileKey(bytes)
+    }
+
+    pub(crate) fn download(address: String, key: FileKey, size: u64) -> MegaDownload {
+        MegaDownload { address, key, size: Some(size) }
     }
 
     pub(crate) fn encrypt_name(aes_key: &[u8; 16], name: &str) -> String {
