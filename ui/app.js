@@ -4241,6 +4241,8 @@ const OFFLOAD = {
   token: 0,
   running: false,
   taskId: null,
+  // Rows (`kind:file_path`) whose dependents list is shown.
+  openUsers: new Set(),
 };
 
 function offloadSize(entries) {
@@ -4267,7 +4269,6 @@ function offloadStayingRequesters(e) {
 
 function offloadMeta(e, kind) {
   const parts = [];
-  let warn = false;
   if (!e.movable) {
     if (e.location === "other") parts.push("In another folder — not moved");
     else if (OFFLOAD.restore) parts.push("Already in AddonPackages");
@@ -4277,22 +4278,36 @@ function offloadMeta(e, kind) {
     if (!e.direct && e.required_by?.length) parts.push(`via ${offloadNames(e.required_by)}`);
     if (e.other_version) parts.push("another version than the one asked for");
   }
-  if (!OFFLOAD.restore && e.movable && e.used_by?.length) {
-    parts.push(
-      kind === "dep"
-        ? `Also used by ${offloadListText(e.used_by)} in AddonPackages`
-        : `${offloadListText(e.used_by)} in AddonPackages ${e.used_by.length === 1 ? "uses" : "use"} it`,
-    );
-    warn = e.checked;
-  }
-  if (!OFFLOAD.restore && kind === "dep" && e.checked) {
-    const staying = offloadStayingRequesters(e);
-    if (staying.length) {
-      parts.push(`still needed by ${offloadNames(staying)}, which stays`);
-      warn = true;
+  return parts.join(" · ");
+}
+
+// Packages staying in AddonPackages that depend on this one: those outside the
+// plan, plus plan members left unticked. Offloading it breaks them.
+function offloadDependents(e, kind) {
+  if (OFFLOAD.restore || !e.movable) return [];
+  const ids = new Set(e.used_by ?? []);
+  if (kind === "dep") {
+    for (const fp of offloadStayingRequesters(e)) {
+      const dep = OFFLOAD.deps.find((d) => d.file_path === fp);
+      if (dep) ids.add(dep.package_id);
     }
   }
-  return { text: parts.join(" · "), warn };
+  return [...ids].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+// The warning under a row: just the count, with the names behind Show.
+function offloadDependentsHtml(e, kind) {
+  const ids = offloadDependents(e, kind);
+  if (!ids.length) return "";
+  const key = `${kind}:${e.file_path}`;
+  const open = OFFLOAD.openUsers.has(key);
+  return `<span class="offload-dependents${e.checked ? " is-warn" : ""}">
+      <span class="material-symbols-outlined">warning</span>
+      <span>Dependency of ${ids.length} other package${ids.length === 1 ? "" : "s"} in AddonPackages</span>
+      <button type="button" class="offload-dependents-toggle" data-offload-users="${escapeAttribute(key)}"
+              aria-expanded="${open}">${open ? "Hide" : "Show"}</button>
+    </span>
+    ${open ? `<span class="offload-dependents-list">${ids.map((id) => escapeHtml(id)).join(", ")}</span>` : ""}`;
 }
 
 function offloadChip(e) {
@@ -4310,7 +4325,8 @@ function offloadRowHtml(kind, i, e) {
       <input type="checkbox" data-offload="${kind}" data-offload-idx="${i}"${e.checked ? " checked" : ""}${e.movable ? "" : " disabled"} />
       <span class="hub-dl-main">
         <span class="hub-dl-name" title="${escapeAttribute(e.file_path)}">${escapeHtml(e.package_id)}</span>
-        ${meta.text ? `<span class="hub-dl-meta${meta.warn ? " is-warn" : ""}">${escapeHtml(meta.text)}</span>` : ""}
+        ${meta ? `<span class="hub-dl-meta">${escapeHtml(meta)}</span>` : ""}
+        ${offloadDependentsHtml(e, kind)}
       </span>
       <span class="hub-dl-size">${escapeHtml(formatBytesLocal(e.size_bytes))}</span>
       <span class="hub-dl-chip">${offloadChip(e)}</span>
@@ -4440,6 +4456,7 @@ async function offloadOpen(items, restore) {
   }
   const token = ++OFFLOAD.token;
   Object.assign(OFFLOAD, { restore: Boolean(restore), items: picked, targets: [], deps: [], missing: [] });
+  OFFLOAD.openUsers.clear();
   offloadRenderHead();
   offloadRenderDest();
   $("offload-progress")?.classList.add("hidden");
@@ -4659,6 +4676,16 @@ function setupOffload() {
     offloadSync();
   });
   $("offload-dest-input")?.addEventListener("input", offloadSync);
+  $("offload-body")?.addEventListener("click", (e) => {
+    const toggle = e.target.closest?.("[data-offload-users]");
+    if (!toggle) return;
+    // Inside the row's <label>: don't let the click tick the checkbox.
+    e.preventDefault();
+    const key = toggle.getAttribute("data-offload-users");
+    if (OFFLOAD.openUsers.has(key)) OFFLOAD.openUsers.delete(key);
+    else OFFLOAD.openUsers.add(key);
+    offloadRenderBody();
+  });
   $("offload-body")?.addEventListener("change", (e) => {
     const input = e.target;
     if (!(input instanceof HTMLInputElement) || OFFLOAD.running) return;

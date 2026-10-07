@@ -14204,3 +14204,47 @@ button.lib-dep-ref:hover {
   font-size: 11px;
   color: var(--lib-text-3);
 }
+
+/* Offload dialog: "Dependency of N other packages" under a row, names on demand.
+   Amber while the row is ticked (offloading it breaks them), muted otherwise. */
+.offload-dependents {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--lib-text-3);
+}
+
+.offload-dependents.is-warn {
+  color: var(--lib-warning);
+}
+
+.offload-card .offload-dependents .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.offload-dependents-toggle {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--lib-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.offload-dependents-toggle:hover {
+  filter: brightness(1.2);
+}
+
+.offload-dependents-list {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--lib-text-2);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
