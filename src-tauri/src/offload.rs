@@ -29,7 +29,7 @@ use crate::{
     naming,
     packages::{
         begin_task, disabled_sidecar, existing_creator_dir, friendly_io_error, image_sidecars,
-        is_in_addon_packages, wide_len, MAX_PATH_UTF16,
+        is_in_addon_packages, prune_empty_dirs, wide_len, MAX_PATH_UTF16,
     },
     tasks::set_task_progress,
 };
@@ -432,26 +432,6 @@ pub(crate) fn move_package(
         }
     }
     Ok((dest, notes))
-}
-
-/// Removes the folders in `dirs` that moving packages out of left empty, and
-/// then any parent that became empty with them — up to, never including,
-/// `root` (AddonPackages or the offload folder). `fs::remove_dir` only ever
-/// removes an empty folder, so anything still holding a file stays.
-pub(crate) fn prune_empty_dirs(dirs: impl IntoIterator<Item = PathBuf>, root: &Path) {
-    let mut dirs: Vec<PathBuf> = dirs.into_iter().collect();
-    // Deepest first, so a parent is tried after its children are gone.
-    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
-    dirs.dedup();
-    for dir in dirs {
-        let mut current = Some(dir.as_path());
-        while let Some(d) = current {
-            if !path_is_under(d, root) || fs::remove_dir(d).is_err() {
-                break;
-            }
-            current = d.parent();
-        }
-    }
 }
 
 /// Points the database's `packages.file_path` at the new location so the

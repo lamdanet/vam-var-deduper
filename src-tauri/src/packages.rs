@@ -1202,6 +1202,51 @@ pub(crate) fn run_apply_package_actions(
     (reclaimed, cancelled)
 }
 
+/// Removes the folders in `dirs` that moving or deleting packages left empty,
+/// and then any parent that became empty with them — up to, never including,
+/// `root` (the scan folder they belong to). `fs::remove_dir` only ever removes
+/// an empty folder, so anything still holding a file stays.
+pub(crate) fn prune_empty_dirs(dirs: impl IntoIterator<Item = PathBuf>, root: &Path) {
+    let mut dirs: Vec<PathBuf> = dirs.into_iter().collect();
+    // Deepest first, so a parent is tried after its children are gone.
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    dirs.dedup();
+    for dir in dirs {
+        let mut current = Some(dir.as_path());
+        while let Some(d) = current {
+            if !crate::offload::path_is_under(d, root) || std::fs::remove_dir(d).is_err() {
+                break;
+            }
+            current = d.parent();
+        }
+    }
+}
+
+/// The folder a pruning walk from `path` stops at: the deepest of `roots`
+/// holding it, else its nearest `AddonPackages` ancestor. `None` (prune
+/// nothing) when it is under neither — never climb into folders nobody chose.
+pub(crate) fn prune_root_for(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    roots
+        .iter()
+        .filter(|r| !r.as_os_str().is_empty() && crate::offload::path_is_under(path, r))
+        .max_by_key(|r| r.components().count())
+        .cloned()
+        .or_else(|| {
+            path.ancestors().skip(1).find_map(|a| {
+                a.file_name()
+                    .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("AddonPackages"))
+                    .then(|| a.to_path_buf())
+            })
+        })
+}
+
+/// Prunes the folder `path` was in, if moving or deleting it left that empty.
+pub(crate) fn prune_after_removal(path: &Path, roots: &[PathBuf]) {
+    if let (Some(parent), Some(root)) = (path.parent(), prune_root_for(path, roots)) {
+        prune_empty_dirs([parent.to_path_buf()], &root);
+    }
+}
+
 /// `<file>.var` -> `<file>.var.disabled`, VAM's "this package is off" marker.
 pub(crate) fn disabled_sidecar(var_path: &Path) -> PathBuf {
     let mut name = var_path.as_os_str().to_os_string();
@@ -1360,6 +1405,9 @@ fn invalidate_var_packages_cache(state: &AppState) {
 #[tauri::command]
 pub(crate) fn delete_var_package(
     file_path: String,
+    // The scan folders it may sit under: an emptied folder is removed up to
+    // the one holding it (or the nearest AddonPackages when none is given).
+    roots: Option<Vec<String>>,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
     let path = PathBuf::from(&file_path);
@@ -1399,6 +1447,8 @@ pub(crate) fn delete_var_package(
     for img in image_sidecars(&path) {
         let _ = ops.recycle(&img);
     }
+    let roots: Vec<PathBuf> = roots.unwrap_or_default().iter().map(|r| PathBuf::from(r.trim())).collect();
+    prune_after_removal(&path, &roots);
 
     invalidate_var_packages_cache(&state);
     Ok(size)
@@ -1550,6 +1600,7 @@ pub(crate) fn move_var_to_creator_folder(
     }
 
     move_package_with_sidecars(&RealFileOps, &src, &dest)?;
+    prune_after_removal(&src, &[PathBuf::from(root_dir.trim())]);
 
     invalidate_var_packages_cache(&state);
     Ok(dest.to_string_lossy().to_string())
@@ -1972,6 +2023,14 @@ fn run_apply_plan(
     let ops = RealFileOps;
     let (reclaimed, was_cancelled) =
         run_apply_package_actions(&mut actions, &ops, cancel, &mut progress);
+
+    // Folders a recycle or a move emptied go too, up to the scan folder each
+    // file was found under.
+    for action in actions.iter().filter(|a| a.status == "done") {
+        if let Some(cand) = index_of.get(action.file_path.as_str()).map(|&pos| &plan.candidates[pos]) {
+            prune_after_removal(&cand.path, std::slice::from_ref(&cand.base_dir));
+        }
+    }
 
     Ok(PackageOpResponse {
         plan_id,

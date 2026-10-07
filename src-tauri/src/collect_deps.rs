@@ -767,6 +767,7 @@ pub(crate) fn run_collect_deps_copy(
         progress(0.0, format!("Moving {name}"));
         match move_package_with_sidecars(ops, var_path, &dest.package_dest) {
             Ok(notes) => {
+                crate::packages::prune_after_removal(var_path, &[PathBuf::from(root_dir.trim())]);
                 response.var_moved = true;
                 response.var_path = dest.package_dest.display().to_string();
                 if !notes.is_empty() {

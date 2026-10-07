@@ -6235,7 +6235,7 @@ fn known_package_lookups_use_only_the_ids_asked_for() {
 
 #[test]
 fn offload_prunes_folders_left_empty_but_never_the_root() {
-    use crate::offload::prune_empty_dirs;
+    use crate::packages::prune_empty_dirs;
     let root = std::env::temp_dir().join(format!("vam_prune_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let addon = root.join("AddonPackages");
@@ -6258,5 +6258,39 @@ fn offload_prunes_folders_left_empty_but_never_the_root() {
     fs::create_dir_all(lone.join("A")).unwrap();
     prune_empty_dirs(vec![lone.join("A")], &lone);
     assert!(!lone.join("A").exists() && lone.exists());
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn prune_root_is_the_scan_folder_holding_the_file() {
+    use crate::packages::prune_root_for;
+    let roots = vec![PathBuf::from("D:/VaM/AddonPackages"), PathBuf::from("D:/VaM/AddonPackages/Downloads")];
+    // The deepest root that holds it wins.
+    assert_eq!(
+        prune_root_for(Path::new("D:/VaM/AddonPackages/Downloads/Qing/A.B.1.var"), &roots),
+        Some(PathBuf::from("D:/VaM/AddonPackages/Downloads"))
+    );
+    // No root given: the nearest AddonPackages folder.
+    assert_eq!(
+        prune_root_for(Path::new("E:/Games/VaM/AddonPackages/Qing/A.B.1.var"), &[]),
+        Some(PathBuf::from("E:/Games/VaM/AddonPackages"))
+    );
+    // Under nothing anyone chose: prune nothing.
+    assert_eq!(prune_root_for(Path::new("C:/Users/me/Desktop/A.B.1.var"), &[]), None);
+}
+
+#[test]
+fn deleting_the_last_package_removes_its_creator_folder() {
+    use crate::packages::prune_after_removal;
+    let root = std::env::temp_dir().join(format!("vam_prune_del_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let addon = root.join("AddonPackages");
+    fs::create_dir_all(addon.join("Qing")).unwrap();
+    let var = addon.join("Qing").join("Qing.Hair.1.var");
+    fs::write(&var, b"x").unwrap();
+    fs::remove_file(&var).unwrap(); // what the Recycle Bin does
+    prune_after_removal(&var, &[]);
+    assert!(!addon.join("Qing").exists());
+    assert!(addon.exists());
     fs::remove_dir_all(&root).expect("cleanup");
 }
