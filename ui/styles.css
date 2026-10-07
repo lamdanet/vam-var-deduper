@@ -14903,3 +14903,10 @@ button.lib-dep-ref:hover {
 .link-health.is-bad {
   color: var(--lib-error, #ef4444);
 }
+
+.sources-all-saved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--lib-success, #22c55e);
+}

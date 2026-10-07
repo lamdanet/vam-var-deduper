@@ -5250,6 +5250,9 @@ function setupSources() {
 }
 
 // ---- Sources page ----------------------------------------------------------------
+// Saving only: downloads happen from Download Dependencies, VAR Details and
+// the Hub, which use these sources. A saved file leaves the list.
+//
 // Paste a forum post or links; start_scan_source_links_task follows every
 // Pixeldrain file/list, MEGA file/folder, MediaFire file/folder and .var/.zip
 // link and lists the .var files they hold (zip members too). A file offered by
@@ -5343,21 +5346,9 @@ function sourcesGroupArchives(group) {
   return [...seen.values()];
 }
 
-// The status chip of a row: its download, else whether it is in the library
-// or saved.
+// The status chip of a row: already in the library, or new.
 function sourcesStatusHtml(row) {
-  const stem = sourcesStem(row.filename);
-  const job = state.downloads.filter((j) => j.packageId === stem).pop();
-  if (job && (job.status === "queued" || job.status === "downloading" || job.status === "cancelling")) {
-    const pct = Math.round(Number(job.percent) || 0);
-    return `<span class="lib-pill lib-pill-info">${job.status === "queued" ? "Queued" : `${pct}%`}</span>`;
-  }
-  if (job && job.status === "failed") {
-    return `<span class="lib-pill lib-pill-err" title="${escapeAttribute(job.error || "")}">Failed</span>`;
-  }
-  if (row.inLibrary) return `<span class="lib-pill lib-pill-ok">In library</span>`;
-  if (row.saved) return `<span class="lib-pill lib-pill-info">Saved</span>`;
-  return `<span class="lib-pill">New</span>`;
+  return row.inLibrary ? `<span class="lib-pill lib-pill-ok">In library</span>` : `<span class="lib-pill">New</span>`;
 }
 
 function sourcesPwBadge(url) {
@@ -5383,7 +5374,6 @@ function sourcesRowHtml(i) {
   const mirrors = r.mirrors
     .map((m, k) => `<span class="sources-mirror${k === 0 ? " is-primary" : ""}" title="${escapeAttribute(m.url)}">${escapeHtml(srcHostLabel(m.host))}</span>`)
     .join("");
-  const busy = Boolean(findDownloadJob(sourcesStem(r.filename)));
   const encrypted = r.mirrors.some((m) => m.encrypted);
   return `<div class="sources-res-row${r.inLibrary ? " is-dim" : ""}" data-sources-row-i="${i}">
       <input type="checkbox" data-sources-row="${i}"${r.checked ? " checked" : ""} aria-label="Select ${escapeAttribute(r.filename)}" />
@@ -5396,12 +5386,9 @@ function sourcesRowHtml(i) {
       <span class="hub-dl-size">${p.size ? escapeHtml(formatBytesLocal(p.size)) : ""}</span>
       <span class="sources-status" data-sources-status="${i}">${sourcesStatusHtml(r)}</span>
       <span class="sources-row-acts">
-        <button type="button" class="icon-button" data-sources-act="save" data-sources-i="${i}" title="${
-          r.saved ? "Saved as a source" : `Save as a download source${r.mirrors.length > 1 ? ` (all ${r.mirrors.length} mirrors)` : ""}`
-        }">
-          <span class="material-symbols-outlined"${r.saved ? ` style="font-variation-settings:'FILL' 1"` : ""}>${r.saved ? "bookmark_added" : "bookmark_add"}</span></button>
-        <button type="button" class="icon-button" data-sources-act="download" data-sources-i="${i}"${r.inLibrary || busy ? " disabled" : ""}
-                title="${r.inLibrary ? "Already in your library" : `Save and download it (from ${escapeAttribute(srcHostLabel(p.host))})`}"><span class="material-symbols-outlined">download</span></button>
+        <button type="button" class="icon-button" data-sources-act="save" data-sources-i="${i}"
+                title="Save as a download source${r.mirrors.length > 1 ? ` (all ${r.mirrors.length} mirrors)` : ""}">
+          <span class="material-symbols-outlined">bookmark_add</span></button>
       </span>
     </div>`;
 }
@@ -5555,9 +5542,13 @@ function sourcesRenderResults() {
     })
     .join("");
   const empty = SOURCES.rows.length && !groups ? `<p class="hub-dl-empty">Nothing matches this filter.</p>` : "";
-  const none = !SOURCES.rows.length
-    ? `<p class="hub-dl-empty">No .var files found${res.problems?.length ? " — see below" : ""}.</p>`
-    : "";
+  const none = SOURCES.rows.length
+    ? ""
+    : SOURCES.savedCount
+      ? `<p class="hub-dl-empty sources-all-saved"><span class="material-symbols-outlined">task_alt</span>All ${SOURCES.savedCount} file${
+          SOURCES.savedCount === 1 ? "" : "s"
+        } saved as download sources.</p>`
+      : `<p class="hub-dl-empty">No .var files found${res.problems?.length ? " — see below" : ""}.</p>`;
   host.innerHTML = `${groups}${empty}${none}${sourcesProblemsHtml(res)}`;
   actions?.classList.toggle("hidden", !SOURCES.rows.length);
   sourcesSyncSelection();
@@ -5586,20 +5577,8 @@ function sourcesSyncSelection() {
     "sources-selection",
     picked.length ? `${picked.length} selected${size ? ` · ${formatBytesLocal(size)}` : ""}` : "Nothing selected",
   );
-  for (const id of ["sources-save", "sources-download"]) {
-    const b = $(id);
-    if (b) b.disabled = !picked.length || SOURCES.running;
-  }
-}
-
-// Repaints one row's status chip and buttons (download progress, saves)
-// without rebuilding the list, so a password being typed keeps its focus.
-function sourcesUpdateRow(i) {
-  const el = document.querySelector(`[data-sources-row-i="${i}"]`);
-  if (!el) return;
-  const fresh = document.createElement("div");
-  fresh.innerHTML = sourcesRowHtml(i);
-  el.replaceWith(fresh.firstElementChild);
+  const save = $("sources-save");
+  if (save) save.disabled = !picked.length || SOURCES.running;
 }
 
 async function sourcesScan() {
@@ -5657,7 +5636,7 @@ async function sourcesScan() {
   SOURCES.rows = [...byName.values()].map((row) => {
     row.mirrors.sort((a, b) => (SOURCES_HOST_RANK[a.host] ?? 3) - (SOURCES_HOST_RANK[b.host] ?? 3));
     const inLibrary = sourcesInLibrary(row.filename);
-    return { ...row, inLibrary, saved: false, checked: preselect && !inLibrary };
+    return { ...row, inLibrary, checked: preselect && !inLibrary };
   });
   // Each protected archive's password: the one the scan verified, else the
   // typed one to try.
@@ -5669,6 +5648,7 @@ async function sourcesScan() {
     SOURCES.pwState.set(f.url, f.password ? "verified" : "unknown");
   }
   SOURCES.filter = "all";
+  SOURCES.savedCount = 0;
   // A long post (several packs) starts folded: one line per pack.
   const keys = sourcesGroups().map((g) => g.key);
   SOURCES.collapsed = new Set(keys.length > 3 ? keys : []);
@@ -5742,11 +5722,13 @@ async function sourcesSave(rows) {
         addLog(`Sources: ${r.filename} (${srcHostLabel(m.host)}) — ${String(e?.message || e)}`);
       }
     }
-    if (any) {
-      r.saved = true;
-      saved.push(r);
-      sourcesUpdateRow(SOURCES.rows.indexOf(r));
-    }
+    if (any) saved.push(r);
+  }
+  // Saved files leave the list; what is left is still to do.
+  if (saved.length) {
+    SOURCES.rows = SOURCES.rows.filter((r) => !saved.includes(r));
+    SOURCES.savedCount = (SOURCES.savedCount || 0) + saved.length;
+    sourcesRenderResults();
   }
   if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
   sourcesLoadSaved();
@@ -5762,49 +5744,6 @@ function sourcesSavedText(saved) {
     parts.push(`${saved.knownLinks} ${saved.knownLinks === 1 ? "was" : "were"} already saved`);
   }
   return parts.join(" · ") || "Nothing to save";
-}
-
-// Queues the download of a row (its best mirror that can be opened), or of a
-// saved-source entry ({ filename, url, host }).
-function sourcesQueue(item, destDir) {
-  const mirror = item.mirrors ? item.mirrors.find((m) => !m.encrypted || sourcesPassword(m.url).trim()) : item;
-  if (!mirror) return null;
-  const stem = sourcesStem(item.filename);
-  const i = SOURCES.rows.indexOf(item);
-  const id = queueDownload({
-    packageId: stem,
-    url: mirror.url,
-    filename: item.filename,
-    host: mirror.host,
-    destDir,
-    label: item.filename,
-    onProgress: () => {
-      if (i >= 0) sourcesUpdateRow(i);
-    },
-    onDone: (status) => {
-      if (status === "done" || status === "exists") {
-        hubLocalAdd(stem);
-        for (const r of SOURCES.rows) if (sourcesStem(r.filename).toLowerCase() === stem.toLowerCase()) r.inLibrary = true;
-        sourcesRenderSaved();
-        vpRefreshAfterMutation().catch(() => {});
-      }
-      if (i >= 0) sourcesUpdateRow(i);
-    },
-  });
-  if (i >= 0) sourcesUpdateRow(i);
-  return id;
-}
-
-async function sourcesDownload(rows) {
-  const saved = await sourcesSave(rows);
-  if (!saved) return;
-  const destDir = await ensureDownloadsDir();
-  if (!destDir) return;
-  let queued = 0;
-  for (const r of saved) {
-    if (!r.inLibrary && sourcesQueue(r, destDir) != null) queued += 1;
-  }
-  showToast(queued ? `Downloading ${queued}` : "Nothing new to download", queued ? "success" : "info");
 }
 
 // ---- Saved sources ---------------------------------------------------------------
@@ -5834,11 +5773,6 @@ function sourcesRenderSaved() {
           ${archive}
           ${inLib ? `<span class="lib-pill lib-pill-ok">In library</span>` : ""}
           <span class="sources-row-acts">
-            ${
-              !inLib
-                ? `<button type="button" class="icon-button" data-sources-saved-dl="${i}" title="Download it"><span class="material-symbols-outlined">download</span></button>`
-                : ""
-            }
             <button type="button" class="icon-button" data-sources-saved-open="${i}" title="Open the link in your browser"><span class="material-symbols-outlined">open_in_new</span></button>
             <button type="button" class="icon-button dep-scan-act-danger" data-sources-saved-remove="${i}" title="Forget this source"><span class="material-symbols-outlined">delete</span></button>
           </span>
@@ -5879,6 +5813,7 @@ function setupSourcesPage() {
     if (text) text.value = "";
     SOURCES.result = null;
     SOURCES.rows = [];
+    SOURCES.savedCount = 0;
     sourcesRenderResults();
     text?.focus();
   });
@@ -5886,9 +5821,6 @@ function setupSourcesPage() {
     const saved = await sourcesSave(SOURCES.rows.filter((r) => r.checked));
     if (saved?.length) showToast(sourcesSavedText(saved), saved.newLinks ? "success" : "info");
   });
-  $("sources-download")?.addEventListener("click", () =>
-    sourcesDownload(SOURCES.rows.filter((r) => r.checked)).catch((e) => addLog(`Sources: ${String(e)}`)),
-  );
   $("sources-select-all")?.addEventListener("change", (e) => {
     for (const r of SOURCES.rows) if (sourcesVisible(r)) r.checked = e.target.checked;
     document.querySelectorAll("[data-sources-row]").forEach((box) => {
@@ -5972,10 +5904,6 @@ function setupSourcesPage() {
           );
         }
       });
-    } else if (what === "download") {
-      sourcesDownload([row]).catch((err) => addLog(`Sources: ${String(err)}`));
-    } else if (what === "open") {
-      invoke("open_url", { url: row.url }).catch((err) => addLog(`Sources: ${String(err)}`));
     }
   });
   $("sources-search")?.addEventListener("input", () => {
@@ -5987,13 +5915,9 @@ function setupSourcesPage() {
       const el = e.target.closest?.(`[${attr}]`);
       return el ? SOURCES.saved[Number(el.getAttribute(attr))] : null;
     };
-    const dl = pick("data-sources-saved-dl");
     const open = pick("data-sources-saved-open");
     const remove = pick("data-sources-saved-remove");
-    if (dl) {
-      const destDir = await ensureDownloadsDir();
-      if (destDir && sourcesQueue(dl, destDir) != null) showToast(`Downloading ${dl.filename}`, "info");
-    } else if (open) {
+    if (open) {
       invoke("open_url", { url: open.url }).catch((err) => addLog(`Sources: ${String(err)}`));
     } else if (remove) {
       try {
