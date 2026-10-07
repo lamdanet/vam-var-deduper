@@ -171,8 +171,13 @@ impl Seek for HttpRangeReader {
 // Listing
 // ----------------------------------------------------------------------------
 
+#[cfg(test)]
 fn list_entries<R: Read + Seek>(reader: R) -> Result<Vec<ArchiveEntry>, String> {
     let mut zip = zip::ZipArchive::new(reader).map_err(|e| format!("not a readable .zip: {e}"))?;
+    Ok(entries_of(&mut zip))
+}
+
+fn entries_of<R: Read + Seek>(zip: &mut zip::ZipArchive<R>) -> Vec<ArchiveEntry> {
     let mut out = Vec::new();
     for i in 0..zip.len() {
         let Ok(file) = zip.by_index_raw(i) else { continue };
@@ -181,26 +186,53 @@ fn list_entries<R: Read + Seek>(reader: R) -> Result<Vec<ArchiveEntry>, String> 
         }
         out.push(ArchiveEntry { name: file.name().to_string(), size: file.size(), encrypted: file.encrypted() });
     }
-    Ok(out)
+    out
 }
 
-/// The files in a remote zip. Reads just its directory through range requests
-/// when the host allows (MEGA always does); otherwise downloads it into the
-/// cache and lists that.
-pub(crate) fn list_remote(url: &str) -> Result<Vec<ArchiveEntry>, String> {
+trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
+/// A remote zip for reading: through range requests when the host allows
+/// (MEGA always does), else downloaded into the cache.
+fn open_remote(url: &str) -> Result<Box<dyn ReadSeek>, String> {
     let reader = if crate::mega::is_mega(url) {
         crate::mega::open_download(url).and_then(HttpRangeReader::open_mega)
     } else {
         HttpRangeReader::open(url)
     };
     if let Ok(reader) = reader {
-        return list_entries(reader);
+        return Ok(Box::new(reader));
     }
     let cancel = AtomicBool::new(false);
     let path = ensure_cached(url, &cancel, &mut |_, _| {})?;
     let file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    list_entries(io::BufReader::new(file))
+    Ok(Box::new(io::BufReader::new(file)))
 }
+
+/// The first of `candidates` that opens an encrypted member of `zip`. Opening
+/// checks the password against the member's header (AES's verifier, or
+/// ZipCrypto's check byte) before any data is read, so over range requests
+/// each try costs one small request.
+fn first_working_password<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, candidates: &[String]) -> Option<String> {
+    let index = (0..zip.len()).find(|&i| zip.by_index_raw(i).is_ok_and(|f| f.encrypted()))?;
+    candidates
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .find(|c| zip.by_index_decrypt(index, c.as_bytes()).is_ok())
+        .map(str::to_string)
+}
+
+/// A remote zip's files, and — when some are encrypted — which of
+/// `candidates` is its password (if any).
+pub(crate) fn inspect_remote(url: &str, candidates: &[String]) -> Result<(Vec<ArchiveEntry>, Option<String>), String> {
+    let reader = open_remote(url)?;
+    let mut zip = zip::ZipArchive::new(reader).map_err(|e| format!("not a readable .zip: {e}"))?;
+    let entries = entries_of(&mut zip);
+    let password = if entries.iter().any(|e| e.encrypted) { first_working_password(&mut zip, candidates) } else { None };
+    Ok((entries, password))
+}
+
 
 // ----------------------------------------------------------------------------
 // Session cache

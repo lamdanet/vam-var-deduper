@@ -6675,3 +6675,22 @@ fn mega_zip_is_listed_through_decrypted_ranges() {
     assert_eq!(names, vec!["Acid.Look.3.var", "deps/Bee.Hair.2.var", "preview.png"]);
     assert!(entries[0].encrypted);
 }
+
+#[test]
+fn passwords_are_found_in_posts() {
+    let text = "Part 1: https://pixeldrain.com/u/aaa Password: Fire!Fox9\n\
+                <b>Pass:</b> <code>second-one</code> https://pixeldrain.com/u/bbb\n\
+                pw - third. Archive is password protected.";
+    let found: Vec<String> = crate::sources::extract_passwords(text).into_iter().map(|(_, p)| p).collect();
+    assert_eq!(found, vec!["Fire!Fox9", "second-one", "third"]);
+}
+
+#[test]
+fn archive_password_is_verified_over_ranges() {
+    let url = serve_file(forum_zip());
+    let (entries, pw) = crate::archives::inspect_remote(&url, &["wrong".to_string(), "s3cret".to_string()]).unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(pw.as_deref(), Some("s3cret"));
+    let (_, none) = crate::archives::inspect_remote(&url, &["nope".to_string()]).unwrap();
+    assert_eq!(none, None);
+}

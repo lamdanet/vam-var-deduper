@@ -243,6 +243,10 @@ pub(crate) struct FoundVar {
     /// Inside a MEGA folder: the subfolders the file sits in.
     #[serde(default)]
     pub(crate) folder_path: Option<String>,
+    /// A protected archive's password, when one from the post (or the
+    /// password box) was verified against it.
+    #[serde(default)]
+    pub(crate) password: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -332,9 +336,49 @@ fn name_from_url(url: &str) -> Option<String> {
     pick.map(|s| percent_decode(s))
 }
 
+/// Passwords written in a post — `Password: x`, `pass - x`, `pw: x`, also
+/// through HTML tags — with where they appear, in order.
+pub(crate) fn extract_passwords(text: &str) -> Vec<(usize, String)> {
+    const NOT_A_PASSWORD: &[&str] = &[
+        "is", "for", "the", "to", "of", "in", "on", "and", "required", "protected", "none", "no", "below",
+        "above", "here", "same", "needed", "please", "if", "it",
+    ];
+    let re = regex::Regex::new(
+        r#"(?i)\b(?:password|passwort|passwd|pass|pwd|pw)\b(?:\s|<[^>]*>)*(?:is(?:\s|<[^>]*>)+)?[:=：\-–]?(?:\s|<[^>]*>)*["'`“”]?([^\s"'`“”<>]+)"#,
+    )
+    .expect("valid regex");
+    re.captures_iter(text)
+        .filter_map(|c| {
+            let m = c.get(1)?;
+            let pw = m.as_str().trim_end_matches(['.', ',', ';', ')', ']', '!']);
+            let lower = pw.to_lowercase();
+            (pw.len() >= 2 && !lower.starts_with("http") && !NOT_A_PASSWORD.contains(&lower.as_str()))
+                .then(|| (m.start(), pw.to_string()))
+        })
+        .collect()
+}
+
+/// The passwords to try on archives behind the link at `link_pos`: the typed
+/// one first, then the post's, nearest to the link first.
+fn password_candidates(typed: Option<&str>, found: &[(usize, String)], link_pos: Option<usize>) -> Vec<String> {
+    let mut by_distance: Vec<&(usize, String)> = found.iter().collect();
+    if let Some(at) = link_pos {
+        by_distance.sort_by_key(|(pos, _)| pos.abs_diff(at));
+    }
+    let mut out: Vec<String> = Vec::new();
+    for pw in typed.into_iter().map(str::to_string).chain(by_distance.into_iter().map(|(_, p)| p.clone())) {
+        if !pw.trim().is_empty() && !out.contains(&pw) {
+            out.push(pw);
+        }
+    }
+    out
+}
+
 struct Scan<'a> {
     out: &'a mut SourceScanResult,
     origin: String,
+    /// Passwords to try on protected archives behind this link, best first.
+    candidates: Vec<String>,
 }
 
 impl Scan<'_> {
@@ -363,8 +407,8 @@ impl Scan<'_> {
             Some("zip") if host == "mediafire" => self.problem(format!(
                 "{name}: MediaFire downloads only work in the browser — download and extract it yourself."
             )),
-            Some("zip") => match crate::archives::list_remote(url) {
-                Ok(entries) => {
+            Some("zip") => match crate::archives::inspect_remote(url, &self.candidates) {
+                Ok((entries, password)) => {
                     let before = self.out.found.len();
                     for e in entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".var")) {
                         self.out.found.push(FoundVar {
@@ -377,6 +421,7 @@ impl Scan<'_> {
                             encrypted: e.encrypted,
                             origin: self.origin.clone(),
                             folder_path: folder_path.clone(),
+                            password: if e.encrypted { password.clone() } else { None },
                         });
                     }
                     if self.out.found.len() == before {
@@ -450,9 +495,12 @@ impl Scan<'_> {
 #[tauri::command]
 pub(crate) fn start_scan_source_links_task(
     text: String,
+    // The page's password box: tried first on every protected archive.
+    password: Option<String>,
     state: State<'_, crate::models::AppState>,
 ) -> Result<crate::models::TaskHandle, String> {
     let links = extract_links(&text);
+    let found_passwords = extract_passwords(&text);
     if links.is_empty() {
         return Err("No Pixeldrain, MEGA, MediaFire or .var / .zip links in that text.".to_string());
     }
@@ -471,7 +519,8 @@ pub(crate) fn start_scan_source_links_task(
                 i as f64 / links.len() as f64,
                 format!("Reading link {} of {}", i + 1, links.len()),
             );
-            Scan { out: &mut result, origin: link.clone() }.link(link);
+            let candidates = password_candidates(password.as_deref(), &found_passwords, text.find(link.as_str()));
+            Scan { out: &mut result, origin: link.clone(), candidates }.link(link);
         }
         if let Ok(mut guard) = tasks.lock() {
             if let Some(task) = guard.get_mut(&task_id) {
@@ -484,6 +533,17 @@ pub(crate) fn start_scan_source_links_task(
         }
     });
     Ok(crate::models::TaskHandle { id: task_id })
+}
+
+/// Whether `password` opens the protected members of the zip at `url` (checked
+/// against the member's header through range requests).
+#[tauri::command]
+pub(crate) async fn check_archive_password(url: String, password: String) -> Result<bool, String> {
+    crate::library::on_hub_thread(move || {
+        let (entries, found) = crate::archives::inspect_remote(&url, &[password])?;
+        Ok(found.is_some() || !entries.iter().any(|e| e.encrypted))
+    })
+    .await
 }
 
 /// Every stored source for the package family of `package_id`.
