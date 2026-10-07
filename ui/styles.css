@@ -14674,3 +14674,208 @@ button.lib-dep-ref:hover {
   padding: 10px 0 2px;
   background: var(--surface-2);
 }
+
+/* Sources: mirrors, per-zip passwords, problem cards. */
+.sources-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sources-mirror {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--lib-text-3);
+}
+
+.sources-mirror.is-primary {
+  border-color: color-mix(in srgb, var(--lib-accent) 45%, transparent);
+  color: var(--lib-accent);
+}
+
+.sources-group-pws {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--lib-warning) 5%, transparent);
+}
+
+.sources-group-pws .sources-group-pw {
+  flex-wrap: wrap;
+}
+
+.sources-pw-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 160px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.sources-pw-name .material-symbols-outlined {
+  font-size: 15px;
+}
+
+.sources-pw-name small {
+  color: var(--lib-text-3);
+}
+
+.sources-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sources-issue {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface);
+}
+
+.sources-issue.is-warn {
+  border-left-color: var(--lib-warning);
+}
+
+.sources-issue.is-bad {
+  border-left-color: var(--lib-error, #ef4444);
+}
+
+.sources-issue.is-muted {
+  border-left-color: var(--lib-text-3);
+}
+
+.sources-issue-icon {
+  flex: 0 0 auto;
+  font-size: 20px;
+  color: var(--lib-text-3);
+}
+
+.sources-issue.is-warn .sources-issue-icon {
+  color: var(--lib-warning);
+}
+
+.sources-issue.is-bad .sources-issue-icon {
+  color: var(--lib-error, #ef4444);
+}
+
+.sources-issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sources-issue-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sources-issue-text {
+  font-size: 12px;
+  color: var(--lib-text-2);
+}
+
+.sources-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.sources-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lib-hover) 70%, transparent);
+  font-size: 11px;
+  color: var(--lib-text-2);
+}
+
+.sources-issue-more summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--lib-accent);
+}
+
+.sources-issue-list {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.sources-issue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--lib-text-2);
+}
+
+.sources-issue-what {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sources-ignored {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--lib-text-3);
+}
+
+.sources-ignored .material-symbols-outlined {
+  font-size: 14px;
+}
+
+/* Sources: folding packs. */
+.sources-fold {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--lib-text-2);
+  cursor: pointer;
+}
+
+.sources-group.is-folded .sources-group-head {
+  border-bottom: 0;
+}
+
+.sources-group-sum {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--lib-text-3);
+  white-space: nowrap;
+}
+
+.sources-group-check {
+  flex: 0 1 auto;
+}
+
+.sources-fold-all {
+  display: inline-flex;
+  gap: 10px;
+}
+
+.sources-fold-all .lib-small-link {
+  font-size: 11px;
+}
