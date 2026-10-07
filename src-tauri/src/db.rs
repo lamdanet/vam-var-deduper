@@ -680,7 +680,21 @@ pub(crate) fn insert_download_links(db: &Db, rows: &[DownloadLinkRow]) -> Result
                  (package_base, version, filename, host, url, size, archive_entry, archive_password)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
+        // The file's links so far (through the family index), to skip one it
+        // already has under another spelling — `/u/<id>` vs `/api/file/<id>`,
+        // a MediaFire page with or without the name, the file name's case.
+        let mut existing = tx.prepare(
+            "SELECT url FROM download_links WHERE package_base = ?1 AND filename = ?2 COLLATE NOCASE",
+        )?;
         for row in rows {
+            let key = crate::sources::link_key(&row.url);
+            let known: Vec<String> = existing
+                .query_map(params![row.package_base, row.filename], |r| r.get::<_, String>(0))?
+                .flatten()
+                .collect();
+            if known.iter().any(|u| crate::sources::link_key(u) == key) {
+                continue;
+            }
             added += stmt.execute(params![
                 row.package_base,
                 row.version,

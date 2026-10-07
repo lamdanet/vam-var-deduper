@@ -24,7 +24,10 @@ pub(crate) fn normalize_link(raw: &str) -> Option<(String, &'static str)> {
         return Some((url.to_string(), "f95"));
     }
     if host == "pixeldrain.com" || host == "pixeldrain.net" || host == "pixeldra.in" || host.ends_with(".pixeldrain.com") {
-        return Some(match pixeldrain_id(url) {
+        // Only a plain share page or file link is rewritten: a link with more
+        // after the id (`/api/file/<id>/info/zip/<path>`, one file inside a
+        // zip) is a different file and stays as written.
+        return Some(match pixeldrain_plain_id(url) {
             Some(id) => (format!("https://pixeldrain.com/api/file/{id}?download"), "pixeldrain"),
             None => (url.to_string(), "pixeldrain"),
         });
@@ -70,6 +73,45 @@ pub(crate) fn decode_html_entities(text: &str) -> String {
         ch.map(String::from).unwrap_or_else(|| c[0].to_string())
     })
     .into_owned()
+}
+
+/// The file id of a Pixeldrain link that is just the file: `/u/<id>` or
+/// `/api/file/<id>` with nothing but a query after it.
+fn pixeldrain_plain_id(url: &str) -> Option<&str> {
+    let id = pixeldrain_id(url)?;
+    let after = &url[url.find(id)? + id.len()..];
+    (after.is_empty() || after.starts_with(['?', '#']) || after == "/").then_some(id)
+}
+
+/// What a link fetches, however it is written: two links with the same key
+/// download the same file. Pixeldrain by file id (plus any path inside a zip),
+/// MediaFire by quick key, MEGA by file (or folder + file) id; anything else
+/// by its address without the scheme and with the host lowercased.
+pub(crate) fn link_key(url: &str) -> String {
+    let (url, host) = normalize_link(url).unwrap_or_else(|| (url.trim().to_string(), "other"));
+    match host {
+        "pixeldrain" => match (pixeldrain_plain_id(&url), url.find("/api/file/")) {
+            (Some(id), _) => format!("pixeldrain:{id}"),
+            (None, Some(pos)) => format!("pixeldrain:{}", percent_decode(&url[pos + "/api/file/".len()..])),
+            _ => format!("pixeldrain:{url}"),
+        },
+        "mediafire" => match (mediafire_quick_key(&url), mediafire_folder_key(&url)) {
+            (Some(qk), _) => format!("mediafire:{qk}"),
+            (None, Some(fk)) => format!("mediafire-folder:{fk}"),
+            _ => format!("mediafire:{url}"),
+        },
+        "mega" => match crate::mega::parse(&url) {
+            Ok(crate::mega::MegaRef::File { handle, .. }) => format!("mega:{handle}"),
+            Ok(crate::mega::MegaRef::FolderFile { handle, node, .. }) => format!("mega:{handle}/{node}"),
+            Ok(crate::mega::MegaRef::Folder { handle, sub, .. }) => format!("mega-folder:{handle}/{}", sub.unwrap_or_default()),
+            Err(_) => format!("mega:{url}"),
+        },
+        _ => {
+            let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(&url);
+            let (host_part, path) = rest.split_once('/').unwrap_or((rest, ""));
+            format!("{}/{}", host_part.to_ascii_lowercase().trim_start_matches("www."), path.trim_end_matches('/'))
+        }
+    }
 }
 
 /// The file id in a Pixeldrain `/u/<id>` or `/api/file/<id>` link.
@@ -158,7 +200,7 @@ pub(crate) fn inspect_link(url: &str) -> LinkInfo {
             }
             Err(err) => info.error = Some(err),
         }
-    } else if host == "pixeldrain" {
+    } else if host == "pixeldrain" && pixeldrain_plain_id(&url).is_some() {
         match pixeldrain_id(&url) {
             Some(id) => match fetch_pixeldrain_info(id) {
                 Ok(pd) => {
@@ -203,11 +245,18 @@ fn fetch_pixeldrain_info(id: &str) -> Result<PixeldrainInfo, String> {
     resp.json::<PixeldrainInfo>().map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AddedLink {
+    pub(crate) row: DownloadLinkRow,
+    /// False when the file already had this link (however it was written).
+    pub(crate) added: bool,
+}
+
 /// Saves `url` as a download source for the `.var` named `filename`
-/// (`Creator.Package.3.var`). Returns the stored row; adding the same link
-/// twice is a no-op, except that an archive's member and password are
-/// updated. `archive_entry` marks the link as a `.zip` holding the `.var` at
-/// that path.
+/// (`Creator.Package.3.var`). A link the file already has — however it is
+/// written (see `link_key`) — isn't added again; an archive link's member and
+/// password are still updated. `archive_entry` marks the link as a `.zip`
+/// holding the `.var` at that path.
 #[tauri::command]
 pub(crate) fn add_download_link(
     filename: String,
@@ -215,7 +264,7 @@ pub(crate) fn add_download_link(
     archive_entry: Option<String>,
     archive_password: Option<String>,
     db: State<'_, Db>,
-) -> Result<DownloadLinkRow, String> {
+) -> Result<AddedLink, String> {
     let (url, host) = normalize_link(&url).ok_or_else(|| "Paste an http(s) link.".to_string())?;
     if host == "mega" {
         // Without its key a MEGA link can't be decrypted, and a whole folder
@@ -238,11 +287,11 @@ pub(crate) fn add_download_link(
         .ok_or_else(|| format!("{name} isn't a package file name."))?;
     row.archive_entry = archive_entry.map(|e| e.trim().to_string()).filter(|e| !e.is_empty());
     row.archive_password = archive_password.filter(|p| !p.trim().is_empty());
-    crate::db::insert_download_links(&db, std::slice::from_ref(&row)).map_err(|e| e.to_string())?;
+    let added = crate::db::insert_download_links(&db, std::slice::from_ref(&row)).map_err(|e| e.to_string())? > 0;
     if row.archive_entry.is_some() {
         crate::db::set_link_archive(&db, &row).map_err(|e| e.to_string())?;
     }
-    Ok(row)
+    Ok(AddedLink { row, added })
 }
 
 /// Stored sources whose file name contains `query` (all when empty), newest
@@ -636,11 +685,14 @@ impl Scan<'_> {
                         }
                         Err(e) => self.problem(format!("Couldn't read the Pixeldrain list: {e}")),
                     }
-                } else if let Some(id) = pixeldrain_id(&url) {
+                } else if let Some(id) = pixeldrain_plain_id(&url) {
                     match fetch_pixeldrain_info(id) {
                         Ok(info) => self.file(&info.name, info.size, &url, host),
                         Err(e) => self.problem(format!("Couldn't read the Pixeldrain file: {e}")),
                     }
+                } else if let Some(name) = name_from_url(&url) {
+                    // One file inside a zip (`/api/file/<id>/info/zip/<path>`).
+                    self.file(&name, None, &url, host);
                 } else {
                     self.problem("unrecognized Pixeldrain link".to_string());
                 }

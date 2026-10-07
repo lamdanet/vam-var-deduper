@@ -6868,3 +6868,32 @@ fn download_falls_back_to_a_working_link_and_remembers() {
     assert_eq!(crate::tasks::pick_db_link(&db, "acid.look", Some(3)).unwrap().url, good);
     fs::remove_dir_all(&dest).ok();
 }
+
+#[test]
+fn the_same_link_written_differently_is_saved_once() {
+    use crate::sources::{link_key, normalize_link};
+    // Pixeldrain: share page vs file link; but a file inside a zip is distinct.
+    assert_eq!(link_key("https://pixeldrain.com/u/AbC12"), link_key("https://pixeldrain.com/api/file/AbC12?download"));
+    let inner = "https://pixeldrain.com/api/file/n7ERz6Uu/info/zip/Daiana Prestes/EuLinRabei.Daiana_Prestes.1.var";
+    let inner_light = "https://pixeldrain.com/api/file/n7ERz6Uu/info/zip/Daiana Prestes Light/EuLinRabei.Daiana_Prestes.1.var";
+    assert_ne!(link_key(inner), link_key(inner_light));
+    assert_ne!(link_key(inner), link_key("https://pixeldrain.com/u/n7ERz6Uu"));
+    // ...and is never rewritten into a link to the whole zip.
+    assert_eq!(normalize_link(inner).unwrap().0, inner);
+    // MediaFire with or without the name; MEGA old and new forms.
+    assert_eq!(
+        link_key("https://www.mediafire.com/file/kgtrv44zyya5de7/Acid.Look.3.var/file"),
+        link_key("https://mediafire.com/file/kgtrv44zyya5de7/file")
+    );
+    let k = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+    assert_eq!(link_key(&format!("https://mega.nz/#!AbCd!{k}")), link_key(&format!("https://mega.nz/file/AbCd#{k}")));
+
+    let db = crate::db::open_in_memory().expect("db");
+    let line = |l: &str| crate::tasks::parse_link_line(l).unwrap();
+    assert_eq!(crate::db::insert_download_links(&db, &[line("Acid.Look.3.var https://pixeldrain.com/u/AbC12")]).unwrap(), 1);
+    // Same file (different case), same link (different spelling): skipped.
+    assert_eq!(crate::db::insert_download_links(&db, &[line("acid.look.3.var https://pixeldrain.com/api/file/AbC12")]).unwrap(), 0);
+    // A genuinely different link for the file: kept beside the first.
+    assert_eq!(crate::db::insert_download_links(&db, &[line("Acid.Look.3.var https://pixeldrain.com/u/ZzZ99")]).unwrap(), 1);
+    assert_eq!(crate::db::links_for_file(&db, "Acid.Look.3.var").len(), 2);
+}
