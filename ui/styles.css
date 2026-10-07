@@ -14336,3 +14336,28 @@ button.lib-dep-ref:hover {
 .dep-scan-act-note + .dep-scan-action {
   margin-left: 8px;
 }
+
+/* Add download source: a MEGA folder's .var files to pick from. */
+.src-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.src-folder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--lib-text-2);
+}
+
+.src-folder-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.src-folder-list .hub-dl-row.is-other .hub-dl-name {
+  color: var(--lib-text-3);
+}

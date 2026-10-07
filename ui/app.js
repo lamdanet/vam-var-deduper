@@ -4868,7 +4868,118 @@ function setupOffload() {
 // Dependencies and the Hub fallback all use it. The Hub stays the first
 // choice; among stored links one for the exact version asked for wins.
 
-const SRC = { packageId: "", onSaved: null, token: 0, inspectTimer: null, info: null, fileAuto: true };
+const SRC = {
+  packageId: "",
+  onSaved: null,
+  token: 0,
+  inspectTimer: null,
+  info: null,
+  fileAuto: true,
+  // A MEGA folder link's .var files, and the one picked (its own link is saved).
+  folderFiles: null,
+  folderPick: -1,
+};
+
+// The numeric version of a package id or file name (null for .latest etc.).
+function srcVersion(id) {
+  const m = /\.(\d+)(?:\.var)?$/i.exec(String(id || "").trim());
+  return m ? Number(m[1]) : null;
+}
+
+// The folder file to preselect: the asked-for package — its exact version if
+// one was asked for, else the newest — or nothing.
+function srcBestFolderPick(files) {
+  const family = srcFamily(SRC.packageId).toLowerCase();
+  const want = srcVersion(SRC.packageId);
+  let best = -1;
+  files.forEach((f, i) => {
+    if (srcFamily(f.name).toLowerCase() !== family) return;
+    const v = srcVersion(f.name);
+    if (want != null && v === want) best = i;
+    else if (want == null && (best < 0 || (v ?? -1) > (srcVersion(files[best].name) ?? -1))) best = i;
+  });
+  return best;
+}
+
+function srcRenderFolder() {
+  const host = $("src-folder");
+  if (!host) return;
+  const files = SRC.folderFiles;
+  host.classList.toggle("hidden", !files?.length);
+  if (!files?.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const family = srcFamily(SRC.packageId).toLowerCase();
+  // This package's files first, then the rest in folder order.
+  const order = files
+    .map((f, i) => ({ f, i, match: srcFamily(f.name).toLowerCase() === family }))
+    .sort((a, b) => Number(b.match) - Number(a.match) || a.i - b.i);
+  const matches = order.filter((o) => o.match).length;
+  host.innerHTML = `
+    <div class="src-folder-head">
+      <span>${files.length} .var file${files.length === 1 ? "" : "s"} in this folder${
+        matches ? ` · ${matches} of this package` : " · none of this package"
+      }</span>
+      <button type="button" class="lib-small-link" id="src-save-all" title="Save every .var in the folder as a download source for its own package">
+        <span class="material-symbols-outlined">library_add</span>Save all ${files.length}</button>
+    </div>
+    <div class="hub-dl-list src-folder-list">${order
+      .map(
+        ({ f, i, match }) => `<label class="check-row hub-dl-row${match ? "" : " is-other"}">
+          <input type="radio" name="src-folder-pick" value="${i}"${SRC.folderPick === i ? " checked" : ""} />
+          <span class="hub-dl-main">
+            <span class="hub-dl-name" title="${escapeAttribute(f.name)}">${escapeHtml(f.name)}</span>
+            ${f.path ? `<span class="hub-dl-meta">${escapeHtml(f.path)}</span>` : ""}
+          </span>
+          <span class="hub-dl-size">${f.size ? escapeHtml(formatBytesLocal(f.size)) : ""}</span>
+        </label>`,
+      )
+      .join("")}</div>`;
+}
+
+function srcPickFolderFile(i) {
+  const f = SRC.folderFiles?.[i];
+  if (!f) return;
+  SRC.folderPick = i;
+  const file = $("src-file");
+  if (file && (SRC.fileAuto || !file.value.trim())) {
+    file.value = f.name;
+    SRC.fileAuto = true;
+  }
+}
+
+// Saves every .var of the folder as a source for its own package — one
+// folder often holds a creator's whole collection.
+async function srcSaveAllFolder() {
+  const files = SRC.folderFiles ?? [];
+  if (!files.length) return;
+  const btn = $("src-save-all");
+  if (btn) btn.disabled = true;
+  let saved = 0;
+  const failed = [];
+  let mine = null;
+  for (const f of files) {
+    try {
+      const row = await invoke("add_download_link", { filename: f.name, url: f.url });
+      if (f.size && !row.size) row.size = f.size;
+      saved += 1;
+      if (SRC.folderPick >= 0 && files[SRC.folderPick] === f) mine = row;
+    } catch (e) {
+      failed.push(`${f.name}: ${String(e?.message || e)}`);
+    }
+  }
+  for (const msg of failed) addLog(`Download sources: ${msg}`);
+  showToast(
+    `Saved ${saved} MEGA source${saved === 1 ? "" : "s"}${failed.length ? ` — ${failed.length} skipped, see Console` : ""}`,
+    failed.length ? "error" : "success",
+    failed.length ? 6000 : 3200,
+  );
+  if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
+  const done = SRC.onSaved;
+  sourceClose();
+  if (done && mine) done(mine);
+}
 
 // The family part of a package id or file name: Creator.Package.3(.var),
 // .latest and .minN all give Creator.Package.
@@ -4929,11 +5040,17 @@ function srcRenderInfo() {
   if (!el) return;
   el.classList.toggle("is-error", Boolean(info?.error));
   if (!info) {
-    el.textContent = "Pixeldrain and MEGA file links download inside the app; MediaFire links open in your browser.";
+    el.textContent = "Pixeldrain and MEGA links (files or folders) download inside the app; MediaFire links open in your browser.";
     return;
   }
   if (info.checking) {
     el.textContent = "Checking the link…";
+    return;
+  }
+  if (info.folder_files) {
+    el.textContent = info.error
+      ? `MEGA folder — ${info.error}`
+      : "MEGA folder — pick the .var this source is for, or save them all.";
     return;
   }
   const parts = [srcHostLabel(info.host)];
@@ -4948,6 +5065,9 @@ function srcInspectSoon() {
   clearTimeout(SRC.inspectTimer);
   const url = ($("src-url")?.value || "").trim();
   srcSetError("");
+  SRC.folderFiles = null;
+  SRC.folderPick = -1;
+  srcRenderFolder();
   if (!url) {
     SRC.info = null;
     srcRenderInfo();
@@ -4970,7 +5090,14 @@ function srcInspectSoon() {
       file.value = info.filename;
       SRC.fileAuto = true;
     }
+    if (info?.folder_files?.length) {
+      SRC.folderFiles = info.folder_files;
+      SRC.folderPick = -1;
+      const best = srcBestFolderPick(SRC.folderFiles);
+      if (best >= 0) srcPickFolderFile(best);
+    }
     srcRenderInfo();
+    srcRenderFolder();
   }, 450);
 }
 
@@ -4983,6 +5110,9 @@ async function sourceOpen({ packageId, fileName = "", onSaved = null }) {
   SRC.packageId = id;
   SRC.onSaved = onSaved;
   SRC.info = null;
+  SRC.folderFiles = null;
+  SRC.folderPick = -1;
+  srcRenderFolder();
   SRC.token += 1;
   const versioned = /\.\d+$/.test(id);
   vpSetText(
@@ -5011,8 +5141,11 @@ function sourceClose() {
 }
 
 async function sourceSave() {
-  const url = ($("src-url")?.value || "").trim();
+  const picked = SRC.folderFiles ? SRC.folderFiles[SRC.folderPick] : null;
+  // From a MEGA folder, the picked file's own link is what gets saved.
+  const url = picked ? picked.url : ($("src-url")?.value || "").trim();
   let filename = ($("src-file")?.value || "").trim();
+  if (SRC.folderFiles && !picked) return srcSetError("Pick the .var in the folder this source is for.");
   if (!url) return srcSetError("Paste the link first.");
   if (!filename) return srcSetError("Name the package file the link downloads.");
   if (!/\.var$/i.test(filename)) filename += ".var";
@@ -5021,17 +5154,17 @@ async function sourceSave() {
   if (want && got !== want) {
     return srcSetError(`${filename} is a different package — expected ${srcFamily(SRC.packageId)}.<version>.var`);
   }
-  if (SRC.info?.filename && SRC.info.filename.toLowerCase() !== filename.toLowerCase()) {
-    const ok = await showAppConfirm(
-      `The link serves ${SRC.info.filename}, not ${filename}. Save it as ${filename} anyway?`,
-    );
+  const serves = picked ? picked.name : SRC.info?.filename;
+  if (serves && serves.toLowerCase() !== filename.toLowerCase()) {
+    const ok = await showAppConfirm(`The link serves ${serves}, not ${filename}. Save it as ${filename} anyway?`);
     if (!ok) return;
   }
   const save = $("src-save");
   if (save) save.disabled = true;
   try {
     const row = await invoke("add_download_link", { filename, url });
-    if (SRC.info?.size && !row.size) row.size = SRC.info.size;
+    const size = picked ? picked.size : SRC.info?.size;
+    if (size && !row.size) row.size = size;
     showToast(`Saved a ${srcHostLabel(row.host)} source for ${row.filename}`, "success");
     if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
     const done = SRC.onSaved;
@@ -5053,6 +5186,12 @@ function setupSources() {
   $("src-cancel")?.addEventListener("click", sourceClose);
   $("src-save")?.addEventListener("click", () => sourceSave().catch((e) => srcSetError(String(e))));
   $("src-url")?.addEventListener("input", srcInspectSoon);
+  $("src-folder")?.addEventListener("change", (e) => {
+    if (e.target?.name === "src-folder-pick") srcPickFolderFile(Number(e.target.value));
+  });
+  $("src-folder")?.addEventListener("click", (e) => {
+    if (e.target.closest?.("#src-save-all")) srcSaveAllFolder().catch((err) => srcSetError(String(err)));
+  });
   $("src-file")?.addEventListener("input", () => {
     SRC.fileAuto = false;
     srcSetError("");
