@@ -2,9 +2,10 @@
 //! password-protected, as shared on forums) whose `.var` files are each saved
 //! as a source with their path inside it.
 //!
-//! Listing reads only the zip's central directory through HTTP range requests
-//! (Pixeldrain and most hosts support them), so a 2 GB archive is listed in a
-//! few small requests. Extracting downloads the whole zip once into a session
+//! Listing reads only the zip's central directory through range requests —
+//! HTTP `Range` (Pixeldrain and most hosts), or MEGA's `<address>/<a>-<b>`
+//! decrypted from that offset — so a 2 GB archive is listed in a few small
+//! requests. Extracting downloads the whole zip once into a session
 //! cache, so several packages from one archive cost one download.
 
 use std::collections::HashMap;
@@ -49,13 +50,16 @@ pub(crate) const UNSUPPORTED_ARCHIVE: &str =
 const BLOCK: u64 = 256 * 1024;
 
 /// `Read + Seek` over a remote file, fetching 256 KB blocks on demand with
-/// `Range` requests. Enough for the zip crate to read an archive's directory.
+/// range requests. Enough for the zip crate to read an archive's directory.
 struct HttpRangeReader {
     client: reqwest::blocking::Client,
     url: String,
     len: u64,
     pos: u64,
     blocks: HashMap<u64, Vec<u8>>,
+    /// A MEGA file: `url` is its temporary address, ranges are requested as
+    /// `<url>/<a>-<b>` and decrypted with this key.
+    mega: Option<crate::mega::FileKey>,
 }
 
 impl HttpRangeReader {
@@ -80,23 +84,50 @@ impl HttpRangeReader {
             .and_then(|v| v.rsplit('/').next())
             .and_then(|n| n.trim().parse::<u64>().ok())
             .ok_or_else(|| "the host didn't say how big the archive is".to_string())?;
-        Ok(Self { client, url: url.to_string(), len, pos: 0, blocks: HashMap::new() })
+        Ok(Self { client, url: url.to_string(), len, pos: 0, blocks: HashMap::new(), mega: None })
+    }
+
+    /// A MEGA file, through its temporary address and key.
+    fn open_mega(m: crate::mega::MegaDownload) -> Result<Self, String> {
+        let len = m.size.ok_or_else(|| "MEGA didn't say how big the archive is".to_string())?;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| e.to_string())?;
+        Ok(Self { client, url: m.address, len, pos: 0, blocks: HashMap::new(), mega: Some(m.key) })
     }
 
     fn block(&mut self, index: u64) -> io::Result<&Vec<u8>> {
         if !self.blocks.contains_key(&index) {
             let start = index * BLOCK;
             let end = ((index + 1) * BLOCK).min(self.len) - 1;
-            let resp = self
-                .client
-                .get(&self.url)
-                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
-                .send()
-                .map_err(io::Error::other)?;
-            if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                return Err(io::Error::other(format!("range request returned HTTP {}", resp.status())));
-            }
-            let bytes = resp.bytes().map_err(io::Error::other)?.to_vec();
+            let bytes = match self.mega {
+                Some(key) => {
+                    let resp = self
+                        .client
+                        .get(format!("{}/{start}-{end}", self.url))
+                        .send()
+                        .map_err(io::Error::other)?;
+                    if !resp.status().is_success() {
+                        return Err(io::Error::other(format!("MEGA range request returned HTTP {}", resp.status())));
+                    }
+                    let mut bytes = resp.bytes().map_err(io::Error::other)?.to_vec();
+                    key.decryptor_at(start).apply(&mut bytes);
+                    bytes
+                }
+                None => {
+                    let resp = self
+                        .client
+                        .get(&self.url)
+                        .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+                        .send()
+                        .map_err(io::Error::other)?;
+                    if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                        return Err(io::Error::other(format!("range request returned HTTP {}", resp.status())));
+                    }
+                    resp.bytes().map_err(io::Error::other)?.to_vec()
+                }
+            };
             self.blocks.insert(index, bytes);
         }
         Ok(&self.blocks[&index])
@@ -154,13 +185,16 @@ fn list_entries<R: Read + Seek>(reader: R) -> Result<Vec<ArchiveEntry>, String> 
 }
 
 /// The files in a remote zip. Reads just its directory through range requests
-/// when the host allows; otherwise (and for MEGA, whose bytes are encrypted)
-/// downloads it into the cache and lists that.
+/// when the host allows (MEGA always does); otherwise downloads it into the
+/// cache and lists that.
 pub(crate) fn list_remote(url: &str) -> Result<Vec<ArchiveEntry>, String> {
-    if !crate::mega::is_mega(url) {
-        if let Ok(reader) = HttpRangeReader::open(url) {
-            return list_entries(reader);
-        }
+    let reader = if crate::mega::is_mega(url) {
+        crate::mega::open_download(url).and_then(HttpRangeReader::open_mega)
+    } else {
+        HttpRangeReader::open(url)
+    };
+    if let Ok(reader) = reader {
+        return list_entries(reader);
     }
     let cancel = AtomicBool::new(false);
     let path = ensure_cached(url, &cancel, &mut |_, _| {})?;
@@ -292,4 +326,9 @@ pub(crate) fn list_local_for_test(path: &Path) -> Result<Vec<ArchiveEntry>, Stri
 #[cfg(test)]
 pub(crate) fn list_http_for_test(url: &str) -> Result<Vec<ArchiveEntry>, String> {
     list_entries(HttpRangeReader::open(url)?)
+}
+
+#[cfg(test)]
+pub(crate) fn list_mega_for_test(m: crate::mega::MegaDownload) -> Result<Vec<ArchiveEntry>, String> {
+    list_entries(HttpRangeReader::open_mega(m)?)
 }

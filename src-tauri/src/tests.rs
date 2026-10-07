@@ -6661,3 +6661,17 @@ fn download_task_extracts_a_var_from_a_password_protected_zip_source() {
     assert_eq!(fs::read(dest.join("Acid.Look.3.var")).unwrap(), var.into_inner());
     fs::remove_dir_all(&dest).ok();
 }
+
+#[test]
+fn mega_zip_is_listed_through_decrypted_ranges() {
+    let zip = forum_zip();
+    let key = crate::mega::testing::file_key(core::array::from_fn(|i| (i * 5 + 1) as u8));
+    let mut encrypted = zip.clone();
+    key.decryptor().apply(&mut encrypted);
+    let address = serve_ranges(encrypted);
+    let m = crate::mega::testing::download(address, key, zip.len() as u64);
+    let entries = crate::archives::list_mega_for_test(m).expect("listing");
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["Acid.Look.3.var", "deps/Bee.Hair.2.var", "preview.png"]);
+    assert!(entries[0].encrypted);
+}

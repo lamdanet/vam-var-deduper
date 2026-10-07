@@ -240,6 +240,9 @@ pub(crate) struct FoundVar {
     pub(crate) encrypted: bool,
     /// The pasted link it was found through.
     pub(crate) origin: String,
+    /// Inside a MEGA folder: the subfolders the file sits in.
+    #[serde(default)]
+    pub(crate) folder_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -338,6 +341,11 @@ impl Scan<'_> {
     /// One file a link delivers: a .var is a find; a .zip is opened and its
     /// .var members are finds; anything else is skipped.
     fn file(&mut self, name: &str, size: Option<u64>, url: &str, host: &str) {
+        self.file_in(name, size, url, host, None);
+    }
+
+    fn file_in(&mut self, name: &str, size: Option<u64>, url: &str, host: &str, folder_path: Option<&str>) {
+        let folder_path = folder_path.filter(|p| !p.is_empty()).map(str::to_string);
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".var") {
             self.out.found.push(FoundVar {
@@ -346,6 +354,7 @@ impl Scan<'_> {
                 host: host.to_string(),
                 size,
                 origin: self.origin.clone(),
+                folder_path,
                 ..Default::default()
             });
             return;
@@ -367,6 +376,7 @@ impl Scan<'_> {
                             archive_name: Some(name.to_string()),
                             encrypted: e.encrypted,
                             origin: self.origin.clone(),
+                            folder_path: folder_path.clone(),
                         });
                     }
                     if self.out.found.len() == before {
@@ -413,7 +423,7 @@ impl Scan<'_> {
                 Ok(crate::mega::MegaRef::Folder { .. }) => match crate::mega::list_folder(&url, &[".var", ".zip", ".7z", ".rar"]) {
                     Ok(files) => {
                         for f in files {
-                            self.file(&f.name, f.size, &f.url, host);
+                            self.file_in(&f.name, f.size, &f.url, host, Some(&f.path));
                         }
                     }
                     Err(e) => self.problem(e),
