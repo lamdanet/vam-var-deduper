@@ -1235,6 +1235,7 @@ function dlItemInner(job) {
     job.host === "hub" ? "Hub"
     : job.host === "pixeldrain" ? "Pixeldrain"
     : job.host === "mediafire" ? "MediaFire"
+    : job.host === "mega" ? "MEGA"
     : "";
   let body = "";
   let actions = "";
@@ -3626,7 +3627,7 @@ function libRenderMissing() {
             <td>${users}${more}</td>
             <td>${pill}</td>
             <td><button type="button" class="lib-small-link" data-lib-add-source="${escapeAttribute(id)}"
-                        title="Add a Pixeldrain, MediaFire or direct download link for it">
+                        title="Add a Pixeldrain, MEGA, MediaFire or direct download link for it">
                   <span class="material-symbols-outlined">add_link</span>Add link</button></td>
           </tr>`;
         })
@@ -4879,7 +4880,15 @@ function srcFamily(id) {
 }
 
 function srcHostLabel(host) {
-  return host === "pixeldrain" ? "Pixeldrain" : host === "mediafire" ? "MediaFire" : host === "hub" ? "VaM Hub" : "Link";
+  return host === "pixeldrain"
+    ? "Pixeldrain"
+    : host === "mediafire"
+      ? "MediaFire"
+      : host === "mega"
+        ? "MEGA"
+        : host === "hub"
+          ? "VaM Hub"
+          : "Link";
 }
 
 function srcSetError(msg) {
@@ -4920,7 +4929,7 @@ function srcRenderInfo() {
   if (!el) return;
   el.classList.toggle("is-error", Boolean(info?.error));
   if (!info) {
-    el.textContent = "Pixeldrain links download inside the app; MediaFire links open in your browser.";
+    el.textContent = "Pixeldrain and MEGA file links download inside the app; MediaFire links open in your browser.";
     return;
   }
   if (info.checking) {
@@ -8339,7 +8348,7 @@ function depRenderList() {
       } else if (it.status === "missing" && !it.url) {
         // Neither the Hub nor a stored mirror link resolved a source for it:
         // offer to add one.
-        action = `<span class="dep-scan-act-note">No source</span><button class="ghost-button dep-scan-action" type="button" data-dep-add-source="${escapeAttribute(it.pkg)}" title="Add a Pixeldrain, MediaFire or direct link for it">Add link</button>`;
+        action = `<span class="dep-scan-act-note">No source</span><button class="ghost-button dep-scan-action" type="button" data-dep-add-source="${escapeAttribute(it.pkg)}" title="Add a Pixeldrain, MEGA, MediaFire or direct link for it">Add link</button>`;
       }
       return `<div class="dep-scan-row" data-dep-idx="${i}" data-dep-list="scan">
   ${depCardHtml("scan", it)}
@@ -9877,6 +9886,7 @@ function renderVarDetailsAvailability() {
     av.host === "hub" ? "Hub"
     : av.host === "pixeldrain" ? "Pixeldrain"
     : av.host === "mediafire" ? "MediaFire"
+    : av.host === "mega" ? "MEGA"
     : (av.host || "");
 
   let icon = "cloud_download";
