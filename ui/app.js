@@ -1012,8 +1012,9 @@ function nestDestByCreator(destDir, packageId) {
   return destDir.replace(/[\\/]+$/, "") + sep + creator;
 }
 
-// Enqueue a download. opts: { packageId, url, filename, host, destDir, label?, onDone? }.
+// Enqueue a download. opts: { packageId, url, filename, host, destDir, label?, onDone?, nest? }.
 // onDone(status, { destDir, filename, localPath }) fires when the job settles.
+// nest: false saves into destDir as given (no per-creator subfolder).
 function queueDownload(opts) {
   const o = opts || {};
   if (!o.url || !o.destDir) {
@@ -1033,7 +1034,7 @@ function queueDownload(opts) {
     filename: o.filename || "",
     url: o.url,
     host: o.host || "",
-    destDir: nestDestByCreator(o.destDir, o.packageId || o.filename || ""),
+    destDir: o.nest === false ? o.destDir : nestDestByCreator(o.destDir, o.packageId || o.filename || ""),
     status: "queued",
     percent: 0,
     detail: "",
@@ -13853,16 +13854,20 @@ function syncReplaceOptions() {
 }
 
 // ============================================================
-// Hub — browse and install VaM Hub resources (after VaM Backstage's Hub)
+// Hub — browse and download VaM Hub resources (after VaM Backstage's Hub)
 //
 // The Hub JSON API (hub_api → getInfo / getResources / getResourceDetail /
 // findPackages) drives a filter bar, an infinitely-scrolling card grid and a
-// details panel. Install resolves a resource's own .var files and its missing
-// dependencies the way Backstage does (detail.dependencies, then
-// findPackages) and hands every file to the Downloads queue, which saves into
+// details panel. Download opens a picker (the resource's own .var ticked, its
+// dependencies to tick one by one or all at once); the picked dependencies
+// are resolved the way Backstage does (detail.dependencies, then
+// findPackages) and every file goes to the Downloads queue, which saves into
 // AddonPackages. "Installed" is decided against the .var files actually in
-// AddonPackages (+ Settings' extra folders). Resource pages (description,
-// reviews, …) open in the system browser: there is no embedded Hub browser.
+// AddonPackages (+ Settings' extra folders). A resource's files are saved in
+// <downloads>\<Creator>\ and its dependencies in <downloads>\<Creator>\deps\.
+// Resource pages (description, reviews, …) open in the Hub page, an embedded
+// browser (see "Hub page" below); .var downloads clicked there come back to the
+// Downloads queue too.
 // ============================================================
 
 const HUB_PER_PAGE = 60;
@@ -14011,6 +14016,11 @@ function hubExternalLabel(url) {
 function hubOpenUrl(url) {
   if (!url || !invoke) return;
   invoke("open_url", { url }).catch((e) => addLog(`Open link: ${String(e)}`));
+}
+
+function hubTitleOf(rid) {
+  const key = String(rid);
+  return hubStr(HUB.details.get(key)?.title || HUB.rows.get(key)?.title || HUB.wishlist.get(key)?.snapshot?.title);
 }
 
 function hubToast(message, kind = "info") {
@@ -14164,33 +14174,38 @@ function hubActionHtml(r, { big = false, compact = false } = {}) {
   const cls = `hub-btn${big ? " is-big" : ""}${compact ? " is-compact" : ""}`;
   switch (st.kind) {
     case "downloading":
-      return `<div class="${cls} hub-btn-progress" title="Downloading">
+    {
+      const bar = `<div class="${cls} hub-btn-progress" title="Downloading">
           <span class="hub-btn-fill" style="width:${Math.max(2, st.pct)}%"></span>
           <span class="hub-btn-label">${compact ? `${st.pct}%` : `Downloading ${st.done}/${st.total} · ${st.pct}%`}</span>
         </div>`;
+      return big
+        ? `<div class="hub-btn-row">${bar}<button type="button" class="lib-btn lib-btn-outline hub-btn-cancel" data-hub-act="cancel" data-hub-rid="${rid}" title="Cancel this package's downloads (finished files are kept)">
+            <span class="material-symbols-outlined">close</span>Cancel</button></div>`
+        : bar;
+    }
     case "queued":
       return `<div class="${cls} hub-btn-queued"><span class="material-symbols-outlined">schedule</span>${compact ? "" : "Queued…"}</div>`;
     case "installed":
       return `<button type="button" class="${cls} hub-btn-installed" data-hub-act="library" data-hub-rid="${rid}">
           <span class="material-symbols-outlined">check_circle</span><span class="hub-btn-text">${compact ? "View" : "View in Library"}</span></button>`;
     case "update":
-      return `<button type="button" class="${cls} hub-btn-install" data-hub-act="install" data-hub-rid="${rid}" title="Another version is installed — download this one">
+      return `<button type="button" class="${cls} hub-btn-install" data-hub-act="download" data-hub-rid="${rid}" title="Another version is installed — download this one">
           <span class="material-symbols-outlined">upgrade</span><span class="hub-btn-text">Update</span></button>`;
     case "external":
       return `<button type="button" class="${cls} hub-btn-external" data-hub-act="external" data-hub-rid="${rid}">
           <span class="material-symbols-outlined">open_in_new</span><span class="hub-btn-text">${escapeHtml(compact ? "Get" : hubExternalLabel(st.url))}</span></button>`;
     case "failed":
-      return `<button type="button" class="${cls} hub-btn-failed" data-hub-act="install" data-hub-rid="${rid}">
+      return `<button type="button" class="${cls} hub-btn-failed" data-hub-act="download" data-hub-rid="${rid}">
           <span class="material-symbols-outlined">refresh</span><span class="hub-btn-text">Retry</span></button>`;
     case "hub-only":
       return `<button type="button" class="${cls} hub-btn-external" data-hub-act="open" data-hub-rid="${rid}">
           <span class="material-symbols-outlined">open_in_new</span><span class="hub-btn-text">${compact ? "Hub" : "Open on Hub"}</span></button>`;
     default: {
       const detail = HUB.details.get(String(r.resource_id));
-      const size = big && detail ? hubInstallSize(detail) : 0;
-      const many = big && detail ? hubDependencyList(detail).some((d) => !d.installed) : false;
-      return `<button type="button" class="${cls} hub-btn-install" data-hub-act="install" data-hub-rid="${rid}">
-          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">${many ? "Install All" : "Install"}${
+      const size = big && detail ? hubFilesSize(detail) : 0;
+      return `<button type="button" class="${cls} hub-btn-install" data-hub-act="download" data-hub-rid="${rid}">
+          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">Download${
             size ? ` · ${escapeHtml(formatBytesLocal(size))}` : ""
           }</span></button>`;
     }
@@ -14412,27 +14427,45 @@ function hubDependencyList(detail) {
   return out;
 }
 
-function hubInstallSize(detail) {
-  const files = (detail?.hubFiles || []).reduce((sum, f) => sum + hubNum(f.file_size), 0);
-  const deps = hubDependencyList(detail)
-    .filter((d) => !d.installed)
-    .reduce((sum, d) => sum + d.size, 0);
-  return files + deps;
+function hubFilesSize(detail) {
+  return (detail?.hubFiles || []).reduce((sum, f) => sum + hubNum(f.file_size), 0);
 }
 
-function hubQueueFile(rid, { url, filename, label, host = "hub", depRef = null }, destDir) {
+function hubJoinPath(dir, name) {
+  const sep = dir.includes("\\") ? "\\" : "/";
+  return dir.replace(/[\\/]+$/, "") + sep + name;
+}
+
+function hubSafeFolder(name) {
+  return hubStr(name).trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/[. ]+$/, "");
+}
+
+// <downloads>\<Creator> for a resource: the creator part of its package file
+// name (what VaM sorts by), else the Hub author.
+function hubResourceDir(rid, baseDir) {
+  const detail = HUB.details.get(String(rid)) || HUB.rows.get(String(rid));
+  const file = (detail?.hubFiles || []).map((f) => hubStem(f.filename)).find(Boolean) || "";
+  const creator = hubSafeFolder(deriveCreatorFromPackageId(file) || detail?.username || "");
+  return creator ? hubJoinPath(baseDir, creator) : baseDir;
+}
+
+// The resource's own files go to <downloads>\<Creator>, its dependencies to
+// <downloads>\<Creator>\deps.
+function hubQueueFile(rid, { url, filename, label, host = "hub", depRef = null }, baseDir) {
   const name = hubEnsureVar(filename);
   const stem = hubStem(name);
   if (!url || !name) return null;
   if (HUB.local.ids.has(stem.toLowerCase())) return null;
   const inst = HUB.installs.get(String(rid));
   if (depRef && inst) inst.depJobs.set(depRef, stem.toLowerCase());
+  const dir = hubResourceDir(rid, baseDir);
   const id = queueDownload({
     packageId: stem,
     url,
     filename: name,
     host,
-    destDir,
+    destDir: depRef ? hubJoinPath(dir, "deps") : dir,
+    nest: false,
     label: label || stem,
     onProgress: () => hubOnJobProgress(rid),
     onDone: (status) => hubOnJobDone(rid, stem, status),
@@ -14458,21 +14491,27 @@ function hubOnJobDone(rid, stem, status) {
   const jobs = hubInstallJobs(rid);
   if (jobs.length && jobs.every((j) => !downloadJobActive(j))) {
     const failed = jobs.filter((j) => j.status === "failed").length;
-    const title = HUB.rows.get(String(rid))?.title || HUB.details.get(String(rid))?.title || "Package";
-    hubToast(
-      failed ? `${title}: ${jobs.length - failed} downloaded, ${failed} failed` : `${title} installed`,
-      failed ? "error" : "success",
-    );
+    const cancelled = jobs.filter((j) => j.status === "cancelled").length;
+    const done = jobs.length - failed - cancelled;
+    const title = hubTitleOf(rid) || "Package";
+    if (!failed && !cancelled) hubToast(`${title} downloaded`, "success");
+    else {
+      const parts = [`${done} downloaded`];
+      if (failed) parts.push(`${failed} failed`);
+      if (cancelled) parts.push(`${cancelled} cancelled`);
+      hubToast(`${title}: ${parts.join(", ")}`, failed ? "error" : "info");
+    }
     hubLoadLocal(true);
     // The library listing scans AddonPackages; pick up the new files.
     vpRefreshAfterMutation().catch(() => {});
   }
 }
 
-// Install a resource: its own files, then every dependency that isn't on disk
-// (resolved through detail.dependencies, then findPackages), all through the
-// Downloads queue into AddonPackages.
-async function hubInstall(rid, { onlyRef = null } = {}) {
+// Download part of a resource through the Downloads queue into AddonPackages:
+// `files` — its own .var file names (null = all of them) — and `depRefs`, the
+// dependencies to fetch (resolved through detail.dependencies, then
+// findPackages). Dependencies already on disk are skipped.
+async function hubDownload(rid, { files = null, depRefs = [] } = {}) {
   if (!invoke) return;
   const key = String(rid);
   const existing = HUB.installs.get(key);
@@ -14489,14 +14528,17 @@ async function hubInstall(rid, { onlyRef = null } = {}) {
     const detail = await hubGetDetail(key);
     const title = hubStr(detail?.title) || `Resource ${key}`;
     let queued = 0;
-    const deps = hubDependencyList(detail);
+    const wantDeps = new Set(depRefs);
+    const deps = hubDependencyList(detail).filter((d) => wantDeps.has(d.ref));
     const lookups = new Map(); // findPackages name -> dependency ref
 
-    if (!onlyRef) {
-      const files = Array.isArray(detail?.hubFiles) ? detail.hubFiles : [];
-      if (!files.length) throw new Error("No downloadable files");
+    const wantFiles = files == null ? null : new Set(files.map((f) => hubStr(f).toLowerCase()));
+    if (wantFiles === null || wantFiles.size) {
+      const all = Array.isArray(detail?.hubFiles) ? detail.hubFiles : [];
+      const picked = all.filter((f) => wantFiles === null || wantFiles.has(hubStr(f.filename).toLowerCase()));
+      if (!picked.length) throw new Error("No downloadable files");
       let anyUrl = false;
-      for (const f of files) {
+      for (const f of picked) {
         const url = hubFileUrl(f);
         if (!url) continue;
         anyUrl = true;
@@ -14506,11 +14548,7 @@ async function hubInstall(rid, { onlyRef = null } = {}) {
     }
 
     for (const d of deps) {
-      if (onlyRef && d.ref !== onlyRef) continue;
       if (d.installed) continue;
-      // Any version on disk satisfies a dependency for VaM's purposes (it falls
-      // back), and keeps built-ins from being re-downloaded.
-      if (!onlyRef && HUB.local.bases.has(hubBaseOf(d.ref).toLowerCase())) continue;
       if (d.concrete && d.url) {
         if (hubQueueFile(key, { url: d.url, filename: d.concrete, label: d.concrete, depRef: d.ref }, destDir) != null) {
           queued += 1;
@@ -14551,10 +14589,10 @@ async function hubInstall(rid, { onlyRef = null } = {}) {
         "error",
       );
     }
-    if (!queued && !unresolved.length) hubToast(`${title}: everything is already installed`, "success");
-    else if (queued) hubToast(`Installing ${title} — ${queued} file${queued === 1 ? "" : "s"} queued`, "info");
+    if (!queued && !unresolved.length) hubToast(`${title}: already downloaded`, "success");
+    else if (queued) hubToast(`Downloading ${title} — ${queued} file${queued === 1 ? "" : "s"} queued`, "info");
   } catch (e) {
-    hubToast(`Install failed: ${String(e?.message || e)}`, "error");
+    hubToast(`Download failed: ${String(e?.message || e)}`, "error");
   } finally {
     inst.resolving = false;
     hubSyncCards();
@@ -14567,6 +14605,263 @@ function hubShowInLibrary(r) {
   const stem = st.stem || hubStem(r?.hubFiles?.[0]?.filename);
   document.querySelector('[data-sidebar-link="var-packages"]')?.click();
   if (stem) setTimeout(() => libRevealPackage("", stem), 50);
+}
+
+// Cancel every download still running or queued for a resource.
+function hubCancelDownloads(rid) {
+  const active = hubInstallJobs(rid).filter(downloadJobActive);
+  for (const job of active.filter((j) => j.status === "queued")) cancelDownload(job.id);
+  for (const job of active.filter((j) => j.status === "downloading")) cancelDownload(job.id);
+}
+
+// ---- Download picker -------------------------------------------------------------------
+// Every Download button opens this: the resource's own .var files start ticked
+// and its dependencies unticked — tick them one by one, or all the missing ones
+// at once. Dependencies with another version on disk (VaM falls back to it)
+// can be ticked but aren't part of "Select all".
+
+const HUB_DL = { rid: null, files: [], deps: [], token: 0 };
+
+function hubDlActiveJob(stem) {
+  const lc = hubStr(stem).toLowerCase();
+  if (!lc) return null;
+  return state.downloads.find((j) => j.packageId && j.packageId.toLowerCase() === lc && downloadJobActive(j)) || null;
+}
+
+function hubDlSelectable(item) {
+  return item.available && !item.installed && !item.busy;
+}
+
+function hubDlMissingDeps() {
+  return HUB_DL.deps.filter((d) => hubDlSelectable(d) && d.resolution !== "fallback");
+}
+
+function hubDlRenderHead(r) {
+  const title = hubStr(r?.title) || `Resource ${HUB_DL.rid}`;
+  $("hub-dl-title").textContent = title;
+  $("hub-dl-title").title = title;
+  const sub = [hubStr(r?.username), hubStr(r?.type), hubStr(r?.version_string) && `v${hubStr(r.version_string)}`].filter(Boolean);
+  $("hub-dl-sub").textContent = sub.join(" · ");
+  $("hub-dl-thumb").innerHTML = r?.resource_id ? `${hubThumbHtml(r, "hub-dl-thumb-img")}</div>` : "";
+}
+
+function hubDlRowHtml(kind, i, item, name, meta, chip) {
+  const enabled = hubDlSelectable(item);
+  return `<label class="check-row hub-dl-row${enabled ? "" : " is-off"}">
+      <input type="checkbox" data-hub-dl="${kind}" data-hub-dl-idx="${i}"${item.checked ? " checked" : ""}${enabled ? "" : " disabled"} />
+      <span class="hub-dl-main">
+        <span class="hub-dl-name" title="${escapeAttribute(name)}">${escapeHtml(name)}</span>
+        ${meta ? `<span class="hub-dl-meta">${escapeHtml(meta)}</span>` : ""}
+      </span>
+      <span class="hub-dl-size">${item.size ? escapeHtml(formatBytesLocal(item.size)) : ""}</span>
+      <span class="hub-dl-chip">${chip}</span>
+    </label>`;
+}
+
+function hubDlChip(item) {
+  if (item.installed) return `<span class="lib-pill lib-pill-ok">Installed</span>`;
+  if (item.busy) return `<span class="lib-pill lib-pill-info">Downloading</span>`;
+  if (!item.available) return `<span class="lib-pill lib-pill-err">No source</span>`;
+  if (item.resolution === "fallback") {
+    return `<span class="lib-pill lib-pill-warn" title="Another version is installed and VaM will use it">Other version</span>`;
+  }
+  return item.resolution === "missing" ? `<span class="lib-pill lib-pill-err">Missing</span>` : "";
+}
+
+function hubDlRenderBody() {
+  const body = $("hub-dl-body");
+  if (!body) return;
+  const fileRows = HUB_DL.files.map((f, i) => hubDlRowHtml("file", i, f, f.name, "", hubDlChip(f))).join("");
+  const depRows = HUB_DL.deps
+    .map((d, i) => {
+      const meta = [
+        d.concrete && d.concrete.toLowerCase() !== hubEnsureVar(d.ref).toLowerCase() ? `→ ${d.concrete}` : "",
+        d.username,
+        d.license,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return hubDlRowHtml("dep", i, d, d.ref, meta, hubDlChip(d));
+    })
+    .join("");
+  const missing = hubDlMissingDeps().length;
+  body.innerHTML = `
+    <div class="hub-dl-group">
+      <div class="hub-dl-group-head"><span class="hub-dl-group-title">Package <small>(${HUB_DL.files.length})</small></span></div>
+      ${fileRows ? `<div class="hub-dl-list">${fileRows}</div>` : `<p class="hub-dl-empty">The Hub lists no downloadable files for this resource.</p>`}
+    </div>
+    <div class="hub-dl-group">
+      <div class="hub-dl-group-head">
+        <span class="hub-dl-group-title">Dependencies <small>(${HUB_DL.deps.length})</small></span>
+        ${
+          missing
+            ? `<label class="check-row hub-dl-all"><input type="checkbox" id="hub-dl-all" /><span>Select all missing (${missing})</span></label>`
+            : ""
+        }
+      </div>
+      ${
+        depRows
+          ? `<div class="hub-dl-list">${depRows}</div>`
+          : `<p class="hub-dl-empty">No dependencies</p>`
+      }
+      ${HUB_DL.deps.length && !missing ? `<p class="hub-dl-empty">Every dependency is already installed.</p>` : ""}
+    </div>`;
+}
+
+// Select-all state, the selection total and the Download button.
+function hubDlSync() {
+  const all = $("hub-dl-all");
+  if (all) {
+    const missing = hubDlMissingDeps();
+    const on = missing.filter((d) => d.checked).length;
+    all.checked = on > 0 && on === missing.length;
+    all.indeterminate = on > 0 && on < missing.length;
+  }
+  const picked = [...HUB_DL.files, ...HUB_DL.deps].filter((x) => x.checked);
+  const size = picked.reduce((sum, x) => sum + (x.size || 0), 0);
+  const total = $("hub-dl-total");
+  if (total) {
+    total.textContent = picked.length
+      ? `${picked.length} file${picked.length === 1 ? "" : "s"}${size ? ` · ${formatBytesLocal(size)}` : ""}`
+      : "Nothing selected";
+  }
+  const confirm = $("hub-dl-confirm");
+  if (confirm) {
+    confirm.disabled = !picked.length;
+    confirm.textContent = picked.length > 1 ? `Download (${picked.length})` : "Download";
+  }
+}
+
+async function hubOpenDownloadPicker(rid) {
+  const key = String(rid);
+  const backdrop = $("hub-dl-backdrop");
+  if (!backdrop) return hubDownload(key);
+  const token = ++HUB_DL.token;
+  HUB_DL.rid = key;
+  HUB_DL.files = [];
+  HUB_DL.deps = [];
+  hubDlRenderHead(HUB.details.get(key) || HUB.rows.get(key) || HUB.wishlist.get(key)?.snapshot || null);
+  $("hub-dl-body").innerHTML = `<div class="hub-dl-loading"><div class="lib-skeleton" style="width:70%"></div><div class="lib-skeleton" style="width:50%"></div></div>`;
+  hubDlSync();
+  backdrop.classList.remove("hidden");
+  try {
+    await hubLoadLocal();
+    const detail = await hubGetDetail(key);
+    if (token !== HUB_DL.token) return;
+    hubDlRenderHead(detail);
+    HUB_DL.files = (Array.isArray(detail?.hubFiles) ? detail.hubFiles : []).map((f) => {
+      const name = hubEnsureVar(f.filename);
+      const item = {
+        name,
+        size: hubNum(f.file_size),
+        installed: HUB.local.ids.has(hubStem(name).toLowerCase()),
+        busy: Boolean(hubDlActiveJob(hubStem(name))),
+        available: Boolean(hubFileUrl(f)),
+        checked: false,
+      };
+      item.checked = hubDlSelectable(item);
+      return item;
+    });
+    HUB_DL.deps = hubDependencyList(detail).map((d) => ({
+      ...d,
+      busy: Boolean(d.concrete && hubDlActiveJob(hubStem(d.concrete))),
+      available: Boolean(d.url || d.packageName),
+      checked: false,
+    }));
+    hubDlRenderBody();
+  } catch (e) {
+    if (token !== HUB_DL.token) return;
+    $("hub-dl-body").innerHTML = `<p class="hub-dl-empty is-error">Couldn't load the details: ${escapeHtml(String(e?.message || e))}</p>`;
+  }
+  hubDlSync();
+}
+
+function hubDlClose() {
+  HUB_DL.token += 1;
+  $("hub-dl-backdrop")?.classList.add("hidden");
+}
+
+function hubDlConfirm() {
+  const rid = HUB_DL.rid;
+  const files = HUB_DL.files.filter((f) => f.checked).map((f) => f.name);
+  const depRefs = HUB_DL.deps.filter((d) => d.checked).map((d) => d.ref);
+  if (!rid || (!files.length && !depRefs.length)) return;
+  hubDlClose();
+  hubDownload(rid, { files, depRefs });
+}
+
+function setupHubDownloadPicker() {
+  const backdrop = $("hub-dl-backdrop");
+  if (!backdrop) return;
+  backdrop.addEventListener("error", hubOnImageError, true);
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) hubDlClose();
+  });
+  $("hub-dl-cancel")?.addEventListener("click", hubDlClose);
+  $("hub-dl-confirm")?.addEventListener("click", hubDlConfirm);
+  $("hub-dl-body")?.addEventListener("change", (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    if (input.id === "hub-dl-all") {
+      for (const d of hubDlMissingDeps()) d.checked = input.checked;
+      document.querySelectorAll('#hub-dl-body input[data-hub-dl="dep"]').forEach((box) => {
+        box.checked = Boolean(HUB_DL.deps[Number(box.getAttribute("data-hub-dl-idx"))]?.checked);
+      });
+    } else if (input.hasAttribute("data-hub-dl")) {
+      const list = input.getAttribute("data-hub-dl") === "file" ? HUB_DL.files : HUB_DL.deps;
+      const item = list[Number(input.getAttribute("data-hub-dl-idx"))];
+      if (item) item.checked = input.checked;
+    }
+    hubDlSync();
+  });
+}
+
+// .var downloads clicked inside the Hub page arrive here instead of the
+// webview's own download manager. The open resource's own files go to its
+// creator folder and its dependencies to <Creator>\deps; anything else to
+// the file's own creator folder.
+async function hubOnPageDownload(event) {
+  const url = hubStr(event?.payload?.url);
+  const filename = hubEnsureVar(event?.payload?.filename);
+  if (!url || !filename) return;
+  const stem = hubStem(filename);
+  if (HUB.local.ids.has(stem.toLowerCase())) {
+    hubToast(`${filename} is already in your library`, "success");
+    return;
+  }
+  const baseDir = await ensureDownloadsDir();
+  if (!baseDir) {
+    hubToast("No downloads folder — set your VaM directory in Settings.", "error");
+    return;
+  }
+  const rid = HUB_PAGE.rid || HUB.selected;
+  const detail = rid ? HUB.details.get(rid) : null;
+  const base = hubBaseOf(stem).toLowerCase();
+  const own = (detail?.hubFiles || []).some((f) => hubBaseOf(f.filename).toLowerCase() === base);
+  const dep = detail && !own && hubDependencyList(detail).some((d) => hubBaseOf(d.packageName || d.ref).toLowerCase() === base);
+  let destDir;
+  if (own) destDir = hubResourceDir(rid, baseDir);
+  else if (dep) destDir = hubJoinPath(hubResourceDir(rid, baseDir), "deps");
+  else {
+    const creator = hubSafeFolder(deriveCreatorFromPackageId(stem) || "");
+    destDir = creator ? hubJoinPath(baseDir, creator) : baseDir;
+  }
+  const id = queueDownload({
+    packageId: stem,
+    url,
+    filename,
+    host: "hub",
+    destDir,
+    nest: false,
+    label: stem,
+    onDone: (status) => {
+      if (status !== "done") return;
+      hubLocalAdd(stem);
+      hubLoadLocal(true);
+      vpRefreshAfterMutation().catch(() => {});
+    },
+  });
+  if (id != null) hubToast(`Downloading ${filename}`, "info");
 }
 
 // ---- Rendering: filters ----------------------------------------------------------------
@@ -14878,7 +15173,7 @@ function hubRenderStatusBar() {
     }</span>${sep}
     <span class="lib-sb-item"><span class="material-symbols-outlined">push_pin</span>${HUB.wishlist.size.toLocaleString()} wishlisted</span>${sep}
     <span class="lib-sb-item"><span class="material-symbols-outlined">inventory_2</span>${HUB.local.ids.size.toLocaleString()} installed</span>
-    ${activeInstalls ? `${sep}<span class="lib-sb-item hub-sb-active"><span class="material-symbols-outlined">downloading</span>${activeInstalls} installing</span>` : ""}
+    ${activeInstalls ? `${sep}<span class="lib-sb-item hub-sb-active"><span class="material-symbols-outlined">downloading</span>${activeInstalls} downloading</span>` : ""}
     <span class="lib-sb-right">VaM Hub · hub.virtamate.com</span>`;
 }
 
@@ -14894,7 +15189,16 @@ function hubLicenseTag(license) {
   return `<span class="lib-chip lib-license${cls}">${escapeHtml(license)}</span>`;
 }
 
-// Installed / Fallback (another version on disk; VaM uses it) / Install, plus
+// An active download's pill; clicking it cancels that one download.
+function hubJobPill(job) {
+  const cancel = `data-hub-cancel-job="${job.id}" title="Click to cancel"`;
+  if (job.status === "cancelling") return `<span class="lib-pill lib-pill-info">Cancelling…</span>`;
+  return job.status === "queued"
+    ? `<button type="button" class="lib-pill lib-pill-info hub-pulse hub-pill-cancel" ${cancel}><b>Queued</b><i>Cancel</i></button>`
+    : `<button type="button" class="lib-pill hub-pill-progress hub-pill-cancel" ${cancel}><span style="width:${Math.max(2, job.percent || 0)}%"></span><b>${job.percent || 0}%</b><i>Cancel</i></button>`;
+}
+
+// Installed / Fallback (another version on disk; VaM uses it) / Download, plus
 // the live download state and "Unavailable" once the Hub couldn't find it.
 function hubDepPill(d, rid) {
   const inst = HUB.installs.get(String(rid));
@@ -14902,11 +15206,7 @@ function hubDepPill(d, rid) {
   const job = stem
     ? [...state.downloads].reverse().find((j) => j.packageId && j.packageId.toLowerCase() === stem)
     : null;
-  if (job && downloadJobActive(job)) {
-    return job.status === "queued"
-      ? `<span class="lib-pill lib-pill-info hub-pulse">Queued</span>`
-      : `<span class="lib-pill hub-pill-progress"><span style="width:${Math.max(2, job.percent || 0)}%"></span><b>${job.percent || 0}%</b></span>`;
-  }
+  if (job && downloadJobActive(job)) return hubJobPill(job);
   if (d.installed) return `<span class="lib-pill lib-pill-ok">Installed</span>`;
   if (job && job.status === "failed") return `<span class="lib-pill lib-pill-err" title="${escapeAttribute(job.error || "")}">Failed</span>`;
   const attrs = `data-hub-dep-install="${escapeAttribute(d.ref)}" data-hub-rid="${escapeAttribute(String(rid))}"`;
@@ -14919,7 +15219,7 @@ function hubDepPill(d, rid) {
     return `<span class="lib-pill lib-pill-err" title="Not available on the Hub">Unavailable</span>`;
   }
   if (d.url || d.packageName) {
-    return `<button type="button" class="lib-pill hub-pill-install" ${attrs} title="Download this dependency">Install</button>`;
+    return `<button type="button" class="lib-pill hub-pill-install" ${attrs} title="Download this dependency">Download</button>`;
   }
   return `<span class="lib-pill lib-pill-err">Missing</span>`;
 }
@@ -14933,13 +15233,11 @@ function hubFileRowsHtml(detail, rid) {
       const job = [...state.downloads].reverse().find((j) => j.packageId && j.packageId.toLowerCase() === stem.toLowerCase());
       let pill;
       if (job && downloadJobActive(job)) {
-        pill = job.status === "queued"
-          ? `<span class="lib-pill lib-pill-info hub-pulse">Queued</span>`
-          : `<span class="lib-pill hub-pill-progress"><span style="width:${Math.max(2, job.percent || 0)}%"></span><b>${job.percent || 0}%</b></span>`;
+        pill = hubJobPill(job);
       } else if (installed) {
         pill = `<span class="lib-pill lib-pill-ok">Installed</span>`;
       } else if (hubFileUrl(f)) {
-        pill = `<button type="button" class="lib-pill hub-pill-install" data-hub-act="install" data-hub-rid="${escapeAttribute(String(rid))}">Install</button>`;
+        pill = `<button type="button" class="lib-pill hub-pill-install" data-hub-file="${escapeAttribute(hubStr(f.filename))}" data-hub-rid="${escapeAttribute(String(rid))}" title="Download this file only">Download</button>`;
       } else {
         pill = `<span class="lib-pill lib-pill-err">No file</span>`;
       }
@@ -14974,14 +15272,7 @@ function hubDetailHtml(r, detail) {
         ${hubDepPill(dep, rid)}
       </div>`,
   );
-  const reviewTab = hubNum(d.review_count) > 0 || hubNum(d.rating_count) > 0;
-  const links = [
-    ["", "Overview"],
-    ...(hubNum(d.update_count) > 0 ? [["updates", `Updates (${hubNum(d.update_count)})`]] : []),
-    ...(reviewTab ? [["reviews", `Reviews (${hubNum(d.review_count)})`]] : []),
-    ["history", "History"],
-  ];
-  const thread = hubStr(d.discussion_thread_id);
+  const links = hubPageTabs(rid);
   return `
     <section class="lib-ds hub-detail-top">
       ${hubThumbHtml(d, "hub-hero")}</div>
@@ -15020,14 +15311,18 @@ function hubDetailHtml(r, detail) {
         <dt><span class="material-symbols-outlined">schedule</span>Updated</dt><dd>${escapeHtml(hubDate(d.last_update))}</dd>
       </dl>
       <div class="hub-detail-action" data-hub-detail-action="${escapeAttribute(rid)}">${hubActionHtml(d, { big: true })}</div>
-      <button type="button" class="lib-btn lib-btn-accent lib-btn-full hub-open-hub" data-hub-url="${escapeAttribute(hubResourceUrl(rid))}">
-        <span class="material-symbols-outlined">open_in_new</span>Open on Hub
-      </button>
+      <div class="hub-open-row">
+        <button type="button" class="lib-btn lib-btn-accent lib-btn-full hub-open-hub" data-hub-tab="overview" data-hub-rid="${escapeAttribute(rid)}" title="Show the resource's Hub page here in the app">
+          <span class="material-symbols-outlined">web</span>Open on Hub
+        </button>
+        <button type="button" class="lib-icon-btn hub-open-browser" data-hub-browser-url="${escapeAttribute(hubResourceUrl(rid))}" title="Open in your web browser">
+          <span class="material-symbols-outlined">open_in_new</span>
+        </button>
+      </div>
       <div class="hub-links">
         ${links
-          .map(([path, label]) => `<button type="button" class="lib-small-link" data-hub-url="${escapeAttribute(hubResourceUrl(rid) + path)}">${escapeHtml(label)}</button>`)
+          .map((t) => `<button type="button" class="lib-small-link" data-hub-tab="${t.key}" data-hub-rid="${escapeAttribute(rid)}">${escapeHtml(t.label)}</button>`)
           .join("")}
-        ${thread ? `<button type="button" class="lib-small-link" data-hub-url="https://hub.virtamate.com/threads/${escapeAttribute(thread)}/">Discussion</button>` : ""}
       </div>
     </section>
     <section class="lib-ds">
@@ -15059,28 +15354,33 @@ function hubDetailHtml(r, detail) {
     </section>`;
 }
 
+// The details panel, and the Hub page's info panel while that is open.
+function hubDetailHosts() {
+  return [$("hub-detail"), HUB_PAGE.rid ? $("hub-page-info") : null].filter(Boolean);
+}
+
 function hubRenderDetail() {
-  const host = $("hub-detail");
-  if (!host) return;
+  const hosts = hubDetailHosts();
+  if (!hosts.length) return;
   const rid = HUB.selected;
-  if (!rid) {
-    host.innerHTML = `<div class="lib-detail-empty"><span class="material-symbols-outlined">explore</span>Select a package to see its details</div>`;
-    return;
-  }
-  const r = HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot || HUB.details.get(rid);
-  if (!r) {
-    host.innerHTML = `<div class="lib-detail-empty"><span class="material-symbols-outlined">hourglass_empty</span>Loading…</div>`;
-    return;
-  }
-  host.innerHTML = hubDetailHtml(r, HUB.details.get(rid) || null);
+  const r = rid ? HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot || HUB.details.get(rid) : null;
+  const html = !rid
+    ? `<div class="lib-detail-empty"><span class="material-symbols-outlined">explore</span>Select a package to see its details</div>`
+    : !r
+      ? `<div class="lib-detail-empty"><span class="material-symbols-outlined">hourglass_empty</span>Loading…</div>`
+      : hubDetailHtml(r, HUB.details.get(rid) || null);
+  for (const host of hosts) host.innerHTML = html;
+  if (HUB_PAGE.rid) hubPageRenderChrome();
 }
 
 function hubSyncDetailAction() {
-  const slot = document.querySelector("#hub-detail [data-hub-detail-action]");
-  if (!slot) return;
-  const rid = slot.getAttribute("data-hub-detail-action");
-  const r = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
-  if (r) slot.innerHTML = hubActionHtml(r, { big: true });
+  for (const host of hubDetailHosts()) {
+    const slot = host.querySelector("[data-hub-detail-action]");
+    if (!slot) continue;
+    const rid = slot.getAttribute("data-hub-detail-action");
+    const r = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
+    if (r) slot.innerHTML = hubActionHtml(r, { big: true });
+  }
 }
 
 async function hubSelect(rid) {
@@ -15151,10 +15451,11 @@ function hubRunAction(btn) {
   const rid = btn.getAttribute("data-hub-rid");
   const r = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
   if (!r) return;
-  if (act === "install") hubInstall(rid);
+  if (act === "download") hubOpenDownloadPicker(rid);
+  else if (act === "cancel") hubCancelDownloads(rid);
   else if (act === "library") hubShowInLibrary(r);
   else if (act === "external") hubOpenUrl(hubResourceState(r).url || hubResourceUrl(rid));
-  else if (act === "open") hubOpenUrl(hubResourceUrl(rid));
+  else if (act === "open") hubPageOpen(rid);
 }
 
 // Thumbnails the webview can't load directly (hotlink rules) go through the
@@ -15180,8 +15481,279 @@ function hubOnImageError(event) {
     .catch(() => img.remove());
 }
 
+// ---- Hub page (embedded browser) ------------------------------------------------------
+// After Backstage's HubDetail: over the whole Hub view, the package info on the
+// left and the resource's Hub pages on the right — the Hub's own *-panel pages,
+// with browser controls and Overview / Updates / Reviews / History /
+// Discussion tabs. The browser is a native child webview (hub_embed_*) kept on
+// #hub-page-frame; anything drawn over that area (modals, the Downloads
+// popover, the console) hides it, since HTML can't render above it.
+
+const HUB_PAGE = { rid: null, tab: "overview", url: "", loading: false, embedded: false, bounds: "", syncQueued: false };
+
+function hubPageTabs(rid) {
+  const d = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot || {};
+  const base = `https://hub.virtamate.com/resources/${encodeURIComponent(rid)}`;
+  const tabs = [{ key: "overview", label: "Overview", url: `${base}/overview-panel` }];
+  if (hubNum(d.update_count) > 0) tabs.push({ key: "updates", label: `Updates (${hubNum(d.update_count)})`, url: `${base}/updates-panel` });
+  if (hubNum(d.review_count) > 0 || hubNum(d.rating_count) > 0) {
+    tabs.push({ key: "reviews", label: `Reviews (${hubNum(d.review_count)})`, url: `${base}/review-panel` });
+  }
+  tabs.push({ key: "history", label: "History", url: `${base}/history-panel` });
+  const thread = hubStr(d.discussion_thread_id);
+  if (thread) {
+    tabs.push({ key: "discussion", label: "Discussion", url: `https://hub.virtamate.com/threads/${encodeURIComponent(thread)}/discussion-panel` });
+  }
+  return tabs;
+}
+
+function hubPageTabUrl(rid, tab) {
+  const tabs = hubPageTabs(rid);
+  return (tabs.find((t) => t.key === tab) || tabs[0]).url;
+}
+
+// Which tab a page URL belongs to (panel or full-page form), or null.
+function hubPageTabOf(url) {
+  const m = /^https:\/\/hub\.virtamate\.com\/(resources|threads)\/[^/?#]+\/?([a-z-]*)/i.exec(hubStr(url));
+  if (!m) return null;
+  const part = m[2].toLowerCase().replace(/-panel$/, "");
+  if (m[1].toLowerCase() === "threads") return "discussion";
+  return { "": "overview", overview: "overview", updates: "updates", review: "reviews", reviews: "reviews", history: "history" }[part] ?? null;
+}
+
+// A *-panel URL as the full Hub page, for the address bar / copy / browser.
+function hubFullUrl(url) {
+  const m = /^(https:\/\/hub\.virtamate\.com\/(?:resources|threads)\/[^/?#]+)\/(overview|review|history|updates|discussion)-panel\/?$/i.exec(hubStr(url));
+  if (!m) return hubStr(url);
+  const tail = { overview: "/", discussion: "/", review: "/reviews", history: "/history", updates: "/updates" }[m[2].toLowerCase()];
+  return m[1] + tail;
+}
+
+function hubPageRect() {
+  const r = $("hub-page-frame")?.getBoundingClientRect();
+  if (!r || r.width < 10 || r.height < 10) return null;
+  return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
+}
+
+function hubPageEmbedVisible() {
+  if (!HUB_PAGE.rid) return false;
+  if ($("hub-view")?.classList.contains("hidden") || $("hub-page")?.classList.contains("hidden")) return false;
+  if (document.querySelector(".dialog-backdrop:not(.hidden), .image-zoom-backdrop:not(.hidden), .context-menu:not(.hidden)")) return false;
+  if ($("downloads-popover")?.classList.contains("open") || $("console-overlay")?.classList.contains("open")) return false;
+  // Dragging the panel edge: the webview would swallow the mouse.
+  return !document.body.classList.contains("lib-resizing");
+}
+
+function hubPageSyncEmbed() {
+  if (!HUB_PAGE.embedded) {
+    document.body.classList.remove("hub-page-on");
+    return;
+  }
+  const rect = hubPageEmbedVisible() ? hubPageRect() : null;
+  document.body.classList.toggle("hub-page-on", Boolean(rect));
+  if (rect) {
+    // Toasts move over the info panel while the browser covers the right side.
+    const info = $("hub-page-info")?.getBoundingClientRect();
+    if (info) {
+      document.body.style.setProperty("--hub-toast-left", `${Math.round(info.left + 16)}px`);
+      document.body.style.setProperty("--hub-toast-w", `${Math.max(200, Math.round(info.width - 32))}px`);
+    }
+  }
+  const key = rect ? `${rect.x},${rect.y},${rect.width},${rect.height}` : "hidden";
+  if (key === HUB_PAGE.bounds) return;
+  HUB_PAGE.bounds = key;
+  invoke("hub_embed_bounds", rect ? { ...rect, visible: true } : { x: 0, y: 0, width: 1, height: 1, visible: false }).catch((e) =>
+    addLog(`Hub page: ${String(e)}`),
+  );
+}
+
+function hubPageScheduleSync() {
+  if (!HUB_PAGE.embedded || HUB_PAGE.syncQueued) return;
+  HUB_PAGE.syncQueued = true;
+  requestAnimationFrame(() => {
+    HUB_PAGE.syncQueued = false;
+    hubPageSyncEmbed();
+  });
+}
+
+function hubPageRenderChrome() {
+  const rid = HUB_PAGE.rid;
+  if (!rid) return;
+  $("hub-page-title").textContent = hubTitleOf(rid) || `Resource ${rid}`;
+  $("hub-page-tabs").innerHTML = hubPageTabs(rid)
+    .map(
+      (t) =>
+        `<button type="button" class="hub-page-tab${t.key === HUB_PAGE.tab ? " is-active" : ""}" role="tab" data-hub-page-tab="${t.key}">${escapeHtml(t.label)}</button>`,
+    )
+    .join("");
+  const list = hubVisibleItems();
+  const idx = list.findIndex((r) => String(r.resource_id) === rid);
+  $("hub-page-pager")?.classList.toggle("hidden", idx < 0);
+  if (idx >= 0) {
+    $("hub-page-pos").textContent = `${idx + 1} / ${list.length}`;
+    $("hub-page-prev").disabled = idx === 0;
+    $("hub-page-next").disabled = idx >= list.length - 1;
+  }
+  const reload = $("hub-page-reload");
+  if (reload) {
+    reload.querySelector(".material-symbols-outlined").textContent = HUB_PAGE.loading ? "close" : "refresh";
+    reload.title = HUB_PAGE.loading ? "Stop" : "Reload";
+  }
+  const address = $("hub-page-address");
+  if (address && document.activeElement !== address) address.value = hubFullUrl(HUB_PAGE.url);
+}
+
+async function hubPageNavigate(url) {
+  HUB_PAGE.url = url;
+  HUB_PAGE.loading = true;
+  hubPageRenderChrome();
+  await new Promise((r) => requestAnimationFrame(r));
+  const rect = hubPageRect() || { x: 0, y: 0, width: 1, height: 1 };
+  try {
+    await invoke("hub_embed_open", { url, ...rect });
+    HUB_PAGE.embedded = true;
+    HUB_PAGE.bounds = "";
+    hubPageSyncEmbed();
+  } catch (e) {
+    addLog(`Hub page: ${String(e)} — opening in the browser instead`);
+    hubOpenUrl(hubFullUrl(url));
+    hubPageClose();
+  }
+}
+
+// Open a resource's Hub page on `tab` (overview, updates, reviews, history,
+// discussion).
+function hubPageOpen(rid, tab = "overview") {
+  if (!invoke || !rid) return;
+  const key = String(rid);
+  HUB_PAGE.rid = key;
+  HUB_PAGE.tab = tab;
+  $("hub-page")?.classList.remove("hidden");
+  if (HUB.selected !== key) hubSelect(key);
+  else hubRenderDetail();
+  hubPageNavigate(hubPageTabUrl(key, tab));
+}
+
+function hubPageClose() {
+  if (!HUB_PAGE.rid && !HUB_PAGE.embedded) return;
+  HUB_PAGE.rid = null;
+  HUB_PAGE.url = "";
+  $("hub-page")?.classList.add("hidden");
+  if (HUB_PAGE.embedded) {
+    HUB_PAGE.embedded = false;
+    HUB_PAGE.bounds = "";
+    invoke("hub_embed_close").catch((e) => addLog(`Hub page: ${String(e)}`));
+  }
+  document.body.classList.remove("hub-page-on");
+  hubRenderDetail();
+}
+
+function hubPageStep(delta) {
+  const list = hubVisibleItems();
+  const idx = list.findIndex((r) => String(r.resource_id) === HUB_PAGE.rid);
+  const next = list[idx + delta];
+  if (idx >= 0 && next) hubPageOpen(next.resource_id, "overview");
+}
+
+// Page loads inside the browser: address bar, tab, and — following a link to
+// another resource — the info panel, as in Backstage.
+function hubPageOnNav(event) {
+  const url = hubStr(event?.payload?.url);
+  if (!HUB_PAGE.rid || !/^https?:/i.test(url)) return;
+  HUB_PAGE.url = url;
+  HUB_PAGE.loading = Boolean(event.payload.loading);
+  const m = /^https:\/\/hub\.virtamate\.com\/resources\/(?:[^/?#]*\.)?(\d+)(?:[/?#]|$)/i.exec(url);
+  if (m && m[1] !== HUB_PAGE.rid) {
+    HUB_PAGE.rid = m[1];
+    hubSelect(m[1]);
+  }
+  HUB_PAGE.tab = hubPageTabOf(url) || "";
+  hubPageRenderChrome();
+}
+
+function setupHubPage() {
+  const page = $("hub-page");
+  if (!page) return;
+  page.addEventListener("error", hubOnImageError, true);
+  $("hub-page-close")?.addEventListener("click", hubPageClose);
+  $("hub-page-back")?.addEventListener("click", hubPageClose);
+  $("hub-page-prev")?.addEventListener("click", () => hubPageStep(-1));
+  $("hub-page-next")?.addEventListener("click", () => hubPageStep(1));
+  $("hub-page-tabs")?.addEventListener("click", (e) => {
+    const tab = e.target.closest("[data-hub-page-tab]");
+    if (!tab || !HUB_PAGE.rid) return;
+    HUB_PAGE.tab = tab.getAttribute("data-hub-page-tab");
+    hubPageNavigate(hubPageTabUrl(HUB_PAGE.rid, HUB_PAGE.tab));
+  });
+  page.querySelector(".hub-page-toolbar")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-hub-page-ctl]");
+    if (!btn) return;
+    const ctl = btn.getAttribute("data-hub-page-ctl");
+    const full = hubFullUrl(HUB_PAGE.url);
+    if (ctl === "external") hubOpenUrl(full);
+    else if (ctl === "copy") navigator.clipboard?.writeText(full).then(() => hubToast("Link copied", "success")).catch(() => {});
+    else {
+      const action = ctl === "reload" && HUB_PAGE.loading ? "stop" : ctl;
+      invoke("hub_embed_control", { action }).catch((err) => addLog(`Hub page: ${String(err)}`));
+    }
+  });
+  const address = $("hub-page-address");
+  address?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      let url = address.value.trim();
+      if (url && !/^[a-z]+:\/\//i.test(url)) url = `https://${url}`;
+      if (/^https:\/\/hub\.virtamate\.com\//i.test(url)) hubPageNavigate(url);
+      else if (url) hubOpenUrl(url);
+      address.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      address.value = hubFullUrl(HUB_PAGE.url);
+      address.blur();
+    }
+  });
+  address?.addEventListener("blur", () => {
+    address.value = hubFullUrl(HUB_PAGE.url);
+  });
+
+  // Info panel width (right-edge drag) — the same width as the details panel.
+  document.querySelector("[data-hub-page-resize]")?.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const start = HUB.detailWidth;
+    document.body.classList.add("lib-resizing");
+    const onMove = (e) => {
+      HUB.detailWidth = Math.min(500, Math.max(260, start + (e.clientX - startX)));
+      hubApplyLayout();
+    };
+    const onUp = () => {
+      document.body.classList.remove("lib-resizing");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      hubSavePrefs();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+
+  // Keep the webview on its placeholder, and out of the way of overlays.
+  new MutationObserver(hubPageScheduleSync).observe(document.body, {
+    attributes: true,
+    subtree: true,
+    attributeFilter: ["class"],
+  });
+  if (typeof ResizeObserver === "function") new ResizeObserver(hubPageScheduleSync).observe($("hub-page-frame"));
+  window.addEventListener("resize", hubPageScheduleSync);
+  window.__TAURI__?.event?.listen?.("hub-page-nav", hubPageOnNav);
+}
+
 function setupHubView() {
   hubLoadPrefs();
+  setupHubDownloadPicker();
+  setupHubPage();
+  window.__TAURI__?.event?.listen?.("hub-page-download", (event) => {
+    hubOnPageDownload(event).catch((e) => addLog(`Hub page download: ${String(e)}`));
+  });
   const view = $("hub-view");
   if (!view) return;
   view.addEventListener("error", hubOnImageError, true);
@@ -15376,18 +15948,26 @@ function setupHubView() {
   });
   $("hub-grid")?.addEventListener("dblclick", (e) => {
     const card = e.target.closest(".hub-card[data-hub-rid]");
-    if (card && !e.target.closest("button")) hubOpenUrl(hubResourceUrl(card.getAttribute("data-hub-rid")));
+    if (card && !e.target.closest("button")) hubPageOpen(card.getAttribute("data-hub-rid"));
   });
 
-  $("hub-detail")?.addEventListener("click", (e) => {
+  const onDetailClick = (e) => {
     const url = e.target.closest("[data-hub-url]");
     if (url) return hubOpenUrl(url.getAttribute("data-hub-url"));
+    const tab = e.target.closest("[data-hub-tab]");
+    if (tab) return hubPageOpen(tab.getAttribute("data-hub-rid"), tab.getAttribute("data-hub-tab"));
+    const cancelJob = e.target.closest("[data-hub-cancel-job]");
+    if (cancelJob) return cancelDownload(Number(cancelJob.getAttribute("data-hub-cancel-job")));
+    const browser = e.target.closest("[data-hub-browser-url]");
+    if (browser) return hubOpenUrl(browser.getAttribute("data-hub-browser-url"));
     const pin = e.target.closest("[data-hub-pin]");
     if (pin) return hubToggleWishlist(pin.getAttribute("data-hub-pin"));
     const author = e.target.closest("[data-hub-author]");
     if (author) return hubSetFilter("author", author.getAttribute("data-hub-author"));
     const dep = e.target.closest("[data-hub-dep-install]");
-    if (dep) return hubInstall(dep.getAttribute("data-hub-rid"), { onlyRef: dep.getAttribute("data-hub-dep-install") });
+    if (dep) return hubDownload(dep.getAttribute("data-hub-rid"), { files: [], depRefs: [dep.getAttribute("data-hub-dep-install")] });
+    const file = e.target.closest("[data-hub-file]");
+    if (file) return hubDownload(file.getAttribute("data-hub-rid"), { files: [file.getAttribute("data-hub-file")] });
     const act = e.target.closest("[data-hub-act]");
     if (act) return hubRunAction(act);
     const open = e.target.closest("[data-hub-open-rid]");
@@ -15400,7 +15980,9 @@ function setupHubView() {
       hubRenderDetail();
     }
     return undefined;
-  });
+  };
+  $("hub-detail")?.addEventListener("click", onDetailClick);
+  $("hub-page-info")?.addEventListener("click", onDetailClick);
 
   // Details panel width (left-edge drag), remembered.
   document.querySelector("[data-hub-resize]")?.addEventListener("mousedown", (event) => {
@@ -16168,6 +16750,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       closeAppConfirm(false);
     } else if (event.key === "Escape" && !$("complete-backdrop").classList.contains("hidden")) {
       closeDedupComplete();
+    } else if (event.key === "Escape" && !$("hub-dl-backdrop")?.classList.contains("hidden")) {
+      hubDlClose();
     // Image gallery. Guarded on the zoom lightbox being closed: setupImageZoom
     // registers its OWN unconditional Escape listener outside this chain, so
     // without the guard one Escape would close the lightbox AND this modal
@@ -16193,6 +16777,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     // stray keypress can never abandon a live destructive apply.
     } else if (event.key === "Escape" && !$("vp-plan-backdrop")?.classList.contains("hidden")) {
       vpClosePlan();
+    } else if (
+      event.key === "Escape" &&
+      HUB_PAGE.rid &&
+      !$("hub-view")?.classList.contains("hidden") &&
+      !document.querySelector("[data-lib-dd-menu]:not(.hidden)") &&
+      document.activeElement?.id !== "hub-page-address"
+    ) {
+      hubPageClose();
     }
   });
 

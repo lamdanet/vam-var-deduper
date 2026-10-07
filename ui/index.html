@@ -1178,6 +1178,61 @@
         </div>
 
         <footer class="lib-statusbar" id="hub-statusbar"></footer>
+
+        <!-- Hub page (after Backstage's HubDetail): package info + the resource's
+             Hub pages. #hub-page-frame is a placeholder: the browser is a native
+             child webview the app keeps on top of it (hub_embed_*). -->
+        <div id="hub-page" class="hub-page hidden">
+          <div class="hub-page-head">
+            <button id="hub-page-back" class="lib-btn lib-btn-ghost hub-page-backbtn" type="button" title="Back to the Hub (Esc)">
+              <span class="material-symbols-outlined">arrow_back</span>Hub
+            </button>
+            <div class="hub-page-pager" id="hub-page-pager">
+              <button id="hub-page-prev" class="lib-icon-btn lib-icon-btn-sm" type="button" title="Previous package">
+                <span class="material-symbols-outlined">chevron_left</span>
+              </button>
+              <span id="hub-page-pos" class="hub-page-pos"></span>
+              <button id="hub-page-next" class="lib-icon-btn lib-icon-btn-sm" type="button" title="Next package">
+                <span class="material-symbols-outlined">chevron_right</span>
+              </button>
+            </div>
+            <span id="hub-page-title" class="hub-page-title"></span>
+            <button id="hub-page-close" class="lib-icon-btn lib-icon-btn-sm hub-page-closebtn" type="button" title="Close (Esc)">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+          <div class="hub-page-body">
+            <aside id="hub-page-info" class="lib-detail hub-page-info"></aside>
+            <div class="lib-resize hub-page-resize" data-hub-page-resize aria-hidden="true"></div>
+            <div class="hub-page-browser">
+              <div class="hub-page-toolbar">
+                <button class="lib-icon-btn lib-icon-btn-sm" type="button" data-hub-page-ctl="back" title="Back">
+                  <span class="material-symbols-outlined">arrow_back</span>
+                </button>
+                <button class="lib-icon-btn lib-icon-btn-sm" type="button" data-hub-page-ctl="forward" title="Forward">
+                  <span class="material-symbols-outlined">arrow_forward</span>
+                </button>
+                <button id="hub-page-reload" class="lib-icon-btn lib-icon-btn-sm" type="button" data-hub-page-ctl="reload" title="Reload">
+                  <span class="material-symbols-outlined">refresh</span>
+                </button>
+                <label class="hub-page-address">
+                  <span class="material-symbols-outlined">language</span>
+                  <input id="hub-page-address" type="text" spellcheck="false" autocomplete="off" aria-label="Address" />
+                </label>
+                <button class="lib-icon-btn lib-icon-btn-sm" type="button" data-hub-page-ctl="copy" title="Copy link">
+                  <span class="material-symbols-outlined">content_copy</span>
+                </button>
+                <button class="lib-icon-btn lib-icon-btn-sm" type="button" data-hub-page-ctl="external" title="Open in your web browser">
+                  <span class="material-symbols-outlined">open_in_new</span>
+                </button>
+              </div>
+              <div class="hub-page-tabs" id="hub-page-tabs" role="tablist"></div>
+              <div class="hub-page-frame" id="hub-page-frame">
+                <span class="hub-page-placeholder"><span class="material-symbols-outlined">language</span>Loading the Hub…</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- VAR Details View (hidden by default; revealed by clicking a row in VAR Packages) -->
@@ -3017,6 +3072,27 @@
         <div id="vp-images-grid" class="vp-images-grid"></div>
         <div class="dialog-actions">
           <button id="vp-images-close" class="ghost-button" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hub download picker: the resource's own files (ticked) and its
+         dependencies (tick one by one or Select all missing). Before
+         #dialog-backdrop for the usual DOM-order stacking reason. -->
+    <div id="hub-dl-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card hub-dl-card" role="dialog" aria-modal="true" aria-labelledby="hub-dl-title">
+        <div class="hub-dl-head">
+          <div id="hub-dl-thumb" class="hub-dl-thumb"></div>
+          <div class="hub-dl-headtext">
+            <h3 id="hub-dl-title">Download</h3>
+            <p id="hub-dl-sub" class="hub-dl-sub"></p>
+          </div>
+        </div>
+        <div id="hub-dl-body" class="hub-dl-body"></div>
+        <div class="dialog-actions hub-dl-actions">
+          <span id="hub-dl-total" class="hub-dl-total"></span>
+          <button id="hub-dl-cancel" class="ghost-button" type="button">Cancel</button>
+          <button id="hub-dl-confirm" class="primary-button" type="button">Download</button>
         </div>
       </div>
     </div>

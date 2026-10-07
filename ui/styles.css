@@ -9469,7 +9469,8 @@ tr.is-selected td {
    ========================================================= */
 
 .lib-view,
-.db-pkgs {
+.db-pkgs,
+.hub-dl-card {
   --lib-base: var(--bg);
   --lib-surface: var(--surface);
   --lib-elevated: var(--surface-2);
@@ -9492,7 +9493,8 @@ tr.is-selected td {
 }
 
 :root[data-theme="backstage"] .lib-view,
-:root[data-theme="backstage"] .db-pkgs {
+:root[data-theme="backstage"] .db-pkgs,
+:root[data-theme="backstage"] .hub-dl-card {
   --lib-base: #0a0b10;
   --lib-surface: #111218;
   --lib-elevated: #191a22;
@@ -12982,8 +12984,496 @@ button.lib-dep-ref:hover {
   margin-top: 12px;
 }
 
-.hub-open-hub {
+.hub-open-row {
+  display: flex;
+  gap: 6px;
   margin-top: 8px;
+}
+
+.hub-open-row .hub-open-hub {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hub-open-row .hub-open-browser {
+  width: 32px;
+  height: 32px;
+}
+
+/* Details panel while downloading: progress bar + Cancel. */
+.hub-btn-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.hub-btn-row .hub-btn {
+  flex: 1 1 auto;
+}
+
+.lib-btn.hub-btn-cancel {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 32px;
+  color: var(--lib-error);
+  border-color: color-mix(in srgb, var(--lib-error) 35%, transparent);
+}
+
+.lib-btn.hub-btn-cancel:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--lib-error) 12%, transparent);
+}
+
+.lib-btn.hub-btn-cancel .material-symbols-outlined {
+  font-size: 15px;
+}
+
+/* An active download's pill: hover shows Cancel, click cancels. */
+.lib-view button.lib-pill.hub-pill-cancel {
+  position: relative;
+  cursor: pointer;
+}
+
+.hub-pill-cancel i {
+  display: none;
+  font-style: normal;
+}
+
+.hub-pill-cancel:hover b,
+.hub-pill-cancel:hover > span {
+  visibility: hidden;
+}
+
+.hub-pill-cancel:hover i {
+  display: inline;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  color: var(--lib-error);
+  background: color-mix(in srgb, var(--lib-error) 14%, transparent);
+}
+
+/* ---- Hub page (embedded browser) ------------------------------------------------ */
+
+.hub-view {
+  position: relative;
+}
+
+.hub-page {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--lib-base);
+}
+
+.hub-page-head {
+  position: relative;
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--lib-border);
+  background: var(--lib-surface);
+}
+
+.lib-btn.hub-page-backbtn {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--lib-text-2);
+}
+
+.lib-btn.hub-page-backbtn:hover {
+  background: color-mix(in srgb, var(--lib-hover) 70%, transparent);
+  color: var(--lib-text);
+}
+
+.hub-page-pager {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.hub-page-pos {
+  min-width: 52px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--lib-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.hub-page-title {
+  position: absolute;
+  left: 50%;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lib-text);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.hub-page-closebtn {
+  margin-left: auto;
+}
+
+.hub-page-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.lib-detail.hub-page-info {
+  border-left: 0;
+  border-right: 1px solid var(--lib-border);
+}
+
+.hub-page-info .hub-open-row,
+.hub-page-info .hub-links {
+  display: none;
+}
+
+.hub-page-browser {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--lib-base);
+}
+
+.hub-page-toolbar {
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--lib-border);
+  background: var(--lib-surface);
+}
+
+.hub-page-toolbar .lib-icon-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.hub-page-address {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px;
+  padding: 0 10px;
+  border: 1px solid var(--lib-border);
+  border-radius: 6px;
+  background: var(--lib-elevated);
+  color: var(--lib-text-3);
+}
+
+.hub-page-address:focus-within {
+  border-color: color-mix(in srgb, var(--lib-accent) 60%, transparent);
+}
+
+.hub-page-address .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.hub-page-address input,
+:root[data-theme="backstage"] .hub-page-address input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--lib-text-2);
+  font: 11px var(--lib-mono);
+  user-select: text;
+}
+
+.hub-page-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--lib-border);
+  background: var(--lib-surface);
+}
+
+.hub-page-tab {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--lib-text-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hub-page-tab:hover {
+  color: var(--lib-text-2);
+}
+
+.hub-page-tab.is-active {
+  border-bottom-color: var(--lib-accent);
+  color: var(--lib-text);
+}
+
+/* The native webview sits on top of this; the placeholder only shows while it
+   loads or is hidden behind an overlay. */
+.hub-page-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hub-page-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--lib-text-3);
+}
+
+/* Toasts move over the info panel while the browser covers the right side. */
+.hub-page-on .toast-host {
+  right: auto;
+  left: var(--hub-toast-left, 16px);
+  align-items: flex-start;
+}
+
+.hub-page-on .toast {
+  max-width: var(--hub-toast-w, 300px);
+}
+
+/* ---- Download picker ------------------------------------------------------------ */
+
+.hub-dl-card {
+  width: min(680px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hub-dl-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hub-dl-thumb {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.hub-dl-thumb:empty {
+  display: none;
+}
+
+.hub-dl-thumb-img {
+  width: 100%;
+  height: 100%;
+  background: var(--lib-thumb-bg, var(--lib-elevated));
+}
+
+.hub-dl-thumb-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.hub-dl-headtext {
+  min-width: 0;
+}
+
+.dialog-card.hub-dl-card .hub-dl-headtext h3 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-card.hub-dl-card .hub-dl-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--lib-text-3);
+}
+
+.hub-dl-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hub-dl-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hub-dl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hub-dl-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
+}
+
+.hub-dl-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--lib-text-2);
+}
+
+.hub-dl-group-title small {
+  font-weight: 500;
+  color: var(--lib-text-3);
+}
+
+.hub-dl-all {
+  color: var(--lib-text);
+}
+
+.hub-dl-list {
+  border: 1px solid var(--lib-border);
+  border-radius: 6px;
+}
+
+.check-row.hub-dl-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--lib-border);
+}
+
+.hub-dl-row:last-child {
+  border-bottom: 0;
+}
+
+.hub-dl-row:not(.is-off):hover {
+  background: color-mix(in srgb, var(--lib-hover) 50%, transparent);
+}
+
+.hub-dl-row.is-off {
+  cursor: default;
+}
+
+.hub-dl-row.is-off .hub-dl-main {
+  opacity: 0.6;
+}
+
+.hub-dl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.hub-dl-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lib-text);
+}
+
+.hub-dl-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--lib-text-3);
+}
+
+.hub-dl-size {
+  font-size: 11px;
+  color: var(--lib-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hub-dl-chip {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 72px;
+}
+
+.dialog-card.hub-dl-card .hub-dl-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--lib-text-3);
+}
+
+.dialog-card.hub-dl-card .hub-dl-empty.is-error {
+  color: var(--lib-error);
+}
+
+.check-row input[type="checkbox"]:indeterminate {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.check-row input[type="checkbox"]:indeterminate::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 50%;
+  height: 2px;
+  background: var(--primary-fg);
+  transform: translateY(-50%);
+}
+
+:root[data-theme="backstage"] .check-row input[type="checkbox"]:indeterminate {
+  border-color: #4a91f1;
+  background: #4a91f1;
+}
+
+.hub-dl-actions {
+  align-items: center;
+  margin-top: 0;
+}
+
+.hub-dl-total {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--lib-text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .hub-links {
