@@ -3761,7 +3761,12 @@ function libDepsSectionHtml(item, details) {
     <section class="lib-ds">
       <div class="lib-group-head">
         <span class="lib-group-title">Dependencies <small>(${deps.length})</small></span>
-        <span class="lib-group-tools">${fallbackChip}${issue}</span>
+        <span class="lib-group-tools">${fallbackChip}${issue}${
+          deps.some((d) => d.status === "found" || d.status === "other_version")
+            ? `<button type="button" class="lib-small-link" data-lib-action="remove-deps" title="Pick dependencies of this package to send to the Recycle Bin">
+                 <span class="material-symbols-outlined">delete_sweep</span>Remove…</button>`
+            : ""
+        }</span>
       </div>
       ${body}
     </section>`;
@@ -4231,8 +4236,15 @@ async function vpRefreshAfterMutation() {
 // packages and everything they need (plan_offload). For Offload, a dependency
 // that a package staying in AddonPackages still uses starts unticked; Restore
 // ticks every offloaded dependency.
+//
+// The same dialog runs Remove Dependencies ("remove" mode): it deletes the
+// dependencies you tick (Recycle Bin) and keeps the picked package. Nothing
+// starts ticked there; Select all and the type buttons only take dependencies
+// nothing else uses.
 
 const OFFLOAD = {
+  // "offload" | "restore" | "remove"
+  mode: "offload",
   restore: false,
   items: [],
   targets: [],
@@ -4241,6 +4253,8 @@ const OFFLOAD = {
   token: 0,
   running: false,
   taskId: null,
+  // Remove mode: set by Stop to end the delete loop after the current file.
+  stop: false,
   // Rows (`kind:file_path`) whose dependents list is shown.
   openUsers: new Set(),
 };
@@ -4259,11 +4273,16 @@ function offloadListText(ids, limit = 2) {
   return `${ids.slice(0, limit).join(", ")}${ids.length > limit ? ` +${ids.length - limit}` : ""}`;
 }
 
-// Plan members that stay in AddonPackages (unticked) yet need this one.
+function offloadIsRemove() {
+  return OFFLOAD.mode === "remove";
+}
+
+// Plan members that stay (unticked) yet need this one. For Offload only those
+// in AddonPackages matter; a deletion breaks any of them.
 function offloadStayingRequesters(e) {
   return (e.required_by ?? []).filter((fp) => {
     const dep = OFFLOAD.deps.find((d) => d.file_path === fp);
-    return dep && dep.location === "active" && !dep.checked;
+    return dep && !dep.checked && (offloadIsRemove() || dep.location === "active");
   });
 }
 
@@ -4303,7 +4322,7 @@ function offloadDependentsHtml(e, kind) {
   const open = OFFLOAD.openUsers.has(key);
   return `<span class="offload-dependents${e.checked ? " is-warn" : ""}">
       <span class="material-symbols-outlined">warning</span>
-      <span>Dependency of ${ids.length} other package${ids.length === 1 ? "" : "s"} in AddonPackages</span>
+      <span>Dependency of ${ids.length} other package${ids.length === 1 ? "" : "s"}${offloadIsRemove() ? "" : " in AddonPackages"}</span>
       <button type="button" class="offload-dependents-toggle" data-offload-users="${escapeAttribute(key)}"
               aria-expanded="${open}">${open ? "Hide" : "Show"}</button>
     </span>
@@ -4311,12 +4330,31 @@ function offloadDependentsHtml(e, kind) {
 }
 
 function offloadChip(e) {
+  if (!OFFLOAD.restore && e.movable && e.used_by?.length) {
+    return `<span class="lib-pill lib-pill-warn" title="Other packages use it">Shared</span>`;
+  }
   if (e.location === "other") return `<span class="lib-pill">Other folder</span>`;
   if (e.location === "offloaded") return `<span class="lib-pill lib-pill-info">Offloaded</span>`;
-  if (!OFFLOAD.restore && e.used_by?.length) {
-    return `<span class="lib-pill lib-pill-warn" title="Packages staying in AddonPackages use it">Shared</span>`;
-  }
   return `<span class="lib-pill lib-pill-ok">In AddonPackages</span>`;
+}
+
+// Remove mode: one button per content type that ticks (or unticks) that
+// type's unshared dependencies — e.g. every look a scene pulled in.
+function offloadTypeButtonsHtml() {
+  const counts = new Map();
+  for (const d of OFFLOAD.deps) {
+    if (!d.safe) continue;
+    const key = LIB_TYPE_BY_KEY[d.pkg_type] ? d.pkg_type : "other";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const buttons = LIB_TYPES.filter((t) => counts.has(t.key)).map((t) => {
+    const of = OFFLOAD.deps.filter((d) => d.safe && (LIB_TYPE_BY_KEY[d.pkg_type] ? d.pkg_type : "other") === t.key);
+    const on = of.every((d) => d.checked);
+    return `<button type="button" class="lib-type-chip offload-type-btn${on ? " is-on" : ""}" style="--dot:${t.color}"
+              data-offload-type="${t.key}" aria-pressed="${on}" title="${on ? "Untick" : "Tick"} the unshared ${escapeAttribute(t.label.toLowerCase())}">
+              ${escapeHtml(t.label)} (${of.length})</button>`;
+  });
+  return buttons.length ? `<div class="offload-types"><span class="offload-types-label">Select:</span>${buttons.join("")}</div>` : "";
 }
 
 function offloadRowHtml(kind, i, e) {
@@ -4336,7 +4374,7 @@ function offloadRowHtml(kind, i, e) {
 function offloadRenderHead() {
   const items = OFFLOAD.items;
   const one = items.length === 1 ? items[0] : null;
-  const verb = OFFLOAD.restore ? "Restore" : "Offload";
+  const verb = offloadIsRemove() ? "Remove dependencies of" : OFFLOAD.restore ? "Restore" : "Offload";
   const title = one ? `${verb} ${libTitle(one)}` : `${verb} ${items.length} packages`;
   vpSetText("offload-title", title);
   $("offload-title").title = title;
@@ -4353,10 +4391,14 @@ function offloadRenderHead() {
   }
   vpSetText(
     "offload-intro",
-    OFFLOAD.restore
-      ? "Moves the package and the dependencies you tick back into AddonPackages, so VaM loads them again."
-      : "Moves the package and the dependencies you tick out of AddonPackages, so VaM stops loading them. " +
-          "Dependencies that packages staying in AddonPackages still use start unticked.",
+    offloadIsRemove()
+      ? `Sends the dependencies you tick to the Recycle Bin. ${
+          one ? "The package itself stays" : "The packages themselves stay"
+        } and will list them as missing. Select all and the type buttons only take dependencies nothing else uses.`
+      : OFFLOAD.restore
+        ? "Moves the package and the dependencies you tick back into AddonPackages, so VaM loads them again."
+        : "Moves the package and the dependencies you tick out of AddonPackages, so VaM stops loading them. " +
+            "Dependencies that packages staying in AddonPackages still use start unticked.",
   );
 }
 
@@ -4364,7 +4406,8 @@ function offloadRenderBody() {
   const body = $("offload-body");
   if (!body) return;
   const scroll = body.scrollTop;
-  const movable = OFFLOAD.deps.filter((d) => d.movable);
+  const remove = offloadIsRemove();
+  const movable = offloadSelectAllSet();
   const targetRows = OFFLOAD.targets.map((e, i) => offloadRowHtml("target", i, e)).join("");
   const depRows = OFFLOAD.deps.map((e, i) => offloadRowHtml("dep", i, e)).join("");
   const missing = OFFLOAD.missing.length
@@ -4372,33 +4415,45 @@ function offloadRenderBody() {
         OFFLOAD.missing.length === 1 ? "dependency isn't" : "dependencies aren't"
       } in your library: ${escapeHtml(offloadListText(OFFLOAD.missing, 4))}</p>`
     : "";
-  body.innerHTML = `
-    <div class="hub-dl-group">
+  const targets = remove
+    ? ""
+    : `<div class="hub-dl-group">
       <div class="hub-dl-group-head"><span class="hub-dl-group-title">${
         OFFLOAD.targets.length === 1 ? "Package" : "Packages"
       } <small>(${OFFLOAD.targets.length})</small></span></div>
       <div class="hub-dl-list">${targetRows}</div>
-    </div>
+    </div>`;
+  body.innerHTML = `
+    ${targets}
     <div class="hub-dl-group">
       <div class="hub-dl-group-head">
         <span class="hub-dl-group-title">Dependencies <small>(${OFFLOAD.deps.length})</small></span>
         ${
           movable.length
-            ? `<label class="check-row hub-dl-all"><input type="checkbox" id="offload-all" /><span>Select all (${movable.length})</span></label>`
+            ? `<label class="check-row hub-dl-all"><input type="checkbox" id="offload-all" /><span>${
+                remove ? "Select all unshared" : "Select all"
+              } (${movable.length})</span></label>`
             : ""
         }
       </div>
+      ${remove ? offloadTypeButtonsHtml() : ""}
       ${depRows ? `<div class="hub-dl-list">${depRows}</div>` : `<p class="hub-dl-empty">No dependencies in your library</p>`}
       ${missing}
     </div>`;
   body.scrollTop = scroll;
 }
 
+// What Select all ticks: every movable dependency, or for Remove only the
+// unshared ones (deleting a shared one is a deliberate, one-by-one choice).
+function offloadSelectAllSet() {
+  return OFFLOAD.deps.filter((d) => d.movable && (!offloadIsRemove() || d.safe));
+}
+
 // Select-all state, the selection total and the confirm button.
 function offloadSync() {
   const all = $("offload-all");
   if (all) {
-    const movable = OFFLOAD.deps.filter((d) => d.movable);
+    const movable = offloadSelectAllSet();
     const on = movable.filter((d) => d.checked).length;
     all.checked = on > 0 && on === movable.length;
     all.indeterminate = on > 0 && on < movable.length;
@@ -4411,12 +4466,20 @@ function offloadSync() {
       ? `${picked.length} package${picked.length === 1 ? "" : "s"} · ${formatBytesLocal(size)}`
       : "Nothing selected",
   );
-  const verb = OFFLOAD.restore ? "Restore" : "Offload";
+  const remove = offloadIsRemove();
+  const verb = remove ? "Move to Recycle Bin" : OFFLOAD.restore ? "Restore" : "Offload";
   const confirm = $("offload-confirm");
   if (confirm) {
-    const dest = ($("offload-dest-input")?.value || "").trim();
+    const dest = remove ? "-" : ($("offload-dest-input")?.value || "").trim();
     confirm.disabled = OFFLOAD.running || !picked.length || !dest;
-    confirm.textContent = OFFLOAD.running ? `${verb}ing…` : picked.length > 1 ? `${verb} (${picked.length})` : verb;
+    confirm.classList.toggle("vp-bulk-danger", remove);
+    confirm.textContent = OFFLOAD.running
+      ? remove
+        ? "Deleting…"
+        : `${verb}ing…`
+      : picked.length > 1
+        ? `${verb} (${picked.length})`
+        : verb;
   }
   vpSetText("offload-cancel", OFFLOAD.running ? "Stop" : "Cancel");
   for (const id of ["offload-dest-input", "offload-dest-browse", "offload-by-creator"]) {
@@ -4427,6 +4490,7 @@ function offloadSync() {
 }
 
 function offloadRenderDest() {
+  document.querySelector("#offload-backdrop .offload-dest")?.classList.toggle("hidden", offloadIsRemove());
   const restore = OFFLOAD.restore;
   vpSetText("offload-dest-label", restore ? "Restore to" : "Offload to");
   const input = $("offload-dest-input");
@@ -4446,8 +4510,19 @@ function offloadRenderDest() {
   if (box) box.checked = state.offloadByCreator !== false;
 }
 
-async function offloadOpen(items, restore) {
-  const picked = (items ?? []).filter((it) => it?.file_path && Boolean(it.offloaded) === Boolean(restore));
+function offloadOpen(items, restore) {
+  return offloadOpenMode(items, restore ? "restore" : "offload");
+}
+
+function removeDepsOpen(items) {
+  return offloadOpenMode(items, "remove");
+}
+
+async function offloadOpenMode(items, mode) {
+  const restore = mode === "restore";
+  const picked = (items ?? []).filter(
+    (it) => it?.file_path && (mode === "remove" || Boolean(it.offloaded) === restore),
+  );
   if (!invoke || !picked.length || OFFLOAD.running) return;
   if (!vamAddonPackagesDir()) {
     showToast("Set your VaM directory in Settings first.", "error");
@@ -4455,7 +4530,7 @@ async function offloadOpen(items, restore) {
     return;
   }
   const token = ++OFFLOAD.token;
-  Object.assign(OFFLOAD, { restore: Boolean(restore), items: picked, targets: [], deps: [], missing: [] });
+  Object.assign(OFFLOAD, { mode, restore, items: picked, targets: [], deps: [], missing: [] });
   OFFLOAD.openUsers.clear();
   offloadRenderHead();
   offloadRenderDest();
@@ -4464,7 +4539,7 @@ async function offloadOpen(items, restore) {
   offloadSync();
   $("offload-backdrop")?.classList.remove("hidden");
   try {
-    const plan = await invoke("plan_offload", { filePaths: picked.map((it) => it.file_path), restore: OFFLOAD.restore });
+    const plan = await invoke("plan_offload", { filePaths: picked.map((it) => it.file_path), mode });
     if (token !== OFFLOAD.token) return;
     const withCheck = (e) => ({ ...e, checked: Boolean(e.default_selected) });
     OFFLOAD.targets = (plan?.targets ?? []).map(withCheck);
@@ -4473,7 +4548,7 @@ async function offloadOpen(items, restore) {
     offloadRenderBody();
   } catch (e) {
     if (token !== OFFLOAD.token) return;
-    $("offload-body").innerHTML = `<p class="hub-dl-empty is-error">Couldn't work out what to move: ${escapeHtml(String(e?.message || e))}</p>`;
+    $("offload-body").innerHTML = `<p class="hub-dl-empty is-error">Couldn't read the dependencies: ${escapeHtml(String(e?.message || e))}</p>`;
   }
   offloadSync();
 }
@@ -4490,8 +4565,49 @@ function offloadProgress(fraction, message) {
   vpSetText("offload-progress-message", message ?? "");
 }
 
+// Remove mode: each ticked dependency to the Recycle Bin, one by one.
+async function removeDepsConfirm() {
+  const picked = OFFLOAD.deps.filter((e) => e.checked && e.movable);
+  if (!picked.length) return;
+  OFFLOAD.running = true;
+  OFFLOAD.stop = false;
+  $("offload-progress")?.classList.remove("hidden");
+  offloadSync();
+  let removed = 0;
+  let freed = 0;
+  const failed = [];
+  for (const [n, dep] of picked.entries()) {
+    if (OFFLOAD.stop) break;
+    offloadProgress(n / picked.length, `Deleting ${dep.package_id} (${n + 1}/${picked.length})`);
+    try {
+      freed += Number(await invoke("delete_var_package", { filePath: dep.file_path })) || 0;
+      removed += 1;
+    } catch (e) {
+      failed.push(dep);
+      addLog(`Remove dependency ${dep.package_id}: ${String(e)}`);
+    }
+  }
+  OFFLOAD.running = false;
+  offloadClose();
+  if (removed) {
+    showToast(
+      `Moved ${removed} dependenc${removed === 1 ? "y" : "ies"} to the Recycle Bin · ${formatBytesLocal(freed)}${
+        failed.length ? ` — ${failed.length} failed, see Console` : ""
+      }`,
+      failed.length ? "error" : "success",
+      failed.length ? 6000 : 3200,
+    );
+  } else if (failed.length) {
+    showToast("Nothing was deleted — see Console", "error", 6000);
+  }
+  // Stay on the package whose dependencies were removed.
+  if (OFFLOAD.items.length === 1) state.vpRevealPath = OFFLOAD.items[0].file_path;
+  await vpRefreshAfterMutation();
+}
+
 async function offloadConfirm() {
   if (OFFLOAD.running || !invoke) return;
+  if (offloadIsRemove()) return removeDepsConfirm();
   const restore = OFFLOAD.restore;
   const paths = [...OFFLOAD.targets, ...OFFLOAD.deps].filter((e) => e.checked && e.movable).map((e) => e.file_path);
   if (!paths.length) return;
@@ -4655,6 +4771,7 @@ function setupOffload() {
   });
   $("offload-cancel")?.addEventListener("click", () => {
     if (OFFLOAD.running) {
+      OFFLOAD.stop = true;
       if (OFFLOAD.taskId != null) invoke("cancel_task", { taskId: OFFLOAD.taskId }).catch(() => {});
       return;
     }
@@ -4677,6 +4794,16 @@ function setupOffload() {
   });
   $("offload-dest-input")?.addEventListener("input", offloadSync);
   $("offload-body")?.addEventListener("click", (e) => {
+    const typeBtn = e.target.closest?.("[data-offload-type]");
+    if (typeBtn && !OFFLOAD.running) {
+      const key = typeBtn.getAttribute("data-offload-type");
+      const of = OFFLOAD.deps.filter((d) => d.safe && (LIB_TYPE_BY_KEY[d.pkg_type] ? d.pkg_type : "other") === key);
+      const on = !of.every((d) => d.checked);
+      for (const d of of) d.checked = on;
+      offloadRenderBody();
+      offloadSync();
+      return;
+    }
     const toggle = e.target.closest?.("[data-offload-users]");
     if (!toggle) return;
     // Inside the row's <label>: don't let the click tick the checkbox.
@@ -4690,7 +4817,7 @@ function setupOffload() {
     const input = e.target;
     if (!(input instanceof HTMLInputElement) || OFFLOAD.running) return;
     if (input.id === "offload-all") {
-      for (const d of OFFLOAD.deps) if (d.movable) d.checked = input.checked;
+      for (const d of offloadSelectAllSet()) d.checked = input.checked;
     } else if (input.hasAttribute("data-offload")) {
       const list = input.getAttribute("data-offload") === "target" ? OFFLOAD.targets : OFFLOAD.deps;
       const entry = list[Number(input.getAttribute("data-offload-idx"))];
@@ -4890,6 +5017,12 @@ function libRunAction(action, trigger) {
     case "bulk-delete":
       vpBulkDelete().catch((e) => addLog(`Bulk delete: ${String(e)}`));
       break;
+    case "remove-deps":
+      if (item) removeDepsOpen([item]);
+      break;
+    case "bulk-remove-deps":
+      removeDepsOpen(libSelectedSnaps());
+      break;
     case "bulk-offload":
       offloadOpen(libSelectedSnaps().filter((s) => !s.offloaded), false);
       break;
@@ -4955,6 +5088,7 @@ function libContextMenu(event, item) {
     ? [
         { label: "Offload selected…", action: () => libRunAction("bulk-offload") },
         { label: "Restore selected…", action: () => libRunAction("bulk-restore") },
+        { label: "Remove dependencies of selected…", action: () => libRunAction("bulk-remove-deps") },
         { label: "Add to favorites", action: () => libRunAction("bulk-favorite") },
         { separator: true },
         { label: "Clean Duplicates of selected…", action: () => libRunAction("bulk-clean") },
@@ -4985,6 +5119,9 @@ function libContextMenu(event, item) {
           label: item.offloaded ? "Restore to AddonPackages…" : "Offload…",
           action: () => offloadOpen([item], Boolean(item.offloaded)),
         },
+        ...(Number(item.dep_count) > 0
+          ? [{ label: "Remove dependencies…", action: () => removeDepsOpen([item]) }]
+          : []),
         { separator: true },
         {
           label: "Download Dependencies…",

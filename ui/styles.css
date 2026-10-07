@@ -14249,3 +14249,33 @@ button.lib-dep-ref:hover {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+/* Remove Dependencies: tick a type's unshared dependencies in one click. */
+.offload-types {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.offload-types-label {
+  font-size: 11px;
+  color: var(--lib-text-3);
+}
+
+.offload-type-btn {
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--dot) 30%, transparent);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.offload-type-btn:hover {
+  background: color-mix(in srgb, var(--dot) 18%, transparent);
+}
+
+.offload-type-btn.is-on {
+  border-color: var(--dot);
+  background: color-mix(in srgb, var(--dot) 26%, transparent);
+}
