@@ -51,6 +51,7 @@ dist-ssr/
 for test/
 /vam-backstage-master.zip
 
-# Scratch trees written by the VAR Packages maintenance tests. They clean up
-# after themselves on success, so these only linger after a failing run.
-tmp_pkg_*/
+# Scratch trees written by the Rust tests (tmp_pkg_*, tmp_rust_verify_*,
+# tmp_stitch_*, tmp_recursive_scan, ...). They clean up after themselves on
+# success, so these only linger after a failing or interrupted run.
+/tmp_*/
