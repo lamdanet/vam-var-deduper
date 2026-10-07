@@ -6344,3 +6344,47 @@ fn stored_link_for_the_exact_version_wins() {
     assert!(crate::db::remove_download_link(&db, "Acid.Look.3.var", "https://example.com/Acid.Look.3.var").unwrap());
     assert_eq!(pick(Some(3)), "Acid.Look.5.var");
 }
+
+#[test]
+fn mega_links_parse_both_forms_and_refuse_folders() {
+    use crate::mega::parse_link;
+    let key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"; // bytes 0..32
+    let a = parse_link(&format!("https://mega.nz/file/AbCdEf12#{key}")).unwrap();
+    let b = parse_link(&format!("https://mega.nz/#!AbCdEf12!{key}")).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a.handle, "AbCdEf12");
+    assert!(parse_link("https://mega.nz/file/AbCdEf12").unwrap_err().contains("no key"));
+    assert!(parse_link("https://mega.nz/folder/Xyz#k").unwrap_err().contains("folder"));
+    assert_eq!(crate::sources::normalize_link(&format!("https://mega.nz/file/AbCdEf12#{key}")).map(|(_, h)| h), Some("mega"));
+}
+
+#[test]
+fn mega_ctr_decrypts_across_chunk_boundaries() {
+    let link = crate::mega::test_link([7u8; 32]);
+    let plain: Vec<u8> = (0..100u8).collect();
+    // Encrypting is the same XOR with the keystream.
+    let mut cipher = plain.clone();
+    link.decryptor().apply(&mut cipher);
+    assert_ne!(cipher, plain);
+    // Decrypt in odd-sized pieces, as network chunks arrive.
+    let mut d = link.decryptor();
+    let mut out = Vec::new();
+    for piece in cipher.chunks(7) {
+        let mut p = piece.to_vec();
+        d.apply(&mut p);
+        out.extend(p);
+    }
+    assert_eq!(out, plain);
+}
+
+#[test]
+fn mega_attributes_give_the_file_name() {
+    let link = crate::mega::test_link([3u8; 32]);
+    let at = crate::mega::encrypt_attributes_for_test(&link, r#"{"n":"Acid.Look.3.var","c":"x"}"#);
+    let value = serde_json::json!([{ "g": "https://gfs.example/dl", "s": 1234, "at": at }]);
+    let file = crate::mega::parse_response_for_test(&link, &value).unwrap();
+    assert_eq!(file.name.as_deref(), Some("Acid.Look.3.var"));
+    assert_eq!(file.size, Some(1234));
+    let err = crate::mega::parse_response_for_test(&link, &serde_json::json!([-17])).unwrap_err();
+    assert!(err.contains("quota"));
+}

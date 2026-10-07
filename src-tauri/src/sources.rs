@@ -9,8 +9,8 @@ use tauri::State;
 
 use crate::{db::Db, models::DownloadLinkRow};
 
-/// Normalizes a pasted link and names its host: `"pixeldrain"`, `"mediafire"`
-/// or `"other"`. A Pixeldrain share page (`/u/<id>`) becomes the file's direct
+/// Normalizes a pasted link and names its host: `"pixeldrain"`, `"mediafire"`,
+/// `"mega"` or `"other"`. A Pixeldrain share page (`/u/<id>`) becomes the file's direct
 /// download URL — the page itself is HTML, not the `.var`. `None` when it isn't
 /// an http(s) link.
 pub(crate) fn normalize_link(raw: &str) -> Option<(String, &'static str)> {
@@ -27,6 +27,9 @@ pub(crate) fn normalize_link(raw: &str) -> Option<(String, &'static str)> {
     }
     if lower.contains("mediafire.com") {
         return Some((url.to_string(), "mediafire"));
+    }
+    if crate::mega::is_mega(url) {
+        return Some((url.to_string(), "mega"));
     }
     Some((url.to_string(), "other"))
 }
@@ -101,7 +104,15 @@ pub(crate) fn inspect_link(url: &str) -> LinkInfo {
         };
     };
     let mut info = LinkInfo { url: url.clone(), host: host.to_string(), ..Default::default() };
-    if host == "pixeldrain" {
+    if host == "mega" {
+        match crate::mega::parse_link(&url).and_then(|link| crate::mega::file_info_blocking(&link)) {
+            Ok(file) => {
+                info.filename = file.name;
+                info.size = file.size;
+            }
+            Err(err) => info.error = Some(err),
+        }
+    } else if host == "pixeldrain" {
         match pixeldrain_id(&url) {
             Some(id) => match fetch_pixeldrain_info(id) {
                 Ok(pd) => {
@@ -155,7 +166,11 @@ pub(crate) fn add_download_link(
     url: String,
     db: State<'_, Db>,
 ) -> Result<DownloadLinkRow, String> {
-    let (url, _) = normalize_link(&url).ok_or_else(|| "Paste an http(s) link.".to_string())?;
+    let (url, host) = normalize_link(&url).ok_or_else(|| "Paste an http(s) link.".to_string())?;
+    if host == "mega" {
+        // Without its key a MEGA link can't be decrypted — refuse it now.
+        crate::mega::parse_link(&url)?;
+    }
     let mut name = filename.trim().to_string();
     if !name.to_ascii_lowercase().ends_with(".var") {
         name.push_str(".var");

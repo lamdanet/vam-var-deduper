@@ -283,8 +283,21 @@ async fn download_async(
     use std::sync::atomic::Ordering;
 
     let client = download_client(url.contains("pixeldrain.com"))?;
+    // A MEGA link is resolved to a temporary address for the encrypted bytes,
+    // which are decrypted as they stream in.
+    let (fetch_url, mut decrypt) = if crate::mega::is_mega(url) {
+        let link = crate::mega::parse_link(url).map_err(|e| anyhow!(e))?;
+        let api = reqwest::Client::builder()
+            .timeout(Duration::from_secs(API_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| anyhow!("failed to build HTTP client: {e}"))?;
+        let info = crate::mega::file_info(&api, &link).await?;
+        (info.download_url, Some(link.decryptor()))
+    } else {
+        (url.to_string(), None)
+    };
     let resp = client
-        .get(url)
+        .get(&fetch_url)
         .send()
         .await
         .map_err(|e| anyhow!("download request failed: {e}"))?;
@@ -316,6 +329,14 @@ async fn download_async(
             Ok(None) => break, // stream finished
             Ok(Some(Ok(chunk))) => {
                 idle = Duration::ZERO;
+                let chunk = match decrypt.as_mut() {
+                    Some(d) => {
+                        let mut plain = chunk.to_vec();
+                        d.apply(&mut plain);
+                        plain.into()
+                    }
+                    None => chunk,
+                };
                 file.write_all(&chunk)
                     .map_err(|e| anyhow!("write error: {e}"))?;
                 downloaded += chunk.len() as u64;

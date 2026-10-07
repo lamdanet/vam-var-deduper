@@ -9,6 +9,7 @@ mod hub;
 mod import;
 mod internalize;
 mod library;
+mod mega;
 mod models;
 mod naming;
 mod offload;
