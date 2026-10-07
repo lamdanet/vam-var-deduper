@@ -441,6 +441,13 @@ pub(crate) fn plan_clean_duplicates(
             .iter()
             .filter(|i| candidates[**i].version == Some(max_v))
             .all(|i| candidates[*i].disabled);
+        // Same failure, other cause: a newer version that is only outside
+        // AddonPackages (offloaded, or in some extra folder) is not loaded
+        // either, so the older one inside AddonPackages is still the live copy.
+        let keeper_outside = versioned
+            .iter()
+            .filter(|i| candidates[**i].version == Some(max_v))
+            .all(|i| !candidates[*i].in_addon_packages);
 
         let keeper = versioned
             .iter()
@@ -458,6 +465,17 @@ pub(crate) fn plan_clean_duplicates(
                     i,
                     format!(
                         "the newer version {} is disabled, so this one is still what VAM loads",
+                        candidates[keeper].package_id,
+                    ),
+                );
+                continue;
+            }
+            if keeper_outside && candidates[i].in_addon_packages && !candidates[i].disabled {
+                disabled_protected.insert(
+                    i,
+                    format!(
+                        "the newer version {} is outside AddonPackages (offloaded?), so this one \
+                         is still what VAM loads",
                         candidates[keeper].package_id,
                     ),
                 );

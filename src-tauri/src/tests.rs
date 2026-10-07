@@ -3928,6 +3928,27 @@ fn dedup_disabled_newer_protects_older() {
     fs::remove_dir_all(&dir).expect("cleanup");
 }
 
+/// An offloaded newer version isn't loaded either, so the older one still in
+/// AddonPackages must stay.
+#[test]
+fn dedup_offloaded_newer_protects_older() {
+    let dir = pkg_test_dir("offloaded_newer");
+    let addon = dir.join("AddonPackages");
+    let offload = dir.join("AddonPackages_offload");
+    fs::create_dir_all(&addon).expect("addon");
+    fs::create_dir_all(&offload).expect("offload");
+    write_sized_var(&addon.join("C.Pkg.1.var"), 10);
+    write_sized_var(&offload.join("C.Pkg.2.var"), 10);
+
+    let res = plan_dupes(&[&addon, &offload]);
+
+    let a = action_for(&res, "C.Pkg.1").expect("planned");
+    assert_eq!(a.status, "protected");
+    assert!(a.detail.contains("outside AddonPackages"), "detail: {}", a.detail);
+
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
 // --- Decision 2: Recycle Bin -------------------------------------------------
 
 #[test]
