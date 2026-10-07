@@ -4957,13 +4957,15 @@ async function srcSaveAllFolder() {
   const btn = $("src-save-all");
   if (btn) btn.disabled = true;
   let saved = 0;
+  let known = 0;
   const failed = [];
   let mine = null;
   for (const f of files) {
     try {
-      const row = await invoke("add_download_link", { filename: f.name, url: f.url });
+      const { row, added } = await invoke("add_download_link", { filename: f.name, url: f.url });
       if (f.size && !row.size) row.size = f.size;
-      saved += 1;
+      if (added) saved += 1;
+      else known += 1;
       if (SRC.folderPick >= 0 && files[SRC.folderPick] === f) mine = row;
     } catch (e) {
       failed.push(`${f.name}: ${String(e?.message || e)}`);
@@ -4971,7 +4973,9 @@ async function srcSaveAllFolder() {
   }
   for (const msg of failed) addLog(`Download sources: ${msg}`);
   showToast(
-    `Saved ${saved} MEGA source${saved === 1 ? "" : "s"}${failed.length ? ` — ${failed.length} skipped, see Console` : ""}`,
+    `Saved ${saved} MEGA source${saved === 1 ? "" : "s"}${known ? ` · ${known} already saved` : ""}${
+      failed.length ? ` — ${failed.length} skipped, see Console` : ""
+    }`,
     failed.length ? "error" : "success",
     failed.length ? 6000 : 3200,
   );
@@ -5179,10 +5183,15 @@ async function sourceSave() {
   const save = $("src-save");
   if (save) save.disabled = true;
   try {
-    const row = await invoke("add_download_link", { filename, url });
+    const { row, added } = await invoke("add_download_link", { filename, url });
     const size = picked ? picked.size : SRC.info?.size;
     if (size && !row.size) row.size = size;
-    showToast(`Saved a ${srcHostLabel(row.host)} source for ${row.filename}`, "success");
+    showToast(
+      added
+        ? `Saved a ${srcHostLabel(row.host)} source for ${row.filename}`
+        : `${row.filename} already has this link — nothing to add`,
+      added ? "success" : "info",
+    );
     if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
     const done = SRC.onSaved;
     sourceClose();
@@ -5711,18 +5720,22 @@ async function sourcesSave(rows) {
     return null;
   }
   const saved = [];
+  saved.newLinks = 0;
+  saved.knownLinks = 0;
   let failures = 0;
   for (const r of rows) {
     let any = false;
     for (const m of r.mirrors) {
       if (m.encrypted && !sourcesPassword(m.url).trim()) continue; // a mirror nobody can open
       try {
-        await invoke("add_download_link", {
+        const { added } = await invoke("add_download_link", {
           filename: r.filename,
           url: m.url,
           archiveEntry: m.archive_entry || null,
           archivePassword: m.archive_entry ? sourcesPassword(m.url).trim() || null : null,
         });
+        if (added) saved.newLinks += 1;
+        else saved.knownLinks += 1;
         any = true;
       } catch (e) {
         failures += 1;
@@ -5739,6 +5752,16 @@ async function sourcesSave(rows) {
   sourcesLoadSaved();
   if (failures) showToast(`${failures} mirror${failures === 1 ? "" : "s"} could not be saved — see Console`, "error", 6000);
   return saved;
+}
+
+// "Saved 12 new links · 3 were already saved" for a sourcesSave result.
+function sourcesSavedText(saved) {
+  const parts = [];
+  if (saved.newLinks) parts.push(`Saved ${saved.newLinks} new link${saved.newLinks === 1 ? "" : "s"}`);
+  if (saved.knownLinks) {
+    parts.push(`${saved.knownLinks} ${saved.knownLinks === 1 ? "was" : "were"} already saved`);
+  }
+  return parts.join(" · ") || "Nothing to save";
 }
 
 // Queues the download of a row (its best mirror that can be opened), or of a
@@ -5861,7 +5884,7 @@ function setupSourcesPage() {
   });
   $("sources-save")?.addEventListener("click", async () => {
     const saved = await sourcesSave(SOURCES.rows.filter((r) => r.checked));
-    if (saved?.length) showToast(`Saved ${saved.length} source${saved.length === 1 ? "" : "s"}`, "success");
+    if (saved?.length) showToast(sourcesSavedText(saved), saved.newLinks ? "success" : "info");
   });
   $("sources-download")?.addEventListener("click", () =>
     sourcesDownload(SOURCES.rows.filter((r) => r.checked)).catch((e) => addLog(`Sources: ${String(e)}`)),
@@ -5942,7 +5965,12 @@ function setupSourcesPage() {
     const what = act.getAttribute("data-sources-act");
     if (what === "save") {
       sourcesSave([row]).then((saved) => {
-        if (saved?.length) showToast(`Saved ${row.filename}`, "success");
+        if (saved?.length) {
+          showToast(
+            saved.newLinks ? `Saved ${row.filename}` : `${row.filename} already had these links`,
+            saved.newLinks ? "success" : "info",
+          );
+        }
       });
     } else if (what === "download") {
       sourcesDownload([row]).catch((err) => addLog(`Sources: ${String(err)}`));
