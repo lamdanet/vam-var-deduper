@@ -1179,8 +1179,8 @@
 
         <footer class="lib-statusbar" id="hub-statusbar"></footer>
 
-        <!-- Hub page (after Backstage's HubDetail): package info + the resource's
-             Hub pages. #hub-page-frame is a placeholder: the browser is a native
+        <!-- Hub page (after Backstage's HubDetail): the resource's Hub pages +
+             package info on the right, where the Hub view's details panel is. #hub-page-frame is a placeholder: the browser is a native
              child webview the app keeps on top of it (hub_embed_*). -->
         <div id="hub-page" class="hub-page hidden">
           <div class="hub-page-head">
@@ -1202,8 +1202,6 @@
             </button>
           </div>
           <div class="hub-page-body">
-            <aside id="hub-page-info" class="lib-detail hub-page-info"></aside>
-            <div class="lib-resize hub-page-resize" data-hub-page-resize aria-hidden="true"></div>
             <div class="hub-page-browser">
               <div class="hub-page-toolbar">
                 <button class="lib-icon-btn lib-icon-btn-sm" type="button" data-hub-page-ctl="back" title="Back">
@@ -1231,6 +1229,8 @@
                 <span class="hub-page-placeholder"><span class="material-symbols-outlined">language</span>Loading the Hub…</span>
               </div>
             </div>
+            <div class="lib-resize hub-page-resize" data-hub-page-resize aria-hidden="true"></div>
+            <aside id="hub-page-info" class="lib-detail hub-page-info"></aside>
           </div>
         </div>
       </section>

@@ -13133,11 +13133,6 @@ button.lib-dep-ref:hover {
   display: flex;
 }
 
-.lib-detail.hub-page-info {
-  border-left: 0;
-  border-right: 1px solid var(--lib-border);
-}
-
 .hub-page-info .hub-open-row,
 .hub-page-info .hub-links {
   display: none;
@@ -13252,13 +13247,7 @@ button.lib-dep-ref:hover {
   color: var(--lib-text-3);
 }
 
-/* Toasts move over the info panel while the browser covers the right side. */
-.hub-page-on .toast-host {
-  right: auto;
-  left: var(--hub-toast-left, 16px);
-  align-items: flex-start;
-}
-
+/* Toasts stay within the info panel while the browser covers the rest. */
 .hub-page-on .toast {
   max-width: var(--hub-toast-w, 300px);
 }

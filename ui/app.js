@@ -15482,8 +15482,9 @@ function hubOnImageError(event) {
 }
 
 // ---- Hub page (embedded browser) ------------------------------------------------------
-// After Backstage's HubDetail: over the whole Hub view, the package info on the
-// left and the resource's Hub pages on the right — the Hub's own *-panel pages,
+// After Backstage's HubDetail: over the whole Hub view, the resource's Hub
+// pages, with the package info on the right (where the Hub view's details
+// panel sits) — the Hub's own *-panel pages,
 // with browser controls and Overview / Updates / Reviews / History /
 // Discussion tabs. The browser is a native child webview (hub_embed_*) kept on
 // #hub-page-frame; anything drawn over that area (modals, the Downloads
@@ -15552,12 +15553,9 @@ function hubPageSyncEmbed() {
   const rect = hubPageEmbedVisible() ? hubPageRect() : null;
   document.body.classList.toggle("hub-page-on", Boolean(rect));
   if (rect) {
-    // Toasts move over the info panel while the browser covers the right side.
+    // Toasts stay within the info panel: the browser covers everything left of it.
     const info = $("hub-page-info")?.getBoundingClientRect();
-    if (info) {
-      document.body.style.setProperty("--hub-toast-left", `${Math.round(info.left + 16)}px`);
-      document.body.style.setProperty("--hub-toast-w", `${Math.max(200, Math.round(info.width - 32))}px`);
-    }
+    if (info) document.body.style.setProperty("--hub-toast-w", `${Math.max(200, Math.round(info.width - 32))}px`);
   }
   const key = rect ? `${rect.x},${rect.y},${rect.width},${rect.height}` : "hidden";
   if (key === HUB_PAGE.bounds) return;
@@ -15716,14 +15714,14 @@ function setupHubPage() {
     address.value = hubFullUrl(HUB_PAGE.url);
   });
 
-  // Info panel width (right-edge drag) — the same width as the details panel.
+  // Info panel width (left-edge drag) — the same width as the details panel.
   document.querySelector("[data-hub-page-resize]")?.addEventListener("mousedown", (event) => {
     event.preventDefault();
     const startX = event.clientX;
     const start = HUB.detailWidth;
     document.body.classList.add("lib-resizing");
     const onMove = (e) => {
-      HUB.detailWidth = Math.min(500, Math.max(260, start + (e.clientX - startX)));
+      HUB.detailWidth = Math.min(500, Math.max(260, start - (e.clientX - startX)));
       hubApplyLayout();
     };
     const onUp = () => {
