@@ -17,9 +17,12 @@ const THEMES = [
   "frost",
   "circuit",
   "modhub",
+  "crimson-blaze",
+  "electric-cyber",
+  "emerald-pulse",
 ];
 // Themes wearing the Obsidian skin (styles.css: :root[data-skin="obsidian"]).
-const OBSIDIAN_THEMES = new Set(["modhub"]);
+const OBSIDIAN_THEMES = new Set(["modhub", "crimson-blaze", "electric-cyber", "emerald-pulse"]);
 // Themes that were removed, and what a saved choice of one becomes.
 const RETIRED_THEMES = { backstage: "modhub" };
 
@@ -435,6 +438,9 @@ const I18N = {
     themeButtonSolarized: "Solarized",
     themeButtonMonolith: "Monolith",
     themeButtonModhub: "Obsidian ModHub",
+    themeButtonCrimsonBlaze: "Crimson Blaze",
+    themeButtonElectricCyber: "Electric Cyber",
+    themeButtonEmeraldPulse: "Emerald Pulse",
     themeButtonAmber: "Amber Noir",
     themeButtonEmerald: "Emerald Dark",
     themeButtonMidnight: "Midnight Blue",
@@ -2261,6 +2267,9 @@ function themeToggleLabel(theme) {
     frost: "themeButtonFrost",
     circuit: "themeButtonCircuit",
     modhub: "themeButtonModhub",
+    "crimson-blaze": "themeButtonCrimsonBlaze",
+    "electric-cyber": "themeButtonElectricCyber",
+    "emerald-pulse": "themeButtonEmeraldPulse",
   }[next];
   return labelKey ? t(labelKey) : "";
 }
@@ -2420,6 +2429,9 @@ function applySettingsCopy() {
   setText("settings-theme-frost-label", t("themeButtonFrost"));
   setText("settings-theme-circuit-label", t("themeButtonCircuit"));
   setText("settings-theme-modhub-label", t("themeButtonModhub"));
+  setText("settings-theme-crimson-blaze-label", t("themeButtonCrimsonBlaze"));
+  setText("settings-theme-electric-cyber-label", t("themeButtonElectricCyber"));
+  setText("settings-theme-emerald-pulse-label", t("themeButtonEmeraldPulse"));
 
   setText("settings-scan-eyebrow", t("settingsScanEyebrow"));
   setText("settings-scan-title", t("settingsScanTitle"));

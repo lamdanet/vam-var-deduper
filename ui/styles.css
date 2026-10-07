@@ -330,6 +330,84 @@
   --font-display: "Space Grotesk", "Inter", sans-serif;
 }
 
+/* Obsidian Crimson Blaze — graphite layers with a crimson → amber thermal core. */
+:root[data-theme="crimson-blaze"] {
+  color-scheme: dark;
+  --bg: #090b0e;
+  --bg-elev: #0e1117;
+  --surface: #161b22;
+  --surface-2: #1c212a;
+  --surface-3: #242a35;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #f3f4f6;
+  --text-muted: #9ca3af;
+  --text-dim: #6b7280;
+  --primary: #e11d48;
+  --primary-fg: #ffffff;
+  --primary-hover: #f43f5e;
+  --accent-success: #34d399;
+  --accent-warn: #f97316;
+  --accent-danger: #fda4af;
+  --accent-emerald-dim: #052e16;
+  --ring: rgba(249, 115, 22, 0.2);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI",
+    sans-serif;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+}
+
+/* Obsidian Electric Cyber — void black with a cyan → electric-blue HUD; dark labels on its buttons. */
+:root[data-theme="electric-cyber"] {
+  color-scheme: dark;
+  --bg: #0a0d14;
+  --bg-elev: #131722;
+  --surface: #131722;
+  --surface-2: #181d2b;
+  --surface-3: #202738;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.12);
+  --text: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+  --primary: #00f2fe;
+  --primary-fg: #0a0d14;
+  --primary-hover: #4facfe;
+  --accent-success: #51df8e;
+  --accent-warn: #fbbf24;
+  --accent-danger: #ff6b6b;
+  --accent-emerald-dim: #052e16;
+  --ring: rgba(0, 242, 254, 0.3);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI",
+    sans-serif;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+}
+
+/* Obsidian Emerald Pulse — slate layers with an emerald → cyan pulse. */
+:root[data-theme="emerald-pulse"] {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --bg-elev: #121820;
+  --surface: #161f28;
+  --surface-2: #1c2633;
+  --surface-3: #243242;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+  --primary: #10b981;
+  --primary-fg: #ffffff;
+  --primary-hover: #34d399;
+  --accent-success: #34d399;
+  --accent-warn: #fbbf24;
+  --accent-danger: #f87171;
+  --accent-emerald-dim: #062822;
+  --ring: rgba(6, 182, 212, 0.3);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI",
+    sans-serif;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -11697,6 +11775,42 @@ button.lib-dep-ref:hover {
   margin: 0 4px;
 }
 
+/* Crimson Blaze theme preview swatch */
+.theme-preview-crimson-blaze {
+  background: #090b0e;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.theme-preview-crimson-blaze .theme-preview-bar {
+  background: linear-gradient(90deg, #e11d48, #f97316);
+}
+.theme-preview-crimson-blaze .theme-preview-line {
+  background: #242a35;
+}
+
+/* Electric Cyber theme preview swatch */
+.theme-preview-electric-cyber {
+  background: #0a0d14;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.theme-preview-electric-cyber .theme-preview-bar {
+  background: linear-gradient(90deg, #00f2fe, #4facfe);
+}
+.theme-preview-electric-cyber .theme-preview-line {
+  background: #202738;
+}
+
+/* Emerald Pulse theme preview swatch */
+.theme-preview-emerald-pulse {
+  background: #0b0f14;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.theme-preview-emerald-pulse .theme-preview-bar {
+  background: linear-gradient(90deg, #059669, #10b981, #06b6d4);
+}
+.theme-preview-emerald-pulse .theme-preview-line {
+  background: #243242;
+}
+
 /* Obsidian ModHub theme preview swatch */
 .theme-preview-modhub {
   background: #090b10;
@@ -12544,6 +12658,186 @@ button.lib-dep-ref:hover {
   --ob-restricted-bg: #3b0d0c;
   --ob-restricted-fg: #ffb4ab;
   --ob-restricted-line: rgba(255, 180, 171, 0.3);
+}
+
+/* Crimson Blaze. */
+:root[data-theme="crimson-blaze"] {
+  --radius-sm: 4px;
+  --radius: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --bs-chrome: #0e1117;
+  --bs-surface: #161b22;
+  --bs-elevated: #1c212a;
+  --bs-hover: #242a35;
+  --bs-active: #242a35;
+  --bs-border: rgba(255, 255, 255, 0.08);
+  --bs-border-bright: rgba(255, 255, 255, 0.12);
+  --bs-text: #f3f4f6;
+  --bs-text-2: #9ca3af;
+  --bs-text-3: #6b7280;
+  --bs-aside: #6b7280;
+  --bs-placeholder: #6b7280;
+  --bs-accent: #f97316;
+  --bs-focus: #f97316;
+  --bs-selection: rgba(225, 29, 72, 0.4);
+  --bs-gradient: linear-gradient(135deg, #e11d48 0%, #f97316 100%);
+  --bs-cta: linear-gradient(90deg, #e11d48 0%, #f97316 100%);
+  --bs-cta-hover: linear-gradient(90deg, #f43f5e 0%, #fb923c 100%);
+  --bs-cta-active: linear-gradient(90deg, #be123c 0%, #ea580c 100%);
+  --bs-brand: linear-gradient(135deg, #e11d48 0%, #f97316 100%);
+  --bs-rail-bar: linear-gradient(to bottom, #e11d48, #f97316);
+  --bs-progress: linear-gradient(90deg, #e11d48, #f97316, #e11d48);
+  --bs-outline-bg: rgba(255, 255, 255, 0.04);
+  --bs-outline-bg-hover: rgba(255, 255, 255, 0.08);
+  --bs-overlay-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.12);
+  --ob-canvas: #090b0e;
+  --ob-modal: #242a35;
+  --ob-cta-fg: #ffffff;
+  --ob-accent-text: #fb923c;
+  --ob-glow: 0 4px 16px -2px rgba(225, 29, 72, 0.4), 0 1px 4px rgba(249, 115, 22, 0.3);
+  --ob-glow-hover: 0 0 18px rgba(225, 29, 72, 0.5);
+  --ob-focus-ring: 0 0 0 2px rgba(249, 115, 22, 0.2);
+  --ob-check: linear-gradient(135deg, #e11d48, #f97316);
+  --ob-check-glow: none;
+  --ob-ghost-hover-fg: #ffffff;
+  --ob-ghost-hover-border: rgba(255, 255, 255, 0.16);
+  --ob-type-bg: #2b1406;
+  --ob-type-fg: #fed7aa;
+  --ob-type-line: rgba(249, 115, 22, 0.35);
+  --ob-free-bg: #052e16;
+  --ob-free-fg: #34d399;
+  --ob-free-line: rgba(52, 211, 153, 0.3);
+  --ob-paid-bg: #2a0812;
+  --ob-paid-fg: #fda4af;
+  --ob-paid-line: rgba(225, 29, 72, 0.35);
+  --ob-license-bg: #161b22;
+  --ob-license-fg: #9ca3af;
+  --ob-license-line: rgba(255, 255, 255, 0.08);
+  --ob-restricted-bg: #2a0812;
+  --ob-restricted-fg: #fda4af;
+  --ob-restricted-line: rgba(225, 29, 72, 0.35);
+}
+
+/* Electric Cyber. */
+:root[data-theme="electric-cyber"] {
+  --radius-sm: 4px;
+  --radius: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
+  --bs-chrome: #131722;
+  --bs-surface: #131722;
+  --bs-elevated: #181d2b;
+  --bs-hover: #202738;
+  --bs-active: rgba(0, 242, 254, 0.08);
+  --bs-border: rgba(255, 255, 255, 0.08);
+  --bs-border-bright: rgba(0, 242, 254, 0.25);
+  --bs-text: #f8fafc;
+  --bs-text-2: #94a3b8;
+  --bs-text-3: #64748b;
+  --bs-aside: #64748b;
+  --bs-placeholder: #64748b;
+  --bs-accent: #00f2fe;
+  --bs-focus: #00f2fe;
+  --bs-selection: rgba(0, 242, 254, 0.3);
+  --bs-gradient: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+  --bs-cta: linear-gradient(90deg, #00f2fe 0%, #4facfe 100%);
+  --bs-cta-hover: linear-gradient(90deg, #5ff7ff 0%, #7cc2ff 100%);
+  --bs-cta-active: linear-gradient(90deg, #00d4de 0%, #3b95e6 100%);
+  --bs-brand: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+  --bs-rail-bar: linear-gradient(to bottom, #00f2fe, #4facfe);
+  --bs-progress: linear-gradient(90deg, #00f2fe, #4facfe, #00f2fe);
+  --bs-outline-bg: rgba(255, 255, 255, 0.03);
+  --bs-outline-bg-hover: rgba(0, 242, 254, 0.08);
+  --bs-overlay-shadow: 0 20px 48px -8px rgba(0, 0, 0, 0.85);
+  --ob-canvas: #0a0d14;
+  --ob-modal: #1b2233;
+  --ob-cta-fg: #0a0d14;
+  --ob-accent-text: #00f2fe;
+  --ob-glow: 0 0 16px rgba(0, 242, 254, 0.35);
+  --ob-glow-hover: 0 0 24px rgba(0, 242, 254, 0.55);
+  --ob-focus-ring: 0 0 10px rgba(0, 242, 254, 0.25);
+  --ob-check: linear-gradient(135deg, #00f2fe, #4facfe);
+  --ob-check-glow: none;
+  --ob-ghost-hover-fg: #00f2fe;
+  --ob-ghost-hover-border: #00f2fe;
+  --ob-type-bg: #042530;
+  --ob-type-fg: #00f2fe;
+  --ob-type-line: rgba(0, 242, 254, 0.3);
+  --ob-free-bg: #052e16;
+  --ob-free-fg: #34d399;
+  --ob-free-line: rgba(52, 211, 153, 0.3);
+  --ob-paid-bg: #2a1d05;
+  --ob-paid-fg: #fbbf24;
+  --ob-paid-line: rgba(251, 191, 36, 0.3);
+  --ob-license-bg: #052e16;
+  --ob-license-fg: #51df8e;
+  --ob-license-line: rgba(81, 223, 142, 0.3);
+  --ob-restricted-bg: #3c0d12;
+  --ob-restricted-fg: #ff6b6b;
+  --ob-restricted-line: rgba(255, 107, 107, 0.3);
+}
+
+/* Emerald Pulse. */
+:root[data-theme="emerald-pulse"] {
+  --radius-sm: 4px;
+  --radius: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
+  --bs-chrome: #121820;
+  --bs-surface: #161f28;
+  --bs-elevated: #1c2633;
+  --bs-hover: #243242;
+  --bs-active: #243242;
+  --bs-border: rgba(255, 255, 255, 0.08);
+  --bs-border-bright: rgba(6, 182, 212, 0.25);
+  --bs-text: #f1f5f9;
+  --bs-text-2: #94a3b8;
+  --bs-text-3: #64748b;
+  --bs-aside: #64748b;
+  --bs-placeholder: #64748b;
+  --bs-accent: #06b6d4;
+  --bs-focus: #06b6d4;
+  --bs-selection: rgba(16, 185, 129, 0.35);
+  --bs-gradient: linear-gradient(135deg, #059669 0%, #10b981 50%, #06b6d4 100%);
+  --bs-cta: linear-gradient(135deg, #059669 0%, #10b981 50%, #06b6d4 100%);
+  --bs-cta-hover: linear-gradient(135deg, #10b981 0%, #34d399 50%, #22d3ee 100%);
+  --bs-cta-active: linear-gradient(135deg, #047857 0%, #059669 50%, #0891b2 100%);
+  --bs-brand: linear-gradient(135deg, #059669 0%, #10b981 50%, #06b6d4 100%);
+  --bs-rail-bar: linear-gradient(to bottom, #10b981, #06b6d4);
+  --bs-progress: linear-gradient(90deg, #059669, #10b981, #06b6d4, #059669);
+  --bs-outline-bg: rgba(255, 255, 255, 0.03);
+  --bs-outline-bg-hover: rgba(255, 255, 255, 0.08);
+  --bs-overlay-shadow: 0 12px 36px -4px rgba(0, 0, 0, 0.75);
+  --ob-canvas: #0b0f14;
+  --ob-modal: #1c2633;
+  --ob-cta-fg: #ffffff;
+  --ob-accent-text: #38bdf8;
+  --ob-glow: 0 2px 12px rgba(16, 185, 129, 0.35);
+  --ob-glow-hover: 0 0 24px 0 rgba(6, 182, 212, 0.55);
+  --ob-focus-ring: 0 0 0 1px #06b6d4;
+  --ob-check: #059669;
+  --ob-check-glow: 0 0 8px rgba(16, 185, 129, 0.4);
+  --ob-ghost-hover-fg: #ffffff;
+  --ob-ghost-hover-border: rgba(6, 182, 212, 0.4);
+  --ob-type-bg: #082b38;
+  --ob-type-fg: #38bdf8;
+  --ob-type-line: #0e7490;
+  --ob-free-bg: #062822;
+  --ob-free-fg: #34d399;
+  --ob-free-line: #065f46;
+  --ob-paid-bg: #2a1d05;
+  --ob-paid-fg: #fbbf24;
+  --ob-paid-line: rgba(251, 191, 36, 0.3);
+  --ob-license-bg: #062822;
+  --ob-license-fg: #34d399;
+  --ob-license-line: #065f46;
+  --ob-restricted-bg: #3c0d12;
+  --ob-restricted-fg: #f87171;
+  --ob-restricted-line: rgba(248, 113, 113, 0.3);
 }
 
 /* ---- Type --------------------------------------------------------------- */
