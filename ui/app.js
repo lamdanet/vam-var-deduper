@@ -5386,6 +5386,12 @@ function sourcesRowHtml(i) {
       <span class="hub-dl-size">${p.size ? escapeHtml(formatBytesLocal(p.size)) : ""}</span>
       <span class="sources-status" data-sources-status="${i}">${sourcesStatusHtml(r)}</span>
       <span class="sources-row-acts">
+        ${
+          r.inLibrary
+            ? `<button type="button" class="icon-button" data-sources-act="details" data-sources-i="${i}" title="Open your copy in VAR Details">
+                 <span class="material-symbols-outlined">description</span></button>`
+            : ""
+        }
         <button type="button" class="icon-button" data-sources-act="save" data-sources-i="${i}"
                 title="Save as a download source${r.mirrors.length > 1 ? ` (all ${r.mirrors.length} mirrors)` : ""}">
           <span class="material-symbols-outlined">bookmark_add</span></button>
@@ -5736,6 +5742,71 @@ async function sourcesSave(rows) {
   return saved;
 }
 
+// Your copy of a file found in the post: looked up in the library listing
+// (the cached folder scan VAR Packages shows).
+async function sourcesFindLocal(filename) {
+  const stem = sourcesStem(filename).toLowerCase();
+  const inputDir = vpResolveInputDir();
+  if (!invoke || !inputDir) return null;
+  const page = await invoke("list_var_packages", {
+    inputDir,
+    additionalInputDirs: getAdditionalDirs("varPackages"),
+    offset: 0,
+    limit: 50,
+    search: sourcesStem(filename),
+    filters: null,
+    sort: "name",
+    sortDir: "asc",
+    forceRescan: false,
+    deepScan: state.varPackagesScannedDeep !== false,
+    offloadDir: offloadDir() || null,
+  });
+  return (page?.items ?? []).find((it) => String(it.package_id).toLowerCase() === stem) ?? null;
+}
+
+async function sourcesOpenDetails(row) {
+  const item = await sourcesFindLocal(row.filename);
+  if (!item) {
+    showToast(`Couldn't find ${row.filename} in your library — rescan VAR Packages.`, "error");
+    return;
+  }
+  openVarDetailsView(item, "folder");
+}
+
+function sourcesShowInLibrary(row) {
+  document.querySelector('[data-sidebar-link="var-packages"]')?.click();
+  setTimeout(() => libRevealPackage("", sourcesStem(row.filename)), 50);
+}
+
+function sourcesRowMenu(event, row) {
+  const p = sourcesPrimary(row);
+  const items = [];
+  if (row.inLibrary) {
+    items.push(
+      {
+        label: "Open in VAR Details",
+        action: () => sourcesOpenDetails(row).catch((e) => addLog(`Sources: ${String(e)}`)),
+      },
+      { label: "Show in VAR Packages", action: () => sourcesShowInLibrary(row) },
+      { separator: true },
+    );
+  }
+  items.push(
+    {
+      label: row.mirrors.length > 1 ? `Save as download source (${row.mirrors.length} mirrors)` : "Save as download source",
+      action: () =>
+        sourcesSave([row]).then((saved) => {
+          if (saved?.length) showToast(sourcesSavedText(saved), saved.newLinks ? "success" : "info");
+        }),
+    },
+    {
+      label: `Open link in browser (${srcHostLabel(p.host)})`,
+      action: () => invoke("open_url", { url: p.url }).catch((e) => addLog(`Sources: ${String(e)}`)),
+    },
+  );
+  showContextMenu(event.clientX, event.clientY, items);
+}
+
 // "Saved 12 new links · 3 were already saved" for a sourcesSave result.
 function sourcesSavedText(saved) {
   const parts = [];
@@ -5861,6 +5932,13 @@ function setupSourcesPage() {
       sourcesSyncSelection();
     }
   });
+  results?.addEventListener("contextmenu", (e) => {
+    const el = e.target.closest?.("[data-sources-row-i]");
+    const row = el ? SOURCES.rows[Number(el.getAttribute("data-sources-row-i"))] : null;
+    if (!row) return;
+    e.preventDefault();
+    sourcesRowMenu(e, row);
+  });
   results?.addEventListener("input", (e) => {
     const pw = e.target.closest?.("[data-sources-pw]");
     if (!pw) return;
@@ -5895,7 +5973,9 @@ function setupSourcesPage() {
     const row = SOURCES.rows[Number(act.getAttribute("data-sources-i"))];
     if (!row) return;
     const what = act.getAttribute("data-sources-act");
-    if (what === "save") {
+    if (what === "details") {
+      sourcesOpenDetails(row).catch((err) => addLog(`Sources: ${String(err)}`));
+    } else if (what === "save") {
       sourcesSave([row]).then((saved) => {
         if (saved?.length) {
           showToast(
