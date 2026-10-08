@@ -6173,9 +6173,13 @@ function pkgScrollTo(key) {
   const scroll = $("pkg-scroll");
   const sec = scroll?.querySelector(`[data-pkg-sec="${key}"]`);
   if (!sec) return;
-  const nav = scroll.querySelector(".pkg-nav")?.offsetHeight ?? 0;
-  const top = scroll.scrollTop + sec.getBoundingClientRect().top - scroll.getBoundingClientRect().top - nav + 4;
-  scroll.scrollTo({ top, behavior: "smooth" });
+  const offset = () => sec.getBoundingClientRect().top - scroll.getBoundingClientRect().top - (scroll.querySelector(".pkg-nav")?.offsetHeight ?? 0) + 4;
+  scroll.scrollTo({ top: scroll.scrollTop + offset(), behavior: "smooth" });
+  // Sections still filling in move the target and cut a smooth scroll short:
+  // finish the jump once things settle.
+  setTimeout(() => {
+    if (sec.isConnected && Math.abs(offset()) > 12) scroll.scrollTo({ top: scroll.scrollTop + offset() });
+  }, 700);
 }
 
 function pkgSkeleton(lines = 3) {
