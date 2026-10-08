@@ -10,7 +10,7 @@ repository = "https://github.com/lamdanet/vam-var-deduper"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-aes = "0.8"
+aes = "0.9"
 anyhow = "1"
 base64 = "0.22"
 encoding_rs = "0.8"
