@@ -1259,7 +1259,7 @@ pub(crate) fn find_resources_by_crc(
 /// the per-CRC tauri round-trip is too slow for VARs with hundreds of
 /// resources. Result map is keyed by CRC32 as a string (JSON object keys are
 /// always strings); CRCs with no matches are omitted from the map.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn find_resources_by_crcs_bulk(
     crc32s: Vec<u32>,
     exclude_package_id: Option<String>,
