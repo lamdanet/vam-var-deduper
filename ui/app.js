@@ -1073,6 +1073,7 @@ function queueDownload(opts) {
     depsDir: o.depsDir || "",
     priority: o.priority === "dependency" ? "dependency" : "direct",
     autoDeps: Boolean(o.autoDeps),
+    replace: Boolean(o.replace),
     status: "queued",
     percent: 0,
     detail: "",
@@ -1163,6 +1164,7 @@ async function runDownloadJob(job) {
       downloadUrl: job.url,
       filename: job.filename || "",
       destDir: job.destDir,
+      replace: Boolean(job.replace),
     });
     job.taskId = handle && handle.id != null ? handle.id : null;
     if (job.taskId == null) throw new Error("failed to start download");
@@ -1403,6 +1405,7 @@ function downloadsSave() {
       depsDir: j.depsDir,
       priority: j.priority,
       autoDeps: j.autoDeps,
+      replace: Boolean(j.replace),
       failed: j.status === "failed",
       error: j.status === "failed" ? j.error : null,
     }));
@@ -1434,6 +1437,7 @@ function downloadsRestore() {
       depsDir: s.depsDir || "",
       priority: s.priority === "dependency" ? "dependency" : "direct",
       autoDeps: Boolean(s.autoDeps),
+      replace: Boolean(s.replace),
       status: s.failed ? "failed" : "queued",
       percent: 0,
       detail: "",
@@ -3213,6 +3217,11 @@ const LIB_STATUSES = [
   },
   { key: "updates", label: "Updates", title: "A newer version is on the Hub" },
   {
+    key: "damaged",
+    label: "Damaged",
+    title: "Can't be read, or a full check found a broken file inside",
+  },
+  {
     key: "local",
     label: "Not on Hub",
     title: "Not on the Hub — once deleted, it can't be downloaded again. Keep a backup.",
@@ -3594,6 +3603,10 @@ function libCardHtml(it, idx) {
     icons.push(
       `<span class="lib-chip lib-chip-error" title="The archive or its meta.json could not be read">Corrupted</span>`,
     );
+  } else if (it.damaged) {
+    icons.push(
+      `<span class="lib-chip lib-chip-error" title="${escapeAttribute(`A full check found a broken file: ${it.damaged}`)}">Damaged</span>`,
+    );
   }
   icons.push(
     `<button type="button" class="lib-thumb-glyph lib-fav${fav ? " is-active" : ""}" data-vp-fav="${escapeAttribute(pid)}" aria-pressed="${fav}" title="${fav ? "Remove from favorites" : "Add to favorites"}"><span class="material-symbols-outlined">star</span></button>`,
@@ -3652,6 +3665,7 @@ function libCardHtml(it, idx) {
 function libStatusCellHtml(it) {
   const parts = [];
   if (!it.readable) parts.push(`<span class="lib-status-err">Corrupted</span>`);
+  else if (it.damaged) parts.push(`<span class="lib-status-err" title="${escapeAttribute(it.damaged)}">Damaged</span>`);
   else if (it.offloaded) parts.push(`<span class="lib-status-warn">Offloaded</span>`);
   else if (it.disabled) parts.push(`<span class="lib-status-warn">Disabled</span>`);
   else if (it.used_by_count > 0) parts.push(`<span class="lib-status-dep">Dep</span>`);
@@ -3852,6 +3866,17 @@ function libRenderToolbar() {
   } else if (status === "outdated" && total > 0) {
     actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-destructive" data-lib-action="clean-old">
         <span class="material-symbols-outlined">delete_sweep</span>Clean Old Versions…</button>`;
+  } else if (status === "damaged") {
+    const fixable = (state.varPackagesItems ?? []).filter((it) => it.on_hub !== false).length;
+    actions.innerHTML = `
+      <button type="button" class="lib-btn lib-btn-xs lib-btn-outline" data-lib-action="verify-all" title="Read every package in full and check it against its checksums — packages unchanged since their last check are skipped">
+        <span class="material-symbols-outlined">verified</span>Check all packages</button>
+      ${
+        fixable
+          ? `<button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-action="redownload-damaged">
+              <span class="material-symbols-outlined">download</span>Redownload (${fixable})</button>`
+          : ""
+      }`;
   } else if (status === "updates" || status === "local") {
     const checked = HUB_INDEX.error
       ? `Couldn't reach the Hub${HUB_INDEX.loaded ? " — using the last copy" : ""}`
@@ -4270,6 +4295,11 @@ function libDetailHeaderHtml(item, details) {
     );
   }
   if (!item.readable && !(details && details.readable)) chips.push(`<span class="lib-chip lib-chip-error">Corrupted</span>`);
+  else if (item.damaged) {
+    chips.push(
+      `<span class="lib-chip lib-chip-error" title="${escapeAttribute(`A full check found a broken file: ${item.damaged}`)}">Damaged</span>`,
+    );
+  }
   if (!item.indexed) chips.push(`<span class="lib-chip lib-chip-muted" title="Not recorded in the database index">Not in DB</span>`);
   if (item.on_hub === false) {
     chips.push(
@@ -4318,6 +4348,12 @@ function libDetailHeaderHtml(item, details) {
         </div>
       </div>
       <div class="lib-actions">
+        ${
+          (item.damaged || !item.readable) && item.on_hub !== false
+            ? `<button type="button" class="lib-btn lib-btn-gradient lib-btn-full" data-lib-action="redownload" title="Download this version from the Hub again and replace the damaged copy">
+                <span class="material-symbols-outlined">download</span>Redownload</button>`
+            : ""
+        }
         ${
           item.hub_update_version
             ? `<button type="button" class="lib-btn lib-btn-gradient lib-btn-full" data-lib-action="hub-update" title="Download ${escapeAttribute(item.hub_update_file || "")} from the Hub; this version stays until you remove it">
@@ -5302,6 +5338,145 @@ async function libNotOnHubIds(packageIds) {
     return (hits ?? []).filter((h) => h.onHub === false).map((h) => h.packageId);
   } catch (_e) {
     return [];
+  }
+}
+
+// ---- Integrity check (integrity.rs) ---------------------------------------------------
+// Reads every file inside each package and checks it against the archive's
+// checksums. Results are kept per file size + date, so checking again only
+// reads what changed; damaged packages get a Damaged chip and Redownload.
+
+const INTEGRITY = { running: false, taskId: null };
+
+// Every listed item's path (all pages), for "Check all packages".
+async function libListAllItems(status = null) {
+  const inputDir = vpResolveInputDir();
+  if (!invoke || !inputDir) return [];
+  const out = [];
+  for (let offset = 0; ; offset += 1000) {
+    const page = await invoke("list_var_packages", {
+      inputDir,
+      additionalInputDirs: getAdditionalDirs("varPackages"),
+      offset,
+      limit: 1000,
+      search: null,
+      filters: status ? serializeVarPackageFilters({ status }) : null,
+      sort: "name",
+      sortDir: "asc",
+      forceRescan: false,
+      deepScan: state.varPackagesScannedDeep !== false,
+      offloadDir: offloadDir() || null,
+    });
+    const items = Array.isArray(page?.items) ? page.items : [];
+    out.push(...items);
+    if (items.length < 1000 || out.length >= Number(page?.total ?? 0)) break;
+  }
+  return out;
+}
+
+async function libVerify(items, { recheck = false } = {}) {
+  const paths = (items ?? []).map((it) => it.file_path).filter(Boolean);
+  if (!invoke || !paths.length) return;
+  if (INTEGRITY.running) {
+    showToast("A check is already running.", "info");
+    return;
+  }
+  INTEGRITY.running = true;
+  const toast = showToast(`Checking ${paths.length} package${paths.length === 1 ? "" : "s"}…`, "info", 0);
+  let res = null;
+  try {
+    const handle = await invoke("start_verify_packages_task", { filePaths: paths, recheck });
+    INTEGRITY.taskId = handle?.id ?? null;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 400));
+      const payload = await invoke("get_task_progress", { taskId: INTEGRITY.taskId });
+      if (!payload) break;
+      toast.update?.(payload.message || "Checking…");
+      if (payload.error) throw new Error(String(payload.error));
+      if (payload.done) {
+        res = payload.verify_result ?? null;
+        break;
+      }
+    }
+  } catch (e) {
+    toast.dismiss?.();
+    showToast(`Integrity check failed: ${String(e?.message || e)}`, "error", 6000);
+    return;
+  } finally {
+    if (INTEGRITY.taskId != null) invoke("clear_task", { taskId: INTEGRITY.taskId }).catch(() => {});
+    INTEGRITY.taskId = null;
+    INTEGRITY.running = false;
+  }
+  toast.dismiss?.();
+  const damaged = res?.damaged ?? [];
+  for (const d of damaged) addLog(`Integrity: ${d.packageId} is damaged — ${d.error}`);
+  const n = (res?.checked ?? 0) + (res?.cached ?? 0);
+  if (damaged.length) {
+    showToast(
+      `${damaged.length} of ${n} package${n === 1 ? "" : "s"} ${damaged.length === 1 ? "is" : "are"} damaged — see the Damaged filter (details in Console).`,
+      "error",
+      8000,
+    );
+  } else {
+    showToast(`All ${n} package${n === 1 ? "" : "s"} checked — no damage found.`, "success");
+  }
+  await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true }).catch(() => {});
+}
+
+async function libVerifyAll() {
+  try {
+    await libVerify(await libListAllItems());
+  } catch (e) {
+    showToast(`Integrity check failed: ${String(e?.message || e)}`, "error");
+  }
+}
+
+// Download the same file again from the Hub and swap it in over the damaged
+// copy (replace: true keeps the old one until the new one is complete and
+// checked).
+async function libRedownload(items) {
+  const list = (items ?? []).filter((it) => it?.file_path && it.on_hub !== false);
+  if (!invoke || !list.length) return;
+  let queued = 0;
+  const gone = [];
+  for (const it of list) {
+    let hit = null;
+    try {
+      hit = await invoke("hub_exact_download", { fileName: it.file_name || `${it.package_id}.var` });
+    } catch (e) {
+      addLog(`Redownload ${it.package_id}: ${String(e)}`);
+    }
+    if (!hit) {
+      gone.push(it.package_id);
+      continue;
+    }
+    const id = queueDownload({
+      packageId: it.package_id,
+      url: hit.url,
+      filename: it.file_name || hit.filename,
+      host: "hub",
+      destDir: it.file_path.replace(/[\\/][^\\/]+$/, ""),
+      nest: false,
+      label: `${it.file_name || hit.filename} (redownload)`,
+      priority: "direct",
+      replace: true,
+      onDone: (status) => {
+        if (status !== "done") return;
+        varPackageThumbCache.delete(it.file_path);
+        addLog(`Redownloaded ${it.package_id}`);
+        // The new copy is checked on arrival; record it as fine.
+        libVerify([it]).catch(() => {});
+      },
+    });
+    if (id != null) queued += 1;
+  }
+  if (queued) showToast(`Redownloading ${queued} package${queued === 1 ? "" : "s"} from the Hub.`, "info");
+  if (gone.length) {
+    showToast(
+      `${gone.length === 1 ? gone[0] : `${gone.length} packages`} can't be downloaded from the Hub again.`,
+      "error",
+      6000,
+    );
   }
 }
 
@@ -7194,6 +7369,21 @@ function libRunAction(action, trigger) {
     case "hub-update":
       if (item) libHubUpdate([item]);
       break;
+    case "verify":
+      if (item) libVerify([item], { recheck: true });
+      break;
+    case "bulk-verify":
+      libVerify(libSelectedSnaps(), { recheck: true });
+      break;
+    case "verify-all":
+      libVerifyAll();
+      break;
+    case "redownload":
+      if (item) libRedownload([item]);
+      break;
+    case "redownload-damaged":
+      libListAllItems("damaged").then(libRedownload).catch((e) => addLog(`Redownload: ${String(e)}`));
+      break;
     case "bulk-update":
       libHubUpdate(libSelectedSnaps());
       break;
@@ -7259,6 +7449,7 @@ function libContextMenu(event, item) {
         { label: "Organize selected by Creator…", action: () => libRunAction("bulk-organize") },
         { label: "Export selected Scene Images", action: () => libRunAction("bulk-export") },
         { label: "Extract presets from selected…", action: () => libRunAction("bulk-extract") },
+        { label: "Check integrity of selected", action: () => libRunAction("bulk-verify") },
         ...(libSelectedSnaps().some((s) => s.hub_update_file)
           ? [{ label: "Update selected from the Hub", action: () => libRunAction("bulk-update") }]
           : []),
@@ -7299,6 +7490,10 @@ function libContextMenu(event, item) {
         },
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
         { label: "Extract presets…", action: () => extractOpen([item]) },
+        { label: "Check integrity", action: () => libVerify([item], { recheck: true }) },
+        ...((item.damaged || !item.readable) && item.on_hub !== false
+          ? [{ label: "Redownload", action: () => libRedownload([item]) }]
+          : []),
         ...(item.hub_update_version
           ? [{ label: `Update to v${item.hub_update_version}`, action: () => libHubUpdate([item]) }]
           : []),
