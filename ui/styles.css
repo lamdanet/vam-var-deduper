@@ -18220,7 +18220,7 @@ button.pkg-stat:focus-visible::after {
     bottom: 16px;
     z-index: 30;
     width: min(500px, calc(100vw - 32px));
-    max-height: min(75vh, 720px);
+    max-height: min(58vh, 600px);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
   }
 
@@ -19012,4 +19012,84 @@ button.pkg-stat:focus-visible::after {
 
 .fm-plan-more {
   color: var(--text-dim);
+}
+
+/* ---- Fix Missing: smaller things ---- */
+
+/* The ring holds the count, so at zero it isn't a spinner. */
+.fm-ring {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+}
+
+.fm-ring .pkg-ring {
+  position: absolute;
+  inset: 0;
+}
+
+.fm-ring b {
+  position: relative;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The selected file heads the panel. */
+.fm-ref-title {
+  padding-top: 18px;
+}
+
+.fm-ref-title .fm-ref-head-text b {
+  font-size: 16px;
+}
+
+.fm-detail-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* The keyboard hint shares the count's line and shows while the list has
+   focus: nothing moves. */
+#fm-list-subtitle {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fm-list-card #fm-list-subtitle .fm-keys {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.fm-list-card:focus-within #fm-list-subtitle .fm-keys {
+  opacity: 1;
+}
+
+/* What's missing, as a dropdown beside the main filters. */
+.fm-filter-kind {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fm-filter-kind.is-active {
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.fm-report-pkgs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
 }

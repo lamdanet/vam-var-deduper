@@ -10127,11 +10127,12 @@ function fmRenderDetails() {
   const report = FM.report
     ? `<div class="fm-report">
         <span class="material-symbols-outlined">check_circle</span>
-        <div><b>Fixed ${pkgCount(Number(FM.report.fixes_applied ?? FM.report.count), "missing file", "missing files")} in ${pkgCount(Number(FM.report.files_rewritten ?? 0), "file", "files")}${
-          FM.report.isCopy ? " of the copy" : FM.report.inPlace ? " of the original" : ""
-        }.</b>
-          ${(FM.report.dependencies_added ?? []).length ? `<small>Now depends on ${escapeHtml(FM.report.dependencies_added.join(", "))}.</small>` : ""}
-          ${(FM.report.dependencies_removed ?? []).length ? `<small>No longer depends on ${escapeHtml(FM.report.dependencies_removed.join(", "))}.</small>` : ""}
+        <div><b>Fixed ${pkgCount(Number(FM.report.fixes_applied ?? FM.report.count), "missing file", "missing files")}${
+          FM.report.isCopy ? " in the copy" : FM.report.inPlace ? " in the original" : ""
+        }</b>
+          <small>${pkgCount(Number(FM.report.files_rewritten ?? 0), "file", "files")} inside the package rewritten.</small>
+          ${(FM.report.dependencies_added ?? []).length ? `<small class="fm-report-pkgs">Now depends on ${FM.report.dependencies_added.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
+          ${(FM.report.dependencies_removed ?? []).length ? `<small class="fm-report-pkgs">No longer depends on ${FM.report.dependencies_removed.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
           ${(FM.report.errors ?? []).map((e) => `<small class="fm-report-err">${escapeHtml(e)}</small>`).join("")}
           ${FM.report.output_path ? `<small title="${escapeAttribute(FM.report.output_path)}">The fixed copy: ${escapeHtml(FM.report.output_path.split(/[\\/]/).slice(-3).join("\\"))}</small>` : ""}
         </div>
@@ -10204,7 +10205,7 @@ function fmRenderDetails() {
       !FM.target ? "Start from" : folded ? (refs.length && !FM.report && !FM.fixedFrom ? "Where the fix goes" : "Fix") : "VAR Details"
     }</header>
     ${folded || !FM.target ? "" : `<div class="var-info-panel">${fmInfoHtml()}</div>`}
-    ${replaced}${report}${replace}${settings}${refs.length && !FM.report ? fmPlanHtml() : ""}${cta}`;
+    ${replaced}${report}${replace}${settings}${refs.length && !FM.report && !(FM.fixedFrom && !FM.picks.size) ? fmPlanHtml() : ""}${cta}`;
   $("fm-backup")?.addEventListener("change", (e) => fmStoreSet(FM_STORE.backup, e.target.checked ? "1" : "0"));
   libThumbWatch(host);
 }
@@ -10410,7 +10411,10 @@ function fmRenderList() {
   }
   host.className = "group-list";
   const ready = fmCounts().ready;
-  if (subtitle) subtitle.textContent = `${pkgCount(refs.length, "missing file", "missing files")}${FM.filter === "all" && !FM.query ? "" : ` · ${ready} ready`}`;
+  if (subtitle) {
+    subtitle.innerHTML = `<span>${pkgCount(refs.length, "missing file", "missing files")}${FM.filter === "all" && !FM.query ? "" : ` · ${ready} chosen`}</span>
+      <span class="fm-keys"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> uses the suggested copy</span>`;
+  }
   if (tools) {
     const count = (k) => {
       const save = FM.filter;
@@ -10424,12 +10428,14 @@ function fmRenderList() {
         ["all", "All"],
         ["todo", "Not chosen"],
         ["ready", "Chosen"],
-        ["absent", "Not installed"],
-        ["inside", "File missing"],
       ]
         .map(([k, label]) => `<button type="button" class="fm-filter${FM.filter === k ? " is-active" : ""}" data-fm-filter="${k}">${label} <small>${count(k)}</small></button>`)
-        .join("")}</div>
-      <p class="fm-keys"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> uses the suggested copy and moves on</p>`;
+        .join("")}
+        <select class="fm-filter-kind${FM.filter === "absent" || FM.filter === "inside" ? " is-active" : ""}" data-fm-filter-kind aria-label="Show by what's missing">
+          <option value="">Any kind</option>
+          <option value="absent" ${FM.filter === "absent" ? "selected" : ""}>Not installed (${count("absent")})</option>
+          <option value="inside" ${FM.filter === "inside" ? "selected" : ""}>File missing (${count("inside")})</option>
+        </select></div>`;
   }
   const rows = fmFiltered();
   if (!rows.length) {
@@ -10713,7 +10719,7 @@ function fmLeadHtml(ref, dbCount) {
       "download",
       "good",
       `Download ${name}`,
-      `Then this file works as it is: nothing to rewrite.${a.host ? ` From ${escapeHtml(a.host)}.` : ""}${orDb}`,
+      `Then this file works as it is: nothing to rewrite.${a.host ? ` From ${escapeHtml(a.host)}${a.size ? "" : ", size unknown"}.` : ""}${orDb}`,
       `<button type="button" class="accent-button fm-small" data-fm-download="${escapeAttribute(ref.ref_pkg)}"><span class="material-symbols-outlined">download</span>Download${size}</button>${skip}`,
     );
   }
@@ -10766,7 +10772,7 @@ function fmRenderStrip() {
          FM.flash ? escapeHtml(FM.flash) : FM.report.output_path ? `${n} fixed · check the copy to be sure` : "check it to be sure"
        }</small></span>
        <button type="button" class="accent-button fm-small" data-fm-act="${FM.report.output_path ? "check-copy" : "scan"}">${FM.report.output_path ? "Check the copy" : "Check again"}</button>${sheet}`
-    : `${pkgRing(c.ready / c.total, c.ready === c.total ? "var(--accent-success)" : "var(--primary)", { size: 34, track: "var(--line)" })}
+    : `<span class="fm-ring" title="${c.ready} of ${c.total} have a replacement or a download">${pkgRing(c.ready / c.total, c.ready === c.total ? "var(--accent-success)" : "var(--primary)", { size: 38, track: "var(--line)" })}<b>${c.chosen}</b></span>
        <span class="fm-strip-text"><b>${c.chosen} of ${c.total} chosen${coming ? ` · ${coming} by download` : ""}</b><small>${
          FM.flash ? escapeHtml(FM.flash) : c.chosen ? "Run Fixes rewrites these; the rest stay as they are." : "Fix as many or as few as you like."
        }</small></span>
@@ -10928,20 +10934,9 @@ function fmRenderDetail() {
 
   host.innerHTML = `
     <div class="fm-strip" id="fm-strip"></div>
-    <div class="panel-head"><div>
-      <h2>Replacement Sources</h2>
-      <p class="panel-subtitle">${
-        fixed
-          ? `Fixed: now points at <b>${escapeHtml(pick?.label || "its replacement")}</b>`
-          : st === "downloading" || st === "downloaded"
-            ? `Its package ${st === "downloading" ? "is downloading" : "is downloaded"}: it works as it is.`
-            : pick
-              ? "A replacement is chosen. Change it below, or leave it."
-              : "Pick what replaces it, or leave it as it is."
-      }</p>
-    </div></div>
+    <h2 class="sr-only">Replacement Sources</h2>
     <div class="detail-panel fm-detail-body">
-      <div class="fm-ref-head">
+      <div class="fm-ref-head fm-ref-title">
         <span class="chip${st === "open" && fmNeed(ref) === "stuck" ? ` ${words[1]}` : ""}" title="${escapeAttribute(words[2])}">${words[0]}</span>
         <div class="fm-ref-head-text">
           <b title="${escapeAttribute(`${ref.ref_pkg}:/${path}`)}">${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</b>
@@ -10952,9 +10947,6 @@ function fmRenderDetail() {
         <button type="button" class="ghost-button fm-small" data-fm-explore-pkg="${escapeAttribute(ref.ref_pkg)}" data-fm-explore-file="${escapeAttribute(
           (state.varPackagesItems ?? []).find((it) => it.package_id === ref.ref_pkg)?.file_path ?? "",
         )}" title="${escapeAttribute(`Open ${ref.ref_pkg} in Package Explorer`)}"><span class="material-symbols-outlined">space_dashboard</span>Explore ${escapeHtml(pkgIdParts(ref.ref_pkg).name)}</button>
-        <button type="button" class="ghost-button fm-small" data-fm-copy="${escapeAttribute(`${ref.ref_pkg}:/${ref.ref_path ?? ""}`)}" title="${escapeAttribute(
-          `${ref.ref_pkg}:/${path}\nUsed by ${(ref.source_files_in_target ?? []).join(", ") || "meta.json"}`,
-        )}"><span class="material-symbols-outlined">content_copy</span>Copy reference</button>
         <button type="button" class="ghost-button fm-small" data-fm-act="details" aria-expanded="${showDetails}"><span class="material-symbols-outlined">${
           showDetails ? "expand_less" : "info"
         }</span>${showDetails ? "Hide details" : "Details"}</button>
@@ -10963,7 +10955,7 @@ function fmRenderDetail() {
         showDetails
           ? `<div class="fm-ref-details">
               ${fmMissingPkgHtml(ref, { hasExact, fixed })}
-              <div class="detail-block"><span>Missing file</span><code>${escapeHtml(`${ref.ref_pkg}:/${ref.ref_path ?? ""}`)}</code></div>
+              <div class="detail-block"><span class="fm-detail-h">Missing file<button type="button" class="fm-link" data-fm-copy="${escapeAttribute(`${ref.ref_pkg}:/${ref.ref_path ?? ""}`)}"><span class="material-symbols-outlined">content_copy</span>Copy</button></span><code>${escapeHtml(`${ref.ref_pkg}:/${ref.ref_path ?? ""}`)}</code></div>
               <div class="detail-block"><span>Used by</span><code>${escapeHtml((ref.source_files_in_target ?? []).join("\n") || "meta.json")}</code></div>
             </div>`
           : ""
@@ -10984,7 +10976,24 @@ function fmRenderDetail() {
 function fmFitPanel() {
   const card = $("fm-detail");
   if (!card || !fmVisible()) return;
-  if (getComputedStyle(card).position !== "sticky") {
+  const grid = document.querySelector(".fm-grid");
+  const pos = getComputedStyle(card).position;
+  if (pos === "fixed") {
+    const list = document.querySelector(".fm-list-card")?.getBoundingClientRect();
+    if (list) {
+      card.style.left = `${Math.round(list.left)}px`;
+      card.style.width = `${Math.round(list.width)}px`;
+      card.style.right = "auto";
+    }
+    card.style.maxHeight = "";
+    if (grid) grid.style.paddingBottom = `${Math.round(card.getBoundingClientRect().height) + 24}px`;
+    return;
+  }
+  card.style.left = "";
+  card.style.width = "";
+  card.style.right = "";
+  if (grid) grid.style.paddingBottom = "";
+  if (pos !== "sticky") {
     card.style.maxHeight = "";
     return;
   }
@@ -11067,7 +11076,18 @@ function fmExplore(pkgId, file) {
 }
 
 function fmFocusRow(key) {
-  fmView()?.querySelector(`[data-fm-row="${CSS.escape(key)}"]`)?.focus();
+  const row = fmView()?.querySelector(`[data-fm-row="${CSS.escape(key)}"]`);
+  row?.focus({ preventScroll: true });
+  // A narrow window's sheet covers the bottom: keep the row above it.
+  requestAnimationFrame(() => {
+    const card = $("fm-detail");
+    if (!row || !card || getComputedStyle(card).position !== "fixed") {
+      row?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    const over = row.getBoundingClientRect().bottom - card.getBoundingClientRect().top + 12;
+    if (over > 0) document.scrollingElement.scrollTop += over;
+  });
 }
 
 function fmOnClick(e) {
@@ -11280,6 +11300,9 @@ function fmOnChange(e) {
       label: pkg === "SELF" ? `already inside ${fmSelfName()}` : pkg,
     });
     fmRefresh();
+  } else if (t.matches?.("[data-fm-filter-kind]")) {
+    FM.filter = t.value || "all";
+    fmRenderList();
   } else if (t.id === "fm-dbmode") {
     fmStoreSet("fm.dbMode", t.checked ? "1" : "0");
     fmRenderSource();
