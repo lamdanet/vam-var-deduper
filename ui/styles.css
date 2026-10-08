@@ -17558,9 +17558,11 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-row-use {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
+  height: 32px;
+  padding: 0 14px;
+  gap: 6px;
+  border-radius: 8px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -18014,74 +18016,6 @@ button.pkg-stat:focus-visible::after {
 
 /* ---- Fix Missing: calmer, one place for each action ---- */
 
-/* The checked package on one line (the folded settings). */
-.fm-pkg-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-  padding: 2px 20px 16px;
-}
-
-.fm-pkg-thumb {
-  position: relative;
-  flex: 0 0 auto;
-  width: 64px;
-  height: 64px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--lib-thumb-bg);
-  border: 1px solid var(--line);
-}
-
-.fm-pkg-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.fm-pkg-text {
-  flex: 1 1 260px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.fm-pkg-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 16px;
-}
-
-.fm-pkg-title small {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.fm-pkg-by {
-  margin-left: 6px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.fm-pkg-where {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-dim);
-  font-size: 11.5px;
-}
-
-.fm-pkg-acts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-left: auto;
-}
-
 /* The count of missing files stands out; the rest are plain chips. */
 .fm-chip-warn {
   background: color-mix(in srgb, var(--accent-warn) 18%, transparent);
@@ -18310,4 +18244,448 @@ button.pkg-stat:focus-visible::after {
   .fm-sheet-toggle {
     display: grid;
   }
+}
+
+/* ---- Fix Missing: room to breathe ---- */
+
+/* The package card: a real picture, its content as coloured tags. */
+.fm-hero {
+  display: flex;
+  gap: 18px;
+  padding: 6px 20px 18px;
+}
+
+.fm-hero-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 136px;
+  height: 136px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--lib-thumb-bg);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+}
+
+.fm-hero-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fm-hero-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fm-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fm-hero-title h2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.fm-hero-ver {
+  flex: 0 0 auto;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fm-hero-by {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.fm-hero-by b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fm-hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fm-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border: 1px solid hsl(var(--h) 70% 55% / 0.4);
+  border-radius: 999px;
+  background: hsl(var(--h) 70% 50% / 0.16);
+  color: hsl(var(--h) 80% 72%);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+:root[data-theme="light"] .fm-tag {
+  color: hsl(var(--h) 65% 36%);
+}
+
+.fm-hero-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.fm-info-chips .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fm-info-chips .chip .material-symbols-outlined {
+  font-size: 14px;
+}
+
+.fm-chip-info {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: color-mix(in srgb, var(--primary) 70%, var(--text));
+}
+
+/* A wider Replacement Sources. */
+@media (min-width: 1181px) {
+  .content-grid.fm-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(470px, 1fr);
+  }
+}
+
+.fm-row.group-row {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+.fm-row-name {
+  font-size: 13.5px;
+}
+
+.fm-clear-all {
+  margin-left: auto;
+}
+
+/* Inside the panel: one margin for everything. */
+.fm-ref-head {
+  padding: 16px 20px 12px;
+}
+
+.fm-ref-details {
+  padding: 0 20px 14px;
+}
+
+.fm-detail-body > .fm-best,
+.fm-detail-body > .fm-lead,
+.fm-detail-body > .fm-fixed-note,
+.fm-detail-body > .fm-chosen {
+  margin: 0 20px 14px;
+}
+
+/* The choice, at the top: what replaces it, Clear, Use it for others. */
+.fm-chosen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-success) 50%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-success) 9%, var(--surface));
+}
+
+.fm-chosen-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fm-chosen-main > .material-symbols-outlined {
+  color: var(--accent-success);
+  font-size: 24px;
+}
+
+.fm-chosen-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fm-chosen-text small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.fm-chosen-text b,
+.fm-chosen-text code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-chosen-text code {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.fm-chosen-apply {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--accent-success) 25%, var(--line));
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.fm-chosen-apply > span {
+  margin-right: 4px;
+}
+
+/* The suggestion says why. */
+.fm-best {
+  align-items: center;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+}
+
+.fm-best-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fm-best-tag {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-success) 22%, transparent);
+  color: var(--accent-success);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fm-best-text b {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-best .fm-best-text small {
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.fm-best.is-guess {
+  border-color: color-mix(in srgb, var(--accent-warn) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent-warn) 8%, transparent);
+}
+
+.fm-best.is-guess .fm-best-tag {
+  background: color-mix(in srgb, var(--accent-warn) 22%, transparent);
+  color: var(--accent-warn);
+}
+
+/* The lists, one tab at a time: the database is a click away. */
+.fm-sources {
+  padding: 0 20px 20px;
+}
+
+.fm-sources-none {
+  padding: 0 20px 20px;
+}
+
+.fm-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fm-tab {
+  margin-bottom: -1px;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fm-tab small {
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.fm-tab:hover {
+  color: var(--text);
+}
+
+.fm-tab.is-active {
+  border-bottom-color: var(--primary);
+  color: var(--text);
+}
+
+.fm-db-search {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.fm-tab-body .fm-hint-line {
+  margin: 0 0 10px;
+}
+
+/* A candidate card picks wherever it's clicked. */
+.fm-cand-row,
+.fm-cand-alt {
+  cursor: pointer;
+}
+
+.fm-cand-row {
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.fm-cands {
+  gap: 8px;
+}
+
+.fm-cand-row:focus-visible,
+.fm-cand-alt:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.fm-cand-alt {
+  padding: 3px 0;
+  border-radius: 6px;
+}
+
+.fm-cand-alt:hover .fm-cand-radio,
+.fm-cand-row:hover > .fm-cand-top .fm-cand-radio {
+  color: var(--primary);
+}
+
+.fm-cand-alt[aria-checked="true"] .fm-cand-radio {
+  color: var(--accent-success);
+}
+
+.fm-cand-name {
+  font-size: 13.5px;
+}
+
+/* The strip: how many are chosen, not how many are left. */
+.fm-strip-count {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.fm-strip-count.is-on {
+  background: color-mix(in srgb, var(--accent-success) 22%, transparent);
+  color: var(--accent-success);
+}
+
+.panel.card.fm-detail-card > .fm-strip {
+  padding: 12px 20px;
+}
+
+/* "N more copies": each copy a full-width row, its path wrapped, not cut. */
+.fm-cand-row .fm-cand-alts {
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 0 0;
+}
+
+.fm-cand-alt {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.fm-cand-alt:hover {
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
+}
+
+.fm-cand-alt[aria-checked="true"] {
+  border-color: var(--accent-success);
+}
+
+.fm-cand-alt .fm-cand-pick {
+  align-items: flex-start;
+}
+
+.fm-cand-alt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fm-cand-alt-path {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.fm-cand-alt-text small {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.fm-ref-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 20px 14px;
+}
+
+.fm-ref-acts .ghost-button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-cand-alts-h {
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
