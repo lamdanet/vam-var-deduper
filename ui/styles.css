@@ -17327,3 +17327,161 @@ button.pkg-bar-row:not(:disabled):hover {
   font-size: 11px;
   font-weight: 400;
 }
+
+/* ---- Package Explorer: shelves, dependency filters, file kinds, largest ---- */
+
+.pkg-shelf + .pkg-shelf {
+  margin-top: 22px;
+}
+
+.pkg-shelf-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: var(--lib-text);
+}
+
+.pkg-shelf-head > .material-symbols-outlined {
+  color: var(--c);
+  font-size: 20px;
+}
+
+.pkg-shelf-head small {
+  color: var(--lib-text-3);
+  font-size: 12px;
+}
+
+.pkg-shelf-all {
+  margin-left: auto;
+}
+
+.pkg-legend-chip.is-filter {
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pkg-legend-chip.is-filter:hover {
+  border-color: var(--lib-border-bright);
+  color: var(--lib-text);
+}
+
+.pkg-legend-chip.is-filter.is-active {
+  border-color: var(--lib-accent);
+  background: color-mix(in srgb, var(--lib-accent) 16%, var(--lib-surface));
+  color: var(--lib-text);
+}
+
+.pkg-search-sm {
+  height: 28px;
+}
+
+.pkg-view .pkg-search-sm input {
+  width: 150px;
+  font-size: 12px;
+}
+
+.pkg-chip-btn small {
+  white-space: nowrap;
+}
+
+.pkg-largest {
+  margin-top: 12px;
+}
+
+.pkg-largest:empty {
+  display: none;
+}
+
+.pkg-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pkg-card-head h3 {
+  margin: 0;
+}
+
+.pkg-card-head .pkg-mini-btn {
+  margin-left: auto;
+}
+
+.pkg-big-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pkg-big-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 90px minmax(80px, 200px) 76px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--lib-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pkg-big-row:hover {
+  background: var(--lib-elevated);
+}
+
+.pkg-big-row.is-image {
+  cursor: zoom-in;
+}
+
+.pkg-big-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+  color: var(--c);
+}
+
+.pkg-big-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pkg-big-name b,
+.pkg-big-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pkg-big-name b {
+  font-size: 13px;
+}
+
+.pkg-big-name small {
+  font-size: 11px;
+  color: var(--lib-text-3);
+}
+
+.pkg-big-cat {
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c) 16%, transparent);
+  color: var(--c);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pkg-big-size {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
