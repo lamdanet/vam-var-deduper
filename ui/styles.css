@@ -17291,11 +17291,14 @@ button.pkg-stat:focus-visible::after {
   align-items: start;
 }
 
-.fm-detail-card {
+/* .panel.card clips its content: this panel scrolls instead (as specific). */
+.panel.card.fm-detail-card {
   position: sticky;
   top: 12px;
   max-height: calc(100vh - var(--header-h, 70px) - 24px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .fm-why {
@@ -17503,4 +17506,11 @@ button.pkg-stat:focus-visible::after {
 
 .fm-detail-card .quick-actions.fm-quick .ghost-button {
   width: auto;
+}
+
+/* Its sections keep their height; the panel scrolls rather than squeezing
+   them (it's a flex column). */
+.panel.card.fm-detail-card > *,
+.fm-detail-card .detail-panel > * {
+  flex-shrink: 0;
 }
