@@ -1,0 +1,8 @@
+# The Rust version used to build, lint and test this app, here and in CI.
+# Pinned so a new Rust release (and its new clippy lints) can't break CI on
+# its own. To move to a newer Rust: change it here, fix what clippy reports,
+# and open a PR. Keep it at or above rust-version in src-tauri/Cargo.toml.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy"]
+profile = "minimal"

@@ -69,7 +69,9 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The version pinned in rust-toolchain.toml (rustup preinstalled on the runner).
+      - name: Install Rust
+        run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@v2
         with:

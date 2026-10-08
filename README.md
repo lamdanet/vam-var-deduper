@@ -48,7 +48,8 @@ files it changes. Still, back up your library before large cleanups.
 
 ## Building from source
 
-You need [Rust](https://rustup.rs) (stable), plus the Visual Studio C++ build
+You need [rustup](https://rustup.rs). It installs the Rust version pinned in
+`rust-toolchain.toml` automatically. You also need the Visual Studio C++ build
 tools with the Windows 11 SDK. Node.js is optional; it's used for the helper
 scripts.
 

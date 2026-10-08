@@ -28,9 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      # The version pinned in rust-toolchain.toml (rustup preinstalled on the runner).
+      - name: Install Rust
+        run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@v2
         with:
