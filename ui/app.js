@@ -9939,6 +9939,21 @@ function fmInfoHtml() {
     </div>`;
 }
 
+// A package as people read it: its name, then creator · version quietly,
+// the full id on hover. "SELF" is the package being fixed.
+function fmPkgLabelHtml(pkgId, { inside = false } = {}) {
+  if (pkgId === "SELF") {
+    return `<span class="fm-pkgname" title="${escapeAttribute(fmTargetId())}"><b>${inside ? "Already inside " : ""}${escapeHtml(fmSelfName())}</b></span>`;
+  }
+  const p = pkgIdParts(pkgId);
+  const sub = [p.creator, p.ver].filter(Boolean).join(" · ");
+  return `<span class="fm-pkgname" title="${escapeAttribute(pkgId)}"><b>${escapeHtml(p.name)}</b>${sub ? `<small>${escapeHtml(sub)}</small>` : ""}</span>`;
+}
+
+function fmPkgShort(pkgId) {
+  return pkgId === "SELF" ? `already inside ${fmSelfName()}` : pkgIdParts(pkgId).name;
+}
+
 // What a package holds, as coloured tags: "1 Scene", "12 Clothing"…
 function fmTypeTags(it) {
   const label = (k) =>
@@ -9954,23 +9969,22 @@ function fmTypeTags(it) {
       .map(([k, n]) => `<span class="fm-tag" style="--h:${hue(k)}">${Number(n)} ${escapeHtml(label(k))}</span>`)
       .join("");
   }
-  // The listing has no breakdown: its kind, item count, use and Hub status.
+  // The listing has no breakdown: just its kind (the facts go in the byline).
   const t = it?.pkg_type ? libType(it) : null;
-  return [
-    t ? `<span class="fm-tag" style="--h:${hue(it.pkg_type)}">${escapeHtml(t.label)}</span>` : "",
-    it?.item_count ? `<span class="fm-tag" style="--h:200">${pkgCount(it.item_count, "item", "items")}</span>` : "",
-    it?.used_by_count ? `<span class="fm-tag" style="--h:160">used by ${pkgCount(it.used_by_count, "package", "packages")}</span>` : "",
-    it?.on_hub === true ? `<span class="fm-tag" style="--h:265">On the Hub</span>` : it?.on_hub === false ? `<span class="fm-tag" style="--h:35">Not on the Hub</span>` : "",
-  ].join("");
+  return t ? `<span class="fm-tag" style="--h:${hue(it.pkg_type)}">${escapeHtml(t.label)}</span>` : "";
 }
 
 // The checked package: its picture, name, version, creator, what it holds
 // and what the check found, with Explore, Show file and Check again.
 function fmPkgLineHtml(extra) {
   const it = FM.item ?? pkgBareItem(FM.target);
+  // Plain facts, not coloured chips: colour is for what's wrong.
   const facts = [
     it.size_bytes ? formatBytesLocal(it.size_bytes) : "",
+    it.item_count ? pkgCount(it.item_count, "item", "items") : "",
     it.dep_count ? pkgCount(it.dep_count, "dependency", "dependencies") : "",
+    it.used_by_count ? `used by ${pkgCount(it.used_by_count, "package", "packages")}` : "",
+    it.on_hub === true ? "on the Hub" : it.on_hub === false ? "not on the Hub" : "",
     it.license ? it.license : "",
   ].filter(Boolean);
   const tags = fmTypeTags(it);
@@ -10053,6 +10067,38 @@ function fmStartHtml() {
     }`,
   );
   return `<div class="fm-start">${parts.join("")}<p class="fm-start-note">Pick one to check it, or drop a .var on the left.</p></div>`;
+}
+
+// What Run Fixes will change, from the choices so far: the files it
+// rewrites, the dependencies it adds and the ones no longer needed, and
+// where it writes.
+function fmPlanHtml() {
+  const refs = FM.refs ?? [];
+  const chosen = refs.filter((r) => FM.picks.has(fmKey(r)));
+  if (!chosen.length) {
+    return `<div class="fm-plan is-empty"><span class="material-symbols-outlined">edit_note</span>
+        <span>Choose replacements, and this shows what Run Fixes will change.</span></div>`;
+  }
+  const few = (list, html) => `${list.slice(0, 3).map(html).join("")}${list.length > 3 ? `<small class="fm-plan-more">and ${list.length - 3} more</small>` : ""}`;
+  const files = [...new Set(chosen.flatMap((r) => (r.source_files_in_target ?? []).map((f) => f.split("/").pop())))];
+  const adds = [...new Set(chosen.map((r) => FM.picks.get(fmKey(r)).replacement_pkg).filter((pkg) => pkg !== "SELF"))];
+  const drops = [...new Set(chosen.map((r) => r.ref_pkg))].filter((pkg) => refs.filter((r) => r.ref_pkg === pkg).every((r) => FM.picks.has(fmKey(r))));
+  const dir = fmOutputDir();
+  const where = FM.fixedFrom
+    ? "the fixed copy itself"
+    : fmInPlace()
+      ? `${libTitle(FM.item)} itself${fmBackup() ? ", keeping a backup" : ""}`
+      : dir
+        ? `a copy in ${dir.split(/[\\/]/).filter(Boolean).pop()}\\changed`
+        : "a copy (choose its folder above)";
+  const line = (icon, label, body) => `<div class="fm-plan-line"><span class="material-symbols-outlined">${icon}</span><span class="fm-plan-label">${label}</span><span class="fm-plan-body">${body}</span></div>`;
+  return `<div class="fm-plan">
+      <div class="fm-plan-h">Run Fixes will</div>
+      ${line("edit", "Rewrite", `${pkgCount(chosen.length, "reference", "references")} in ${escapeHtml(files.join(", ") || "meta.json")}`)}
+      ${line("add_link", "Add", adds.length ? few(adds, (pkg) => fmPkgLabelHtml(pkg)) : `<span class="fm-dim">no new dependency</span>`)}
+      ${drops.length ? line("link_off", "No longer need", few(drops, (pkg) => fmPkgLabelHtml(pkg))) : ""}
+      ${line("save", "Write", escapeHtml(where))}
+    </div>`;
 }
 
 // The folder as its name, with the full path on hover.
@@ -10158,7 +10204,7 @@ function fmRenderDetails() {
       !FM.target ? "Start from" : folded ? (refs.length && !FM.report && !FM.fixedFrom ? "Where the fix goes" : "Fix") : "VAR Details"
     }</header>
     ${folded || !FM.target ? "" : `<div class="var-info-panel">${fmInfoHtml()}</div>`}
-    ${replaced}${report}${replace}${settings}${cta}`;
+    ${replaced}${report}${replace}${settings}${refs.length && !FM.report ? fmPlanHtml() : ""}${cta}`;
   $("fm-backup")?.addEventListener("change", (e) => fmStoreSet(FM_STORE.backup, e.target.checked ? "1" : "0"));
   libThumbWatch(host);
 }
@@ -10223,10 +10269,10 @@ function fmRenderSummary() {
       <span class="material-symbols-outlined">lightbulb</span>
       <div><ul>${lines}</ul>
         <div class="fm-summary-acts">
-          ${exact ? `<button type="button" class="accent-button fm-small" data-fm-act="autopick"><span class="material-symbols-outlined">auto_fix_high</span>Choose the ${pkgCount(exact, "exact copy", "exact copies")}</button>` : ""}
+          ${exact ? `<button type="button" class="ghost-button fm-small fm-summary-main" data-fm-act="autopick"><span class="material-symbols-outlined">auto_fix_high</span>Choose the ${pkgCount(exact, "exact copy", "exact copies")}</button>` : ""}
           ${
             s.dlPkgs.size
-              ? `<button type="button" class="${exact ? "ghost-button" : "accent-button"} fm-small" data-fm-act="download-all"><span class="material-symbols-outlined">download</span>Download ${
+              ? `<button type="button" class="ghost-button fm-small" data-fm-act="download-all"><span class="material-symbols-outlined">download</span>Download ${
                   s.dlPkgs.size === 1 ? escapeHtml(names[0]) : `${s.dlPkgs.size} packages`
                 }</button>`
               : ""
@@ -10412,7 +10458,7 @@ function fmRenderList() {
       st === "fixed"
         ? `<span class="chip chip-accent">Fixed</span>`
         : st === "chosen"
-          ? `<span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(`${pick.replacement_pkg}:/${pick.replacement_path ?? ""}`)}">→ ${escapeHtml(pick.label)}</span>`
+          ? `<span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(`${pick.replacement_pkg}:/${pick.replacement_path ?? ""}`)}">→ ${escapeHtml(fmPkgShort(pick.replacement_pkg))}</span>`
           : st === "skipped"
             ? `<span class="chip fm-chip-muted" title="Run Fixes leaves it as it is">Skipped</span>`
             : st === "downloading"
@@ -10447,10 +10493,10 @@ function fmRenderList() {
         <span class="fm-row-text"><span class="fm-row-name" title="${escapeAttribute(path)}">${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</span>
           <span class="fm-row-dir">${fmTypeChip(type.label)}${
             single
-              ? `<span class="fm-row-pkg" title="${escapeAttribute(`Package it points at: ${ref.ref_pkg} (${absent ? "not installed" : "installed, but this file isn't in it"})`)}"><span class="material-symbols-outlined">inventory_2</span><span class="fm-row-pkg-from">from</span>${escapeHtml(p.name)}</span>`
+              ? `<span class="fm-row-pkg" title="${escapeAttribute(`Package it points at: ${ref.ref_pkg} (${absent ? "not installed" : "installed, but this file isn't in it"})`)}"><span class="material-symbols-outlined">inventory_2</span><span class="fm-row-pkg-from">from</span><span class="fm-trunc">${escapeHtml(p.name)}</span></span>`
               : ""
           }${
-            type.rest ? `<span class="fm-row-folder" title="${escapeAttribute(`Folder: ${type.folder}`)}"><span class="material-symbols-outlined">folder</span>${escapeHtml(type.rest)}</span>` : ""
+            type.rest ? `<span class="fm-row-folder" title="${escapeAttribute(`Folder: ${type.folder}`)}"><span class="material-symbols-outlined">folder</span><span class="fm-trunc">${escapeHtml(type.rest)}</span></span>` : ""
           }</span></span>
         ${right}
       </div>`;
@@ -10600,7 +10646,7 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
                   }${x.size ? `<small>${escapeHtml(formatBytesLocal(Number(x.size)))}</small>` : ""}</span>`
                 : `<span class="fm-cand-name" title="${escapeAttribute(
                     `${what}\n${x.package_id}:/${x.internal_path}${x.size ? `\n${formatBytesLocal(Number(x.size))}` : ""}${x.package_file ? `\n${x.package_file}` : ""}`,
-                  )}">${escapeHtml(c.isSelf ? fmSelfName() : x.package_id)}</span>`
+                  )}">${fmPkgLabelHtml(c.isSelf ? "SELF" : x.package_id)}</span>`
             }
           </span>`;
       };
@@ -10794,7 +10840,7 @@ function fmRenderDetail() {
           <div class="fm-chosen-main">
             <span class="material-symbols-outlined">check_circle</span>
             <div class="fm-chosen-text"><small>Replaced by</small>
-              <b title="${escapeAttribute(`${pick.replacement_pkg}:/${pick.replacement_path ?? ""}`)}">${escapeHtml(pick.label)}</b>
+              ${fmPkgLabelHtml(pick.replacement_pkg, { inside: true })}
               ${pick.replacement_path && pick.replacement_path !== ref.ref_path ? `<code>${escapeHtml(pick.replacement_path)}</code>` : ""}
             </div>
             <button type="button" class="ghost-button fm-small" data-fm-unpick="${escapeAttribute(key)}"><span class="material-symbols-outlined">close</span>Clear</button>
@@ -10810,7 +10856,7 @@ function fmRenderDetail() {
       ? `<div class="fm-best${best.match === "crc" ? "" : " is-guess"}">
           <div class="fm-best-text">
             <span class="fm-best-tag">Suggested</span>
-            <b>${best.isSelf ? `Already inside ${escapeHtml(fmSelfName())}` : escapeHtml(best.package_id)}</b>
+            ${fmPkgLabelHtml(best.isSelf ? "SELF" : best.package_id, { inside: true })}
             <small>${escapeHtml(
               [
                 best.match === "crc" ? "Same contents as the missing file" : "Same path; contents not compared",

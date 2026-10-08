@@ -18904,3 +18904,112 @@ button.pkg-stat:focus-visible::after {
   color: var(--text-dim);
   font-weight: 400;
 }
+
+/* ---- Fix Missing: one way to name a package, a preview of the fix ---- */
+
+/* A package: its name, then creator · version quietly. */
+.fm-pkgname {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fm-pkgname b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-pkgname small {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.fm-cand-name .fm-pkgname,
+.fm-best-text .fm-pkgname {
+  display: flex;
+}
+
+/* Cut text ends in an ellipsis. */
+.fm-trunc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The summary's buttons are plain; its main one is outlined. */
+.fm-summary-main {
+  border-color: color-mix(in srgb, var(--primary) 60%, var(--line));
+  color: var(--text);
+}
+
+.fm-summary-main .material-symbols-outlined {
+  color: var(--primary);
+}
+
+/* What Run Fixes will change. */
+.fm-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0 20px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+
+.fm-plan.is-empty {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+.fm-plan-h {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.fm-plan-line {
+  display: grid;
+  grid-template-columns: 18px 104px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.fm-plan-line > .material-symbols-outlined {
+  align-self: center;
+  font-size: 16px;
+  color: var(--primary);
+}
+
+.fm-plan-label {
+  color: var(--text-muted);
+}
+
+.fm-plan-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fm-plan-more {
+  color: var(--text-dim);
+}
