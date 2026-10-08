@@ -3217,6 +3217,11 @@ const LIB_STATUSES = [
   },
   { key: "updates", label: "Updates", title: "A newer version is on the Hub" },
   {
+    key: "disabled",
+    label: "Disabled",
+    title: "VaM won't load them: a .var.disabled marker is beside them",
+  },
+  {
     key: "damaged",
     label: "Damaged",
     title: "Can't be read, or a full check found a broken file inside",
@@ -4368,6 +4373,18 @@ function libDetailHeaderHtml(item, details) {
           <button type="button" class="lib-btn lib-btn-destructive" data-lib-action="delete">
             <span class="material-symbols-outlined">delete</span>Delete · ${escapeHtml(formatBytesLocal(item.size_bytes))}
           </button>
+          ${
+            item.offloaded
+              ? ""
+              : `<button type="button" class="lib-icon-btn${item.disabled ? " is-on" : ""}" data-lib-action="${
+                  item.disabled ? "enable" : "disable"
+                }" title="${
+                  item.disabled
+                    ? "Enable — let VaM load it again"
+                    : "Disable — VaM stops loading it (nothing is moved); unshared dependencies go with it"
+                }">
+                  <span class="material-symbols-outlined">power_settings_new</span></button>`
+          }
           <button type="button" class="lib-icon-btn${fav ? " lib-btn-quiet is-on" : ""}" data-vp-fav="${escapeAttribute(item.package_id)}" title="${fav ? "Remove from favorites" : "Add to favorites"}">
             <span class="material-symbols-outlined" ${fav ? `style="font-variation-settings:'FILL' 1"` : ""}>star</span>
           </button>
@@ -5478,6 +5495,62 @@ async function libRedownload(items) {
       6000,
     );
   }
+}
+
+// ---- Disable / enable in place (disable.rs) ------------------------------------------
+// VaM's own marker: an empty <package>.var.disabled beside the .var. Disabling
+// also disables the dependencies nothing still enabled needs; enabling brings
+// the disabled ones it needs back. Nothing moves.
+
+function libNames(entries, max = 5) {
+  const names = entries.map((e) => e.packageId);
+  return names.slice(0, max).join(", ") + (names.length > max ? `, +${names.length - max} more` : "");
+}
+
+async function libSetDisabled(items, disable) {
+  const targets = (items ?? []).filter((it) => it?.file_path && !it.offloaded && Boolean(it.disabled) !== disable);
+  if (!invoke || !targets.length) return;
+  let plan = null;
+  try {
+    plan = await invoke("plan_disable", { filePaths: targets.map((t) => t.file_path), disable });
+  } catch (e) {
+    showToast(String(e?.message || e), "error");
+    return;
+  }
+  const cascade = plan?.cascade ?? [];
+  const breaks = plan?.breaks ?? [];
+  const what = targets.length === 1 ? libTitle(targets[0]) : `${targets.length} packages`;
+  if (disable && (cascade.length || breaks.length)) {
+    let msg = `Disable ${what}? VaM won't load ${targets.length === 1 ? "it" : "them"}; nothing is moved or deleted.`;
+    if (breaks.length) {
+      msg += `\n\n${breaks.length} enabled package${breaks.length === 1 ? " uses" : "s use"} ${
+        targets.length === 1 ? "it" : "them"
+      } and will be missing a dependency: ${libNames(breaks)}.`;
+    }
+    if (cascade.length) {
+      msg += `\n\n${cascade.length} dependenc${cascade.length === 1 ? "y" : "ies"} nothing else enabled needs will be disabled too: ${libNames(cascade)}.`;
+    }
+    if (!(await showAppConfirm(msg))) return;
+  }
+  const paths = [...targets.map((t) => t.file_path), ...cascade.map((c) => c.filePath)];
+  let res = null;
+  try {
+    res = await invoke("set_packages_disabled", { filePaths: paths, disabled: disable });
+  } catch (e) {
+    showToast(String(e?.message || e), "error");
+    return;
+  }
+  for (const [path, err] of res?.failed ?? []) addLog(`${disable ? "Disable" : "Enable"} ${path}: ${err}`);
+  const n = res?.changed?.length ?? 0;
+  const extra = cascade.length
+    ? ` (${cascade.length} dependenc${cascade.length === 1 ? "y" : "ies"} with ${targets.length === 1 ? "it" : "them"})`
+    : "";
+  if (res?.failed?.length) {
+    showToast(`${disable ? "Disabled" : "Enabled"} ${n}; ${res.failed.length} failed — see Console.`, "error", 6000);
+  } else {
+    showToast(`${disable ? "Disabled" : "Enabled"} ${what}${extra}.`, "success");
+  }
+  await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true }).catch(() => {});
 }
 
 // ---- Extract presets ----------------------------------------------------------------
@@ -7372,6 +7445,18 @@ function libRunAction(action, trigger) {
     case "verify":
       if (item) libVerify([item], { recheck: true });
       break;
+    case "disable":
+      if (item) libSetDisabled([item], true);
+      break;
+    case "enable":
+      if (item) libSetDisabled([item], false);
+      break;
+    case "bulk-disable":
+      libSetDisabled(libSelectedSnaps(), true);
+      break;
+    case "bulk-enable":
+      libSetDisabled(libSelectedSnaps(), false);
+      break;
     case "bulk-verify":
       libVerify(libSelectedSnaps(), { recheck: true });
       break;
@@ -7450,6 +7535,12 @@ function libContextMenu(event, item) {
         { label: "Export selected Scene Images", action: () => libRunAction("bulk-export") },
         { label: "Extract presets from selected…", action: () => libRunAction("bulk-extract") },
         { label: "Check integrity of selected", action: () => libRunAction("bulk-verify") },
+        ...(libSelectedSnaps().some((s) => !s.disabled && !s.offloaded)
+          ? [{ label: "Disable selected…", action: () => libRunAction("bulk-disable") }]
+          : []),
+        ...(libSelectedSnaps().some((s) => s.disabled && !s.offloaded)
+          ? [{ label: "Enable selected", action: () => libRunAction("bulk-enable") }]
+          : []),
         ...(libSelectedSnaps().some((s) => s.hub_update_file)
           ? [{ label: "Update selected from the Hub", action: () => libRunAction("bulk-update") }]
           : []),
@@ -7491,6 +7582,9 @@ function libContextMenu(event, item) {
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
         { label: "Extract presets…", action: () => extractOpen([item]) },
         { label: "Check integrity", action: () => libVerify([item], { recheck: true }) },
+        ...(item.offloaded
+          ? []
+          : [{ label: item.disabled ? "Enable" : "Disable…", action: () => libSetDisabled([item], !item.disabled) }]),
         ...((item.damaged || !item.readable) && item.on_hub !== false
           ? [{ label: "Redownload", action: () => libRedownload([item]) }]
           : []),
