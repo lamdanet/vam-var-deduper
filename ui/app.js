@@ -6482,6 +6482,8 @@ function pkgHealth(item, details) {
   if (lib && item.newer_version) add("info", "history", "A newer version is in your library.");
   if (other) add("info", "swap_horiz", `${pkgCount(other, "dependency is", "dependencies are")} a different version than it asks for.`);
   if (lib && item.orphan) add("info", "link_off", "Orphan: it came in as a dependency and nothing uses it now.");
+  const broken = FM_RESULTS.get(item.file_path);
+  if (broken) add("err", "link_off", `${pkgCount(broken, "reference points", "references point")} at files that aren't there, so VaM shows them as missing.`, "fix-refs");
   if (details && details.readable && !out.some((h) => h.level === "err" || h.level === "warn")) {
     out.unshift({
       level: "ok",
@@ -6508,6 +6510,7 @@ function pkgFixButton(act, item, details) {
       download: ["download", PKG.avail?.size ? `Download · ${formatBytesLocal(PKG.avail.size)}` : "Download", `Download it from ${pkgHostLabel(PKG.avail?.host) || "its source"}`],
       "add-source": ["add_link", "Add a download link", "Save a link where it can be downloaded"],
       "open-downloads": ["download", "Open Downloads", "See the download's progress"],
+      "fix-refs": ["healing", "Fix references", "Pick replacements and fix them in Fix Missing"],
     }[act] ?? null
   );
 }
@@ -6586,6 +6589,7 @@ function pkgActionsHtml(item, details, primaryAct) {
     pkgIconAct("scan-deps", "account_tree", "Scan dependencies: see where each one is; download, move, offload or delete them", { label: "Scan deps" }),
     ...(extractable ? [pkgIconAct("extract", "person_add", "Extract presets: save clothing, hair, morphs or looks of its people", { label: "Extract" })] : []),
     pkgIconAct("verify", "verified", "Check every file inside against its checksum", { label: "Check" }),
+    pkgIconAct("check-refs", "healing", "Check its references for missing files (in Fix Missing)", { label: "Check refs" }),
   ];
   return `${primary}<div class="pkg-tools" role="group" aria-label="Library">${library.join("")}</div>
     <div class="pkg-tools" role="group" aria-label="Tools">${tools.join("")}</div>
@@ -8692,6 +8696,7 @@ function pkgMoreMenu(event) {
   const items = [
     ...(item.__lib ? [{ label: "Show in VAR Packages", action: () => pkgRevealInLibrary(item) }] : []),
     { label: "View all images", action: () => vpImagesOpen(item.file_path) },
+    { label: "Fix missing resources…", action: () => fmOpen(item.file_path, { scan: true }) },
     { label: "Export scene image", action: () => exportOneSceneImage(item.file_path, item.package_id) },
     { label: "Add download source…", action: () => sourceOpen({ packageId: item.package_id, fileName: item.file_name || `${item.package_id}.var` }) },
     ...(() => {
@@ -8838,6 +8843,12 @@ function pkgRunAction(act, event) {
       break;
     case "redownload":
       libRedownload([item]);
+      break;
+    case "check-refs":
+      fmOpen(item.file_path, { scan: true });
+      break;
+    case "fix-refs":
+      fmOpen(item.file_path);
       break;
     case "view-hub":
       if (item.hub_resource_id) libViewOnHub(item.hub_resource_id);
@@ -9095,6 +9106,1079 @@ function setupPackageExplorer() {
   pkgRender();
 }
 
+// ---- Fix Missing ----------------------------------------------------------------------
+// A visual take on Missing Resources: check a package's references (Pkg:/path
+// in its scenes, looks and presets) against your folders, see them grouped by
+// the package they point at, pick replacements (most are picked for you) and
+// write a fixed copy or fix the original. Same backend as Missing Resources;
+// works with Package Explorer both ways.
+
+const FM = {
+  target: "",
+  item: null,
+  token: 0,
+  // BrokenRef[] once checked; null before.
+  refs: null,
+  scanning: false,
+  progress: 0,
+  message: "",
+  error: "",
+  // key -> { replacement_pkg, replacement_path, source: "crc"|"path"|"self"|"db" }
+  picks: new Map(),
+  // key -> { items, hasMore, loading, offset, error, query }
+  db: new Map(),
+  // key -> { status, items, inner }
+  nested: new Map(),
+  open: new Set(),
+  openRef: null,
+  filter: "all",
+  query: "",
+  applying: false,
+  report: null,
+  fixedKeys: new Set(),
+  // ref_pkg -> availability, as Package Explorer's
+  avail: new Map(),
+};
+// target path -> number of broken references the last check found.
+const FM_RESULTS = new Map();
+const FM_STORE = { inPlace: "fm.inPlace", backup: "fm.backup", outputDir: "fm.outputDir" };
+
+function fmKey(ref) {
+  return `${ref.ref_pkg}|${ref.ref_path ?? ""}`;
+}
+
+function fmStoreGet(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : v;
+  } catch (_e) {
+    return fallback;
+  }
+}
+
+function fmStoreSet(key, value) {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch (_e) {}
+}
+
+function fmInPlace() {
+  return fmStoreGet(FM_STORE.inPlace, "0") === "1";
+}
+
+function fmBackup() {
+  return fmStoreGet(FM_STORE.backup, "1") === "1";
+}
+
+function fmOutputDir() {
+  return fmStoreGet(FM_STORE.outputDir, "") || ($("missing-output-dir")?.value || "").trim();
+}
+
+function fmView() {
+  return $("fm-view");
+}
+
+function fmVisible() {
+  const v = fmView();
+  return Boolean(v && !v.classList.contains("hidden"));
+}
+
+function fmShowView() {
+  const view = fmView();
+  if (!view) return;
+  document.querySelectorAll(".app-main").forEach((v) => v.classList.toggle("hidden", v !== view));
+  document.querySelectorAll("[data-sidebar-link]").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("data-sidebar-link") === "fix-missing");
+  });
+}
+
+function fmTargetId() {
+  return String(FM.target).split(/[\\/]/).pop().replace(/\.var$/i, "");
+}
+
+// Open the page on a package; `scan` checks it right away.
+function fmOpen(target, { scan = false } = {}) {
+  const fp = typeof target === "string" ? target : target?.file_path;
+  if (!fp) return;
+  if (FM.target !== fp || FM.report) {
+    FM.token += 1;
+    Object.assign(FM, {
+      target: fp,
+      item: libFindItem(fp) ?? pkgBareItem(fp),
+      refs: null,
+      error: "",
+      picks: new Map(),
+      db: new Map(),
+      nested: new Map(),
+      open: new Set(),
+      openRef: null,
+      filter: "all",
+      query: "",
+      report: null,
+      fixedKeys: new Set(),
+      avail: new Map(),
+    });
+  }
+  fmShowView();
+  fmRender();
+  if (scan && !FM.scanning) fmScan();
+}
+
+// ---- Check -------------------------------------------------------------------------------
+
+async function fmPoll(command, args, onProgress) {
+  const handle = await invoke(command, args);
+  const taskId = handle?.id;
+  if (taskId == null) throw new Error(`${command} didn't start`);
+  try {
+    for (;;) {
+      const p = await invoke("get_task_progress", { taskId });
+      if (p) {
+        onProgress?.(Number(p.progress ?? 0), String(p.message ?? ""));
+        if (p.done) {
+          if (p.error) throw new Error(String(p.error));
+          return p;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  } finally {
+    invoke("clear_task", { taskId }).catch(() => {});
+  }
+}
+
+async function fmScan() {
+  if (!invoke || !FM.target || FM.scanning) return;
+  const addon = vamAddonPackagesDir();
+  if (!addon) {
+    showToast("Set your VaM folder in Settings first.", "error");
+    return;
+  }
+  const token = FM.token;
+  const extra = missingExtraDirs();
+  Object.assign(FM, { scanning: true, progress: 0, message: "Reading your packages…", error: "", refs: null, picks: new Map(), report: null, fixedKeys: new Set() });
+  fmRender();
+  const tick = (base, span) => (fraction, message) => {
+    if (token !== FM.token) return;
+    FM.progress = base + fraction * span;
+    if (message) FM.message = message;
+    fmRenderProgress();
+  };
+  try {
+    // The folder scan fills the cache the analysis reads (the slow part the
+    // first time; later checks reuse it).
+    await fmPoll("start_scan_task", { request: { input_dir: addon, additional_input_dirs: extra, target_var_path: FM.target, skip_db: true } }, tick(0, 0.85));
+    const p = await fmPoll("start_scan_missing_resources_task", { inputDir: addon, additionalInputDirs: extra, targetVarPath: FM.target }, tick(0.85, 0.15));
+    if (token !== FM.token) return;
+    FM.refs = Array.isArray(p.missing_resources_result) ? p.missing_resources_result : [];
+    FM_RESULTS.set(FM.target, FM.refs.length);
+    // Open the groups straight away when there are few.
+    const pkgs = new Set(FM.refs.map((r) => r.ref_pkg));
+    if (pkgs.size <= 3) FM.open = pkgs;
+  } catch (e) {
+    if (token !== FM.token) return;
+    FM.error = String(e?.message || e);
+  } finally {
+    if (token === FM.token) {
+      FM.scanning = false;
+      fmRender();
+      // Package Explorer shows the result in its health line.
+      if (PKG.item?.file_path === FM.target) pkgRenderHero();
+    }
+  }
+}
+
+// ---- Candidates and picks ----------------------------------------------------------
+
+function fmCandidates(ref) {
+  const self = fmTargetId().toLowerCase();
+  return (ref.local_candidates ?? [])
+    .filter((c) => !isCreatorBlockedForPackage(c.package_id))
+    .map((c) => {
+      const isSelf = String(c.package_id).toLowerCase() === self;
+      const crc = ref.expected_crc32 != null && c.crc32 === ref.expected_crc32;
+      return { ...c, isSelf, match: crc ? "crc" : "path" };
+    });
+}
+
+// The best pick: an exact copy (inside this package first), else the same
+// path in another package.
+function fmBest(ref) {
+  const list = fmCandidates(ref);
+  const rank = (c) => (c.match === "crc" ? 0 : 2) + (c.isSelf ? 0 : 1) + (c.internal_path === ref.ref_path ? 0 : 0.5);
+  return list.sort((a, b) => rank(a) - rank(b))[0] ?? null;
+}
+
+function fmPickFrom(c) {
+  return {
+    replacement_pkg: c.isSelf ? "SELF" : c.package_id,
+    replacement_path: c.internal_path,
+    source: c.isSelf ? "self" : c.match ?? "db",
+    label: c.isSelf ? "this package" : c.package_id,
+  };
+}
+
+function fmAutoPick() {
+  let n = 0;
+  for (const ref of FM.refs ?? []) {
+    const key = fmKey(ref);
+    if (FM.picks.has(key) || !ref.ref_path) continue;
+    const best = fmBest(ref);
+    // Only exact copies by themselves; a path match is a guess.
+    if (best?.match === "crc") {
+      FM.picks.set(key, fmPickFrom(best));
+      n += 1;
+    }
+  }
+  showToast(n ? `Picked ${pkgCount(n, "exact copy", "exact copies")}.` : "No more exact copies to pick.", n ? "success" : "info", 4000);
+  fmRefresh();
+}
+
+// The same replacement package for every reference to `refPkg`, where that
+// package has the file.
+function fmUseForGroup(refPkg, replacementPkg) {
+  let n = 0;
+  for (const ref of (FM.refs ?? []).filter((r) => r.ref_pkg === refPkg && r.ref_path)) {
+    const key = fmKey(ref);
+    const c = fmCandidates(ref).find((x) => (replacementPkg === "SELF" ? x.isSelf : x.package_id === replacementPkg));
+    const fromDb = (FM.db.get(key)?.items ?? []).find((x) => x.package_id === replacementPkg);
+    if (c) FM.picks.set(key, fmPickFrom(c));
+    else if (fromDb) FM.picks.set(key, { replacement_pkg: fromDb.package_id, replacement_path: fromDb.internal_path, source: "db", label: fromDb.package_id });
+    else continue;
+    n += 1;
+  }
+  showToast(`Used it for ${pkgCount(n, "reference", "references")}.`, "success", 3000);
+  fmRefresh();
+}
+
+async function fmLoadDb(ref, { more = false } = {}) {
+  const key = fmKey(ref);
+  const entry = FM.db.get(key) ?? { items: [], hasMore: true, loading: false, offset: 0, error: "", query: "" };
+  if (entry.loading || (more && !entry.hasMore)) return;
+  if (!more) Object.assign(entry, { items: [], offset: 0, hasMore: true });
+  entry.loading = true;
+  FM.db.set(key, entry);
+  fmRenderRefs();
+  try {
+    const page = await invoke("find_db_candidates_for_broken_ref", {
+      crc32: ref.expected_crc32 ?? null,
+      internalPath: ref.ref_path ?? "",
+      excludePkg: ref.ref_pkg,
+      search: entry.query || null,
+      offset: entry.offset,
+      limit: 50,
+    });
+    const items = (page?.items ?? []).filter((x) => !isCreatorBlockedForPackage(x.package_id));
+    entry.items.push(...items);
+    entry.offset += (page?.items ?? []).length;
+    entry.hasMore = Boolean(page?.has_more);
+    entry.error = "";
+  } catch (e) {
+    entry.error = String(e?.message || e);
+  }
+  entry.loading = false;
+  // A reference to "Pkg:/path" written inside another path: look that up too.
+  const m = String(ref.ref_path ?? "").match(/^([^\s"',/:][^\s"',/:]*(?:\.[^\s"',/:]+){2,}):\/(.+)$/);
+  if (m && !FM.nested.has(key)) {
+    FM.nested.set(key, { status: "loading", items: [], inner: m[2] });
+    invoke("find_db_candidates_for_broken_ref", { crc32: null, internalPath: m[2], excludePkg: null, search: null, offset: 0, limit: 50 })
+      .then((p) => {
+        const items = (p?.items ?? []).sort((a, b) => Number(b.package_id === m[1]) - Number(a.package_id === m[1]));
+        FM.nested.set(key, { status: "ok", items, inner: m[2], innerPkg: m[1] });
+        fmRenderRefs();
+      })
+      .catch(() => FM.nested.set(key, { status: "err", items: [], inner: m[2] }));
+  }
+  fmRenderRefs();
+}
+
+// ---- Missing packages: download, like Package Explorer ---------------------------
+
+async function fmResolve(pkgId) {
+  FM.avail.set(pkgId, { state: "resolving" });
+  fmRenderRefs();
+  const token = FM.token;
+  let taskId = null;
+  try {
+    const handle = await invoke("start_resolve_var_source_task", { packageId: pkgId });
+    taskId = handle?.id ?? null;
+    let result = null;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 250));
+      const p = await invoke("get_task_progress", { taskId });
+      if (!p) break;
+      if (p.error) throw new Error(String(p.error));
+      if (p.done) {
+        result = p.var_source_result ?? null;
+        break;
+      }
+    }
+    if (token !== FM.token) return;
+    FM.avail.set(
+      pkgId,
+      result?.download_url
+        ? { state: "available", url: result.download_url, filename: result.filename || `${pkgId}.var`, size: result.file_size ?? null, host: result.host || "" }
+        : { state: "unavailable" },
+    );
+  } catch (_e) {
+    if (token === FM.token) FM.avail.set(pkgId, { state: "unavailable" });
+  } finally {
+    if (taskId != null) invoke("clear_task", { taskId }).catch(() => {});
+  }
+  fmRenderRefs();
+}
+
+async function fmDownload(pkgId) {
+  const a = FM.avail.get(pkgId);
+  if (!a?.url) return;
+  const destDir = vamAddonPackagesDir() || (await ensureDownloadsDir());
+  if (!destDir) return;
+  FM.avail.set(pkgId, { ...a, state: "downloading" });
+  fmRenderRefs();
+  queueDownload({
+    packageId: pkgId,
+    url: a.url,
+    filename: a.filename,
+    host: a.host,
+    destDir,
+    label: a.filename,
+    autoDeps: true,
+    onDone: (status) => {
+      FM.avail.set(pkgId, { ...a, state: status === "done" || status === "exists" ? "done" : status === "cancelled" ? "available" : "failed" });
+      fmRenderRefs();
+    },
+  });
+}
+
+// ---- Fix -----------------------------------------------------------------------------
+
+async function fmApply() {
+  if (!invoke || FM.applying || !FM.picks.size) return;
+  const addon = vamAddonPackagesDir();
+  const inPlace = fmInPlace();
+  const outputDir = fmOutputDir();
+  if (!inPlace && !outputDir) {
+    showToast("Pick a folder for the fixed copy first.", "error");
+    $("fm-output-dir")?.focus();
+    return;
+  }
+  const refsByKey = new Map((FM.refs ?? []).map((r) => [fmKey(r), r]));
+  const fixes = [...FM.picks.entries()]
+    .filter(([key]) => refsByKey.has(key))
+    .map(([key, p]) => {
+      const ref = refsByKey.get(key);
+      return {
+        broken_pkg: ref.ref_pkg,
+        broken_path: ref.ref_path ?? null,
+        replacement_pkg: p.replacement_pkg,
+        replacement_license_type: null,
+        replacement_path: p.replacement_path ?? null,
+      };
+    });
+  const name = libTitle(FM.item);
+  const ok = await showAppConfirm(
+    inPlace
+      ? `Fix ${pkgCount(fixes.length, "reference", "references")} in ${name} itself?${fmBackup() ? " A backup of the original is kept." : " No backup is kept."}`
+      : `Fix ${pkgCount(fixes.length, "reference", "references")} in a copy of ${name}? The copy goes to ${outputDir}\\changed; the original isn't touched.`,
+  );
+  if (!ok) return;
+  FM.applying = true;
+  FM.message = "Writing the fixed package…";
+  fmRenderBar();
+  try {
+    const p = await fmPoll(
+      "start_apply_missing_resources_fix_task",
+      {
+        inputDir: addon,
+        additionalInputDirs: missingExtraDirs(),
+        targetVarPath: FM.target,
+        outputDir: outputDir || null,
+        replaceInPlace: inPlace,
+        fixes,
+        backup: inPlace && fmBackup(),
+      },
+      (_f, message) => {
+        if (message) {
+          FM.message = message;
+          fmRenderBar();
+        }
+      },
+    );
+    FM.report = { ...(p.fix_report ?? {}), inPlace, count: fixes.length };
+    FM.fixedKeys = new Set(FM.picks.keys());
+    if (inPlace) vpRefreshAfterMutation().catch(() => {});
+  } catch (e) {
+    showToast(`The fix failed: ${String(e?.message || e)}`, "error", 8000);
+  } finally {
+    FM.applying = false;
+    fmRender();
+  }
+}
+
+// ---- Render ----------------------------------------------------------------------------
+
+function fmRender() {
+  const view = fmView();
+  if (!view) return;
+  if (!FM.target) {
+    view.innerHTML = fmLandingHtml();
+    libThumbWatch(view);
+    return;
+  }
+  // 4: every step done (fixed, or nothing to fix).
+  const step = FM.report ? 3 : FM.refs?.length ? 2 : FM.refs && !FM.scanning && !FM.error ? 4 : 1;
+  view.innerHTML = `
+    <div class="pkg-scroll fm-scroll" id="fm-scroll">
+      <nav class="pkg-nav">
+        <button type="button" class="pkg-nav-back" data-fm-act="explore" title="Open it in Package Explorer">
+          <span class="material-symbols-outlined">space_dashboard</span><span class="pkg-nav-back-text">Explore</span>
+        </button>
+        <ol class="fm-steps">${[
+          ["Check", "fact_check"],
+          ["Choose replacements", "swap_horiz"],
+          ["Fix", "build"],
+        ]
+          .map(
+            ([label, icon], i) => `<li class="${i + 1 < step ? "is-done" : i + 1 === step ? "is-now" : ""}">
+              <span class="fm-step-dot"><span class="material-symbols-outlined">${i + 1 < step ? "check" : icon}</span></span>${label}</li>`,
+          )
+          .join("")}</ol>
+        <button type="button" class="pkg-nav-open" data-fm-act="pick" title="Check another .var">
+          <span class="material-symbols-outlined">file_open</span>Open .var…
+        </button>
+      </nav>
+      <div id="fm-hero"></div>
+      <div id="fm-stats" class="pkg-stats"></div>
+      <section class="pkg-sec" id="fm-list-sec">
+        <div class="pkg-sec-head">
+          <h2><span class="material-symbols-outlined">link_off</span>Broken references</h2>
+          <div class="pkg-sec-tools" id="fm-tools"></div>
+        </div>
+        <div id="fm-filters" class="pkg-chips-row"></div>
+        <div id="fm-refs"></div>
+      </section>
+      <div id="fm-bar"></div>
+    </div>`;
+  fmRenderHero();
+  fmRenderStats();
+  fmRenderRefs();
+  fmRenderBar();
+}
+
+function fmLandingHtml() {
+  const selected = libCurrentItem();
+  const recent = pkgRecent();
+  const cards = [...(selected ? [{ file_path: selected.file_path, package_id: selected.package_id, badge: "Selected" }] : []), ...recent.filter((r) => r.file_path !== selected?.file_path)]
+    .slice(0, 12)
+    .map((r) => {
+      const it = libFindItem(r.file_path) ?? pkgBareItem(r.file_path, { package_id: r.package_id });
+      const known = FM_RESULTS.get(r.file_path);
+      return `<button type="button" class="pkg-recent-card" data-fm-open="${escapeAttribute(r.file_path)}" title="Check ${escapeAttribute(r.package_id)}">
+          ${libThumbHtml(r.file_path, libGradient(it.file_name || it.package_id), "pkg-recent-thumb")}${r.badge ? `<span class="pkg-recent-badge">${r.badge}</span>` : ""}${
+            known != null ? `<span class="fm-recent-result${known ? " is-bad" : ""}">${known ? `${known} broken` : "OK"}</span>` : ""
+          }</div>
+          <span class="pkg-recent-title">${escapeHtml(libTitle(it))}</span>
+          <span class="pkg-recent-by">${escapeHtml(libCreator(it))}</span>
+        </button>`;
+    });
+  return `
+    <div class="pkg-scroll" id="fm-scroll">
+      <div class="pkg-landing">
+        <button type="button" class="pkg-drop" data-fm-act="pick">
+          <span class="pkg-drop-icon"><span class="material-symbols-outlined">healing</span></span>
+          <b>Fix a package's missing resources</b>
+          <span>Drop a .var here or click to pick one. It checks every reference in its scenes, looks and presets against your folders, and fixes the broken ones.</span>
+        </button>
+        ${cards.length ? `<div class="pkg-sec-head"><h2><span class="material-symbols-outlined">history</span>Check one of these</h2></div><div class="pkg-recent">${cards.join("")}</div>` : ""}
+      </div>
+    </div>`;
+}
+
+function fmFolderLine() {
+  const extra = getUserAdditionalDirs("missing");
+  return `<div class="fm-folders">
+      <span class="material-symbols-outlined">folder_open</span>
+      Looks in AddonPackages, the offload folder${extra.length ? ` and ${pkgCount(extra.length, "more folder", "more folders")}` : ""}
+      ${extra
+        .map(
+          (d, i) => `<span class="fm-folder-chip" title="${escapeAttribute(d)}">${escapeHtml(d.split(/[\\/]/).filter(Boolean).slice(-2).join("\\"))}
+             <button type="button" data-fm-rmdir="${i}" title="Stop looking here" aria-label="Remove"><span class="material-symbols-outlined">close</span></button></span>`,
+        )
+        .join("")}
+      <button type="button" class="pkg-mini-btn" data-fm-act="add-folder"><span class="material-symbols-outlined">create_new_folder</span>Add folder</button>
+    </div>`;
+}
+
+function fmStatusHtml() {
+  if (FM.scanning) {
+    return `<div class="fm-progress-card">
+        <div class="pkg-progress"><span id="fm-progress-fill" style="width:${Math.max(2, Math.round(FM.progress * 100))}%"></span></div>
+        <p class="pkg-muted" id="fm-progress-msg">${escapeHtml(FM.message || "Working…")}</p>
+        <p class="pkg-muted fm-hint">The first check reads every package in your folders; later ones reuse that.</p>
+      </div>`;
+  }
+  if (FM.error) {
+    return `<div class="pkg-health"><div class="pkg-health-row is-err"><span class="material-symbols-outlined">error</span><span class="pkg-health-text">${escapeHtml(FM.error)}</span></div></div>`;
+  }
+  if (FM.report) {
+    const r = FM.report;
+    const added = r.dependencies_added ?? [];
+    const removed = r.dependencies_removed ?? [];
+    return `<div class="pkg-health">
+        <div class="pkg-health-row is-ok"><span class="material-symbols-outlined">check_circle</span>
+          <span class="pkg-health-text">Fixed ${pkgCount(Number(r.fixes_applied ?? r.count), "reference", "references")} in ${pkgCount(Number(r.files_rewritten ?? 0), "file", "files")}${
+            r.inPlace ? " in the package itself" : ""
+          }.${added.length ? ` It now depends on ${escapeHtml(added.join(", "))}.` : ""}${removed.length ? ` No longer on ${escapeHtml(removed.join(", "))}.` : ""}</span></div>
+        ${(r.errors ?? []).map((e) => `<div class="pkg-health-row is-warn"><span class="material-symbols-outlined">warning</span><span class="pkg-health-text">${escapeHtml(e)}</span></div>`).join("")}
+        ${r.output_path ? `<div class="pkg-health-row is-info"><span class="material-symbols-outlined">inventory_2</span><span class="pkg-health-text">The fixed copy: ${escapeHtml(r.output_path)}</span></div>` : ""}
+      </div>`;
+  }
+  if (!FM.refs) {
+    return `<div class="pkg-health"><div class="pkg-health-row is-info"><span class="material-symbols-outlined">fact_check</span>
+        <span class="pkg-health-text">Not checked yet. Checking looks at every reference in its scenes, looks and presets.</span></div></div>`;
+  }
+  if (!FM.refs.length) {
+    return `<div class="pkg-health"><div class="pkg-health-row is-ok"><span class="material-symbols-outlined">check_circle</span>
+        <span class="pkg-health-text">Every reference works: nothing is missing.</span></div></div>`;
+  }
+  const pkgs = new Set(FM.refs.map((r) => r.ref_pkg)).size;
+  return `<div class="pkg-health"><div class="pkg-health-row is-err"><span class="material-symbols-outlined">link_off</span>
+      <span class="pkg-health-text">${pkgCount(FM.refs.length, "reference points", "references point")} at files that aren't there, in ${pkgCount(pkgs, "package", "packages")}. VaM shows them as missing.</span></div></div>`;
+}
+
+function fmRenderHero() {
+  const host = $("fm-hero");
+  if (!host) return;
+  const it = FM.item;
+  const version = libVersion(it);
+  const primary = FM.report
+    ? FM.report.output_path
+      ? `<button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-fm-act="check-copy"><span class="material-symbols-outlined">fact_check</span><span>Check the fixed copy</span></button>`
+      : `<button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-fm-act="scan"><span class="material-symbols-outlined">fact_check</span><span>Check again</span></button>`
+    : FM.scanning
+      ? ""
+      : `<button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-fm-act="scan"><span class="material-symbols-outlined">fact_check</span><span>${FM.refs ? "Check again" : "Check references"}</span></button>`;
+  host.innerHTML = `
+    <div class="pkg-hero fm-hero">
+      <div class="pkg-hero-bg" style="--lib-thumb-bg:${escapeAttribute(libGradient(it.file_name || it.package_id))}"></div>
+      <div class="pkg-hero-inner">
+        <div class="fm-cover-col">${libThumbHtml(FM.target, libGradient(it.file_name || it.package_id), "fm-cover")}</div></div>
+        <div class="pkg-hero-text">
+          <h1 class="pkg-title" title="${escapeAttribute(it.package_id)}">${escapeHtml(libTitle(it))}${version ? `<span class="pkg-ver">v${escapeHtml(version)}</span>` : ""}</h1>
+          <div class="pkg-by"><span class="lib-avatar" style="background:${libAuthorColor(libCreator(it))}">${escapeHtml(libAuthorInitials(libCreator(it)))}</span><span>by <b>${escapeHtml(libCreator(it))}</b></span></div>
+          ${fmStatusHtml()}
+          <div class="pkg-actions">
+            ${primary}
+            <div class="pkg-tools">
+              ${pkgIconAct("explore", "space_dashboard", "Open it in Package Explorer", { label: "Explore" })}
+              ${pkgIconAct("show-file", "folder_open", "Show the file in Explorer", { label: "Show file" })}
+              ${FM.report?.output_path ? pkgIconAct("show-copy", "inventory_2", "Show the fixed copy in Explorer", { label: "Show copy" }) : ""}
+            </div>
+          </div>
+          ${fmFolderLine()}
+        </div>
+      </div>
+    </div>`;
+  // pkgIconAct writes data-pkg-act: this page listens for data-fm-act.
+  host.querySelectorAll("[data-pkg-act]").forEach((b) => {
+    b.setAttribute("data-fm-act", b.getAttribute("data-pkg-act"));
+    b.removeAttribute("data-pkg-act");
+  });
+  libThumbWatch(host);
+}
+
+// After a pick: the tiles, the list and the bar (the page keeps its scroll).
+function fmRefresh() {
+  fmRenderStats();
+  fmRenderRefs();
+  fmRenderBar();
+}
+
+function fmRenderProgress() {
+  const fill = $("fm-progress-fill");
+  const msg = $("fm-progress-msg");
+  if (fill) fill.style.width = `${Math.max(2, Math.round(FM.progress * 100))}%`;
+  if (msg) msg.textContent = FM.message || "Working…";
+}
+
+function fmRenderStats() {
+  const host = $("fm-stats");
+  if (!host) return;
+  const refs = FM.refs;
+  if (!refs?.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const absent = new Set(refs.filter((r) => r.kind !== "transitive").map((r) => r.ref_pkg));
+  const inside = refs.filter((r) => r.kind === "transitive").length;
+  const files = new Set(refs.flatMap((r) => r.source_files_in_target ?? []));
+  const ready = refs.filter((r) => FM.picks.has(fmKey(r))).length;
+  const exact = refs.filter((r) => fmBest(r)?.match === "crc").length;
+  host.innerHTML = [
+    pkgStatTile({ icon: "link_off", color: "var(--lib-error)", value: refs.length.toLocaleString(), label: "Broken", sub: pkgCount(files.size, "file uses them", "files use them") }),
+    pkgStatTile({ icon: "deployed_code", color: "#fb923c", value: absent.size.toLocaleString(), label: "Not installed", sub: "packages they point at" }),
+    pkgStatTile({ icon: "folder_off", color: "var(--lib-warning)", value: inside.toLocaleString(), label: "File missing", sub: "inside installed packages" }),
+    pkgStatTile({ icon: "content_copy", color: "#38bdf8", value: exact.toLocaleString(), label: "Exact copies", sub: "found in your folders" }),
+    pkgStatTile({
+      icon: "task_alt",
+      color: ready === refs.length ? "var(--lib-success)" : "var(--lib-accent)",
+      value: `${ready}<small>/${refs.length}</small>`,
+      label: "Ready",
+      sub: ready ? "have a replacement" : "none picked yet",
+      visual: pkgRing(refs.length ? ready / refs.length : 0, ready === refs.length ? "var(--lib-success)" : "var(--lib-accent)"),
+    }),
+  ].join("");
+}
+
+const FM_FILTERS = [
+  { key: "all", label: "All", icon: "" },
+  { key: "todo", label: "To do", icon: "radio_button_unchecked" },
+  { key: "ready", label: "Ready", icon: "task_alt" },
+  { key: "absent", label: "Package not installed", icon: "deployed_code" },
+  { key: "inside", label: "File missing in package", icon: "folder_off" },
+];
+
+function fmFiltered() {
+  const q = FM.query;
+  return (FM.refs ?? []).filter((r) => {
+    const ready = FM.picks.has(fmKey(r));
+    const ok =
+      FM.filter === "all" ||
+      (FM.filter === "todo" && !ready) ||
+      (FM.filter === "ready" && ready) ||
+      (FM.filter === "absent" && r.kind !== "transitive") ||
+      (FM.filter === "inside" && r.kind === "transitive");
+    return ok && (!q || `${r.ref_pkg}:/${r.ref_path ?? ""}`.toLowerCase().includes(q));
+  });
+}
+
+function fmCandidateRowHtml(ref, c, picked) {
+  const p = pkgIdParts(c.package_id);
+  const tag = c.isSelf
+    ? `<span class="fm-tag is-self">this package</span>`
+    : c.match === "crc"
+      ? `<span class="fm-tag is-crc" title="Same contents (checksum)">exact copy</span>`
+      : c.match === "path"
+        ? `<span class="fm-tag" title="Same path, contents not compared">same path</span>`
+        : `<span class="fm-tag is-db">database</span>`;
+  return `<button type="button" class="fm-cand${picked ? " is-picked" : ""}" data-fm-cand="${escapeAttribute(fmKey(ref))}" data-fm-cand-pkg="${escapeAttribute(c.isSelf ? "SELF" : c.package_id)}"
+      data-fm-cand-path="${escapeAttribute(c.internal_path)}" data-fm-cand-src="${c.isSelf ? "self" : c.match ?? "db"}">
+      <span class="fm-cand-radio material-symbols-outlined">${picked ? "radio_button_checked" : "radio_button_unchecked"}</span>
+      <span class="fm-cand-text"><b>${escapeHtml(c.isSelf ? libTitle(FM.item) : p.name)}</b><small>${escapeHtml([c.isSelf ? "" : p.creator, c.isSelf ? "" : p.ver, c.internal_path].filter(Boolean).join(" · "))}</small></span>
+      ${tag}
+      <span class="fm-cand-size">${c.size ? escapeHtml(formatBytesLocal(Number(c.size))) : ""}</span>
+      ${c.isSelf ? "" : `<span class="material-symbols-outlined fm-cand-open" data-fm-explore-pkg="${escapeAttribute(c.package_id)}" data-fm-explore-file="${escapeAttribute(c.package_file || "")}" title="Explore ${escapeAttribute(c.package_id)}">open_in_new</span>`}
+    </button>`;
+}
+
+function fmRefRowHtml(ref) {
+  const key = fmKey(ref);
+  const pick = FM.picks.get(key);
+  const fixed = FM.fixedKeys.has(key);
+  const cat = pkgFileCatOf(ref.ref_path ?? "");
+  const path = ref.ref_path ?? "(the package itself, in meta.json)";
+  const slash = path.lastIndexOf("/");
+  const best = !pick && ref.ref_path ? fmBest(ref) : null;
+  const isOpen = FM.openRef === key;
+  const cands = fmCandidates(ref);
+  const db = FM.db.get(key);
+  const nested = FM.nested.get(key);
+  const pickLine = fixed
+    ? `<span class="fm-pick is-fixed"><span class="material-symbols-outlined">check_circle</span>Fixed → ${escapeHtml(pick?.label ?? "")}</span>`
+    : pick
+      ? `<span class="fm-pick"><span class="material-symbols-outlined">arrow_forward</span><b>${escapeHtml(pick.label)}</b>${
+          pick.replacement_path && pick.replacement_path !== ref.ref_path ? `<small>${escapeHtml(pick.replacement_path)}</small>` : ""
+        }<button type="button" class="fm-x" data-fm-unpick="${escapeAttribute(key)}" title="Clear this pick" aria-label="Clear"><span class="material-symbols-outlined">close</span></button></span>`
+      : best
+        ? `<span class="fm-suggest">Suggested: <b>${escapeHtml(best.isSelf ? "this package" : best.package_id)}</b> <span class="fm-tag${best.match === "crc" ? " is-crc" : ""}">${
+            best.match === "crc" ? "exact copy" : "same path"
+          }</span><button type="button" class="pkg-mini-btn" data-fm-use="${escapeAttribute(key)}">Use it</button></span>`
+        : ref.ref_path
+          ? `<span class="fm-none">No copy in your folders</span>`
+          : `<span class="fm-none">Only listed as a dependency</span>`;
+  const list = isOpen
+    ? `<div class="fm-cands">
+        ${cands.length ? `<div class="fm-cands-head">In your folders</div>${cands.map((c) => fmCandidateRowHtml(ref, c, pick && pick.replacement_path === c.internal_path && (pick.replacement_pkg === (c.isSelf ? "SELF" : c.package_id)))).join("")}` : ""}
+        <div class="fm-cands-head">In the database
+          <div class="pkg-search pkg-search-sm"><span class="material-symbols-outlined">search</span>
+            <input type="text" data-fm-dbq="${escapeAttribute(key)}" placeholder="Filter packages" value="${escapeAttribute(db?.query ?? "")}" spellcheck="false" /></div>
+        </div>
+        ${
+          !db
+            ? `<button type="button" class="pkg-more" data-fm-db="${escapeAttribute(key)}">Search the database for ${ref.expected_crc32 != null ? "copies" : "this path"}</button>`
+            : db.error
+              ? `<p class="pkg-error">${escapeHtml(db.error)}</p>`
+              : `${db.items
+                  .map((x) => ({ ...x, match: "db", isSelf: String(x.package_id).toLowerCase() === fmTargetId().toLowerCase() }))
+                  .map((x) =>
+                    fmCandidateRowHtml(
+                      ref,
+                      x,
+                      pick && pick.replacement_path === x.internal_path && pick.replacement_pkg === (x.isSelf ? "SELF" : x.package_id),
+                    ),
+                  )
+                  .join("")}${
+                  db.loading ? pkgSkeleton(2) : !db.items.length ? `<p class="pkg-muted">Nothing in the database.</p>` : db.hasMore ? `<button type="button" class="pkg-more" data-fm-db-more="${escapeAttribute(key)}">More</button>` : ""
+                }`
+        }
+        ${
+          nested?.items?.length
+            ? `<div class="fm-cands-head">Likely: its path names ${escapeHtml(nested.innerPkg ?? "a package")}</div>${nested.items
+                .slice(0, 20)
+                .map((x) => fmCandidateRowHtml(ref, { ...x, match: "db" }, false))
+                .join("")}`
+            : ""
+        }
+      </div>`
+    : "";
+  return `<div class="fm-ref${pick ? " is-ready" : ""}${fixed ? " is-fixed" : ""}${isOpen ? " is-open" : ""}">
+      <div class="fm-ref-row">
+        <span class="fm-ref-icon" style="--c:${cat.color}" title="${escapeAttribute(cat.label)}"><span class="material-symbols-outlined">${cat.icon}</span></span>
+        <span class="fm-ref-path" title="${escapeAttribute(`${ref.ref_pkg}:/${path}`)}"><small>${escapeHtml(slash >= 0 ? path.slice(0, slash + 1) : "")}</small><b>${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</b>
+          <span class="fm-ref-in">in ${escapeHtml((ref.source_files_in_target ?? []).map((f) => f.split("/").pop()).join(", ") || "meta.json")}</span></span>
+        ${pickLine}
+        ${ref.ref_path && !fixed ? `<button type="button" class="pkg-mini-btn fm-options" data-fm-toggle="${escapeAttribute(key)}">${isOpen ? "Close" : `${cands.length ? pkgCount(cands.length, "option", "options") : "Find"}`}<span class="material-symbols-outlined">${isOpen ? "expand_less" : "expand_more"}</span></button>` : ""}
+      </div>
+      ${list}
+    </div>`;
+}
+
+function fmGroupHtml(pkgId, refs) {
+  const p = pkgIdParts(pkgId);
+  const absent = refs.some((r) => r.kind !== "transitive");
+  const ready = refs.filter((r) => FM.picks.has(fmKey(r))).length;
+  const open = FM.open.has(pkgId);
+  const local = (state.varPackagesItems ?? []).find((it) => it.package_id === pkgId);
+  // A pick used for one of its references, offered for all of them.
+  const usedPkgs = [...new Set(refs.map((r) => FM.picks.get(fmKey(r))?.replacement_pkg).filter(Boolean))];
+  const offer = ready < refs.length && usedPkgs.length === 1 ? usedPkgs[0] : null;
+  const a = FM.avail.get(pkgId);
+  const dl = !absent
+    ? ""
+    : !a
+      ? `<button type="button" class="pkg-mini-btn" data-fm-find="${escapeAttribute(pkgId)}" title="Look for it on the Hub and in your saved links"><span class="material-symbols-outlined">travel_explore</span>Find it</button>`
+      : a.state === "resolving"
+        ? `<span class="pkg-muted">Looking…</span>`
+        : a.state === "available"
+          ? `<button type="button" class="pkg-mini-btn is-accent" data-fm-download="${escapeAttribute(pkgId)}"><span class="material-symbols-outlined">download</span>Download${a.size ? ` · ${escapeHtml(formatBytesLocal(Number(a.size)))}` : ""}</button>`
+          : a.state === "downloading"
+            ? `<span class="pkg-muted">Downloading…</span>`
+            : a.state === "done"
+              ? `<span class="fm-tag is-crc">Downloaded — check again</span>`
+              : `<button type="button" class="pkg-mini-btn" data-fm-source="${escapeAttribute(pkgId)}" title="No download found: save a link"><span class="material-symbols-outlined">add_link</span>Add link</button>`;
+  return `<div class="pkg-card fm-group${open ? " is-open" : ""}${ready === refs.length ? " is-done" : ""}">
+      <div class="fm-group-head" data-fm-group="${escapeAttribute(pkgId)}" role="button" tabindex="0" aria-expanded="${open}">
+        <span class="fm-group-icon${absent ? " is-absent" : ""}"><span class="material-symbols-outlined">${absent ? "deployed_code" : "folder_off"}</span></span>
+        <span class="fm-group-text">
+          <b>${escapeHtml(p.name)}</b>
+          <small>${escapeHtml([p.creator, p.ver].filter(Boolean).join(" · "))} · ${absent ? "not installed" : "installed, but these files aren't in it"}</small>
+        </span>
+        <span class="fm-group-bar" title="${ready} of ${refs.length} ready"><span style="width:${(ready / refs.length) * 100}%"></span></span>
+        <span class="fm-group-count">${ready}/${refs.length}</span>
+        <span class="fm-group-acts">
+          ${offer ? `<button type="button" class="pkg-mini-btn is-accent" data-fm-useall="${escapeAttribute(pkgId)}" data-fm-useall-pkg="${escapeAttribute(offer)}" title="Use it for every reference to ${escapeAttribute(pkgId)} it has a copy for"><span class="material-symbols-outlined">done_all</span>Use ${escapeHtml(offer === "SELF" ? "this package" : pkgIdParts(offer).name)} for all</button>` : ""}
+          ${dl}
+          <button type="button" class="pkg-mini-btn" data-fm-explore-pkg="${escapeAttribute(pkgId)}" data-fm-explore-file="${escapeAttribute(local?.file_path ?? "")}" title="Open it in Package Explorer"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
+        </span>
+        <span class="material-symbols-outlined fm-group-chev">${open ? "expand_less" : "expand_more"}</span>
+      </div>
+      ${open ? `<div class="fm-group-body">${refs.map(fmRefRowHtml).join("")}</div>` : ""}
+    </div>`;
+}
+
+function fmRenderRefs() {
+  const host = $("fm-refs");
+  const tools = $("fm-tools");
+  const filters = $("fm-filters");
+  if (!host) return;
+  const refs = FM.refs;
+  if (!refs || !refs.length) {
+    host.innerHTML =
+      FM.scanning || !refs
+        ? FM.scanning
+          ? `<div class="pkg-gallery">${Array.from({ length: 4 }, () => `<div class="pkg-card-skel fm-skel"></div>`).join("")}</div>`
+          : `<div class="pkg-empty"><span class="material-symbols-outlined">fact_check</span><b>Check it first</b><span>Its broken references show here, grouped by the package they point at.</span></div>`
+        : `<div class="pkg-empty"><span class="material-symbols-outlined">verified</span><b>Nothing to fix</b><span>Every file it references is where it should be.</span></div>`;
+    if (tools) tools.innerHTML = "";
+    if (filters) filters.innerHTML = "";
+    return;
+  }
+  const exactLeft = refs.filter((r) => !FM.picks.has(fmKey(r)) && fmBest(r)?.match === "crc").length;
+  if (tools && !tools.querySelector("#fm-search")) {
+    tools.innerHTML = `
+      <div class="pkg-search pkg-search-sm"><span class="material-symbols-outlined">search</span>
+        <input id="fm-search" type="text" placeholder="Find a reference" spellcheck="false" value="${escapeAttribute(FM.query)}" /></div>
+      <button type="button" class="pkg-mini-btn" id="fm-autopick" data-fm-act="autopick"></button>
+      <button type="button" class="pkg-mini-btn" data-fm-act="clear-picks"><span class="material-symbols-outlined">backspace</span>Clear picks</button>`;
+    $("fm-search").addEventListener("input", (e) => {
+      FM.query = e.target.value.trim().toLowerCase();
+      fmRenderRefs();
+    });
+  }
+  const auto = $("fm-autopick");
+  if (auto) {
+    auto.innerHTML = `<span class="material-symbols-outlined">auto_fix_high</span>Auto-pick${exactLeft ? ` ${exactLeft}` : ""}`;
+    auto.disabled = !exactLeft;
+    auto.title = exactLeft ? `Pick the exact copy for ${pkgCount(exactLeft, "reference", "references")}` : "Every exact copy is picked";
+  }
+  if (filters) {
+    const count = (k) => {
+      const save = FM.filter;
+      FM.filter = k;
+      const n = fmFiltered().length;
+      FM.filter = save;
+      return n;
+    };
+    filters.innerHTML = FM_FILTERS.map(
+      (f) => `<button type="button" class="pkg-chip-btn${FM.filter === f.key ? " is-active" : ""}" data-fm-filter="${f.key}" style="--c:var(--lib-accent)">
+        ${f.icon ? `<span class="material-symbols-outlined">${f.icon}</span>` : ""}${f.label}<small>${count(f.key)}</small></button>`,
+    ).join("");
+    pkgChipsFade(filters);
+  }
+  const rows = fmFiltered();
+  const groups = new Map();
+  for (const r of rows) {
+    if (!groups.has(r.ref_pkg)) groups.set(r.ref_pkg, []);
+    groups.get(r.ref_pkg).push(r);
+  }
+  host.innerHTML = groups.size
+    ? [...groups.entries()]
+        // Most broken references first.
+        .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+        .map(([pkgId, list]) => fmGroupHtml(pkgId, list))
+        .join("")
+    : `<div class="pkg-empty"><span class="material-symbols-outlined">search_off</span><b>No matches</b></div>`;
+}
+
+function fmRenderBar() {
+  const host = $("fm-bar");
+  if (!host) return;
+  const refs = FM.refs ?? [];
+  if (!refs.length || FM.report) {
+    host.innerHTML = "";
+    return;
+  }
+  const ready = refs.filter((r) => FM.picks.has(fmKey(r))).length;
+  const inPlace = fmInPlace();
+  host.innerHTML = `
+    <div class="fm-bar">
+      <div class="fm-bar-count">
+        ${pkgRing(refs.length ? ready / refs.length : 0, ready === refs.length ? "var(--lib-success)" : "var(--lib-accent)", { size: 36 })}
+        <span><b>${ready} of ${refs.length}</b><small>${ready ? "ready to fix" : "pick replacements first"}</small></span>
+      </div>
+      <div class="pkg-seg pkg-seg-sm" role="radiogroup" aria-label="Where the fix goes">
+        <button type="button" class="pkg-seg-btn${inPlace ? "" : " is-active"}" data-fm-mode="copy" title="Write a fixed copy; the original stays as it is"><span class="material-symbols-outlined">file_copy</span>Fix a copy</button>
+        <button type="button" class="pkg-seg-btn${inPlace ? " is-active" : ""}" data-fm-mode="inplace" title="Rewrite the package itself"><span class="material-symbols-outlined">edit_document</span>Fix the original</button>
+      </div>
+      ${
+        inPlace
+          ? `<label class="fm-check"><input type="checkbox" id="fm-backup" ${fmBackup() ? "checked" : ""} /> Keep a backup</label>`
+          : `<div class="fm-out"><span class="material-symbols-outlined">folder</span>
+               <input id="fm-output-dir" type="text" placeholder="Folder for the fixed copy" value="${escapeAttribute(fmOutputDir())}" spellcheck="false" />
+               <button type="button" class="pkg-mini-btn" data-fm-act="pick-output">Browse</button></div>`
+      }
+      <button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-fm-act="apply" ${ready && !FM.applying ? "" : "disabled"}>
+        <span class="material-symbols-outlined">${FM.applying ? "hourglass_top" : "build"}</span><span>${FM.applying ? escapeHtml(FM.message || "Fixing…") : `Fix ${ready || ""}`.trim()}</span></button>
+    </div>`;
+  $("fm-output-dir")?.addEventListener("change", (e) => fmStoreSet(FM_STORE.outputDir, e.target.value.trim()));
+  $("fm-backup")?.addEventListener("change", (e) => fmStoreSet(FM_STORE.backup, e.target.checked ? "1" : "0"));
+}
+
+// ---- Events ---------------------------------------------------------------------------------
+
+async function fmPickFile() {
+  const picked = await invoke("pick_var_file").catch(() => null);
+  if (picked) fmOpen(picked, { scan: true });
+}
+
+function fmExplore(pkgId, file) {
+  if (file) pkgOpen(file);
+  else {
+    const local = (state.varPackagesItems ?? []).find((it) => it.package_id === pkgId);
+    pkgOpen(local ?? { package_id: pkgId, file_path: "" });
+  }
+}
+
+function fmOnClick(e) {
+  const t = e.target;
+  const q = (sel) => t.closest?.(sel);
+  let el;
+  if ((el = q("[data-fm-explore-pkg]"))) {
+    e.stopPropagation();
+    fmExplore(el.getAttribute("data-fm-explore-pkg"), el.getAttribute("data-fm-explore-file"));
+    return;
+  }
+  if ((el = q("[data-fm-open]"))) return fmOpen(el.getAttribute("data-fm-open"), { scan: true });
+  if ((el = q("[data-fm-rmdir]"))) {
+    removeAdditionalDir("missing", Number(el.getAttribute("data-fm-rmdir"))).then(fmRenderHero);
+    return;
+  }
+  if ((el = q("[data-fm-cand]"))) {
+    const key = el.getAttribute("data-fm-cand");
+    const pkg = el.getAttribute("data-fm-cand-pkg");
+    FM.picks.set(key, {
+      replacement_pkg: pkg,
+      replacement_path: el.getAttribute("data-fm-cand-path"),
+      source: el.getAttribute("data-fm-cand-src"),
+      label: pkg === "SELF" ? "this package" : pkg,
+    });
+    fmRefresh();
+    return;
+  }
+  if ((el = q("[data-fm-use]"))) {
+    const ref = (FM.refs ?? []).find((r) => fmKey(r) === el.getAttribute("data-fm-use"));
+    const best = ref && fmBest(ref);
+    if (best) FM.picks.set(fmKey(ref), fmPickFrom(best));
+    fmRefresh();
+    return;
+  }
+  if ((el = q("[data-fm-unpick]"))) {
+    FM.picks.delete(el.getAttribute("data-fm-unpick"));
+    fmRefresh();
+    return;
+  }
+  if ((el = q("[data-fm-useall]"))) {
+    e.stopPropagation();
+    fmUseForGroup(el.getAttribute("data-fm-useall"), el.getAttribute("data-fm-useall-pkg"));
+    return;
+  }
+  if ((el = q("[data-fm-find]"))) {
+    e.stopPropagation();
+    fmResolve(el.getAttribute("data-fm-find"));
+    return;
+  }
+  if ((el = q("[data-fm-download]"))) {
+    e.stopPropagation();
+    fmDownload(el.getAttribute("data-fm-download"));
+    return;
+  }
+  if ((el = q("[data-fm-source]"))) {
+    e.stopPropagation();
+    sourceOpen({ packageId: el.getAttribute("data-fm-source") });
+    return;
+  }
+  if ((el = q("[data-fm-toggle]"))) {
+    const key = el.getAttribute("data-fm-toggle");
+    FM.openRef = FM.openRef === key ? null : key;
+    fmRenderRefs();
+    return;
+  }
+  if ((el = q("[data-fm-db]"))) {
+    const ref = (FM.refs ?? []).find((r) => fmKey(r) === el.getAttribute("data-fm-db"));
+    if (ref) fmLoadDb(ref);
+    return;
+  }
+  if ((el = q("[data-fm-db-more]"))) {
+    const ref = (FM.refs ?? []).find((r) => fmKey(r) === el.getAttribute("data-fm-db-more"));
+    if (ref) fmLoadDb(ref, { more: true });
+    return;
+  }
+  if ((el = q("[data-fm-group]")) && !q("button")) {
+    const id = el.getAttribute("data-fm-group");
+    if (FM.open.has(id)) FM.open.delete(id);
+    else FM.open.add(id);
+    fmRenderRefs();
+    return;
+  }
+  if ((el = q("[data-fm-filter]"))) {
+    FM.filter = el.getAttribute("data-fm-filter");
+    fmRenderRefs();
+    return;
+  }
+  if ((el = q("[data-fm-mode]"))) {
+    fmStoreSet(FM_STORE.inPlace, el.getAttribute("data-fm-mode") === "inplace" ? "1" : "0");
+    fmRenderBar();
+    return;
+  }
+  if (!(el = q("[data-fm-act]"))) return;
+  switch (el.getAttribute("data-fm-act")) {
+    case "pick":
+      fmPickFile();
+      break;
+    case "scan":
+      fmScan();
+      break;
+    case "explore":
+      if (FM.target) pkgOpen(FM.item?.__lib ? FM.item : FM.target);
+      break;
+    case "show-file":
+      invoke("show_in_explorer", { path: FM.target }).catch(() => {});
+      break;
+    case "show-copy":
+      if (FM.report?.output_path) invoke("show_in_explorer", { path: FM.report.output_path }).catch(() => {});
+      break;
+    case "check-copy":
+      if (FM.report?.output_path) fmOpen(FM.report.output_path, { scan: true });
+      break;
+    case "add-folder":
+      addAdditionalDir("missing").then(fmRenderHero);
+      break;
+    case "autopick":
+      fmAutoPick();
+      break;
+    case "clear-picks":
+      FM.picks.clear();
+      fmRefresh();
+      break;
+    case "pick-output":
+      invoke("pick_folder")
+        .then((dir) => {
+          if (!dir) return;
+          fmStoreSet(FM_STORE.outputDir, dir);
+          fmRenderBar();
+        })
+        .catch(() => {});
+      break;
+    case "apply":
+      fmApply();
+      break;
+    default:
+      break;
+  }
+}
+
+function setupFixMissing() {
+  const view = fmView();
+  if (!view) return;
+  view.addEventListener("click", fmOnClick);
+  view.addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-fm-group]")) {
+      e.preventDefault();
+      e.target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+  });
+  // The database filter of an open reference (debounced).
+  let timer = null;
+  view.addEventListener("input", (e) => {
+    const key = e.target.getAttribute?.("data-fm-dbq");
+    if (key == null) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const ref = (FM.refs ?? []).find((r) => fmKey(r) === key);
+      if (!ref) return;
+      const entry = FM.db.get(key) ?? { items: [], hasMore: true, loading: false, offset: 0, error: "", query: "" };
+      entry.query = e.target.value.trim();
+      FM.db.set(key, entry);
+      fmLoadDb(ref).then(() => {
+        const input = view.querySelector(`[data-fm-dbq="${CSS.escape(key)}"]`);
+        if (input) {
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
+      });
+    }, 250);
+  });
+  window.__refreshFixMissingView = () => fmRender();
+  window.__TAURI__?.event
+    ?.listen?.("tauri://drag-drop", (event) => {
+      if (!fmVisible() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
+      const varPath = (event?.payload?.paths ?? []).map(String).find((p) => /\.var$/i.test(p));
+      if (varPath) fmOpen(varPath, { scan: true });
+    })
+    .catch(() => {});
+  fmRender();
+}
+
 // ---- Drop .var files on the window (dropin.rs) ---------------------------------------
 // Anywhere except the pages that take a single .var (Package Explorer, Missing
 // Resources, Internalize): the dropped packages are checked and copied — or
@@ -9103,7 +10187,7 @@ function setupPackageExplorer() {
 const DROP_STORE = "dropin.moveFiles";
 
 function dropTakenByPage() {
-  return ["pkg-view", "missing-resources-view", "internalize-resources-view"].some(
+  return ["pkg-view", "fm-view", "missing-resources-view", "internalize-resources-view"].some(
     (id) => $(id) && !$(id).classList.contains("hidden"),
   );
 }
@@ -11263,6 +12347,7 @@ function libContextMenu(event, item) {
         },
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
         { label: "Extract presets…", action: () => extractOpen([item]) },
+        { label: "Fix missing resources…", action: () => fmOpen(filePath, { scan: true }) },
         { label: "Check integrity", action: () => libVerify([item], { recheck: true }) },
         {
           label: item.installed ? "Mark as dependency" : "Mark as installed",
@@ -21268,6 +22353,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVamPrefs();
   setupDropImport();
   setupPackageExplorer();
+  setupFixMissing();
   // The Hub package index: shortly after start-up, then every 30 minutes.
   setTimeout(() => hubIndexRefresh(false), 1500);
   setInterval(() => hubIndexRefresh(false), 30 * 60 * 1000);

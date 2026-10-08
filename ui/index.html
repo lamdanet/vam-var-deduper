@@ -94,6 +94,10 @@
                 <span class="material-symbols-outlined">link_off</span>
                 <span class="sidebar-label">Missing Resources</span>
               </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="fix-missing">
+                <span class="material-symbols-outlined">healing</span>
+                <span class="sidebar-label">Fix Missing</span>
+              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="internalize-resources">
                 <span class="material-symbols-outlined">download_for_offline</span>
                 <span class="sidebar-label">Internalize Resources</span>
@@ -1242,6 +1246,9 @@
 
       <!-- Package Explorer: one package, shown visually (setupPackageExplorer in app.js). -->
       <section id="pkg-view" class="app-main lib-view pkg-view hidden"></section>
+
+      <!-- Fix Missing: Missing Resources, visually (setupFixMissing in app.js). -->
+      <section id="fm-view" class="app-main lib-view pkg-view fm-view hidden"></section>
 
       <!-- Reclaim Space View (hidden by default; revealed by sidebar Reclaim Space link).
            Scans a folder of local VARs, aggregates their unique CRC set, and ranks DB
@@ -3170,6 +3177,8 @@
             if (sourcesView) sourcesView.classList.add("hidden");
             var pkgView = document.getElementById("pkg-view");
             if (pkgView) pkgView.classList.add("hidden");
+            var fmView = document.getElementById("fm-view");
+            if (fmView) fmView.classList.add("hidden");
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
@@ -3182,6 +3191,9 @@
             if (route === "hub" && hubView) {
               hubView.classList.remove("hidden");
               if (window.__refreshHubView) window.__refreshHubView();
+            } else if (route === "fix-missing" && fmView) {
+              fmView.classList.remove("hidden");
+              if (window.__refreshFixMissingView) window.__refreshFixMissingView();
             } else if (route === "pkg-explorer" && pkgView) {
               pkgView.classList.remove("hidden");
               if (window.__refreshPkgView) window.__refreshPkgView();
