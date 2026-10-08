@@ -17863,7 +17863,7 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-cand-pick {
-  flex: 1 1 170px;
+  flex: 1 1 110px;
 }
 
 .fm-cand-acts {
@@ -18834,10 +18834,11 @@ button.pkg-stat:focus-visible::after {
 
 /* ---- Fix Missing: groups as a tree, the package that's missing in plain sight ---- */
 
-/* A package with several missing files: its header, then its rows hanging
-   off a line, like a tree (no box). */
+/* A package with several missing files: its header, then its rows with a
+   tree line drawn inside them. The rows stay full width, so the selected
+   row's bar sits at the same left edge as every other row's. */
 .fm-group {
-  margin: 4px 0 8px;
+  margin: 0;
   border: 0;
   border-radius: 0;
   overflow: visible;
@@ -18845,38 +18846,46 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-group .fm-group-label {
-  padding: 12px 16px 6px;
+  padding: 14px 16px 8px 19px;
   border-bottom: 0;
   background: none;
 }
 
 .fm-group-rows {
-  position: relative;
-  margin-left: 30px;
-  border-left: 2px solid color-mix(in srgb, var(--primary) 40%, var(--line));
+  margin: 0;
+  border: 0;
 }
 
-.fm-group-rows .fm-row {
+.fm-group-rows .fm-row.group-row {
   position: relative;
-  padding-left: 22px;
+  padding-left: 52px;
 }
 
+/* The line down from the package's icon, and a branch to each row. */
 .fm-group-rows .fm-row::before {
   content: "";
   position: absolute;
-  left: 0;
+  left: 30px;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid color-mix(in srgb, var(--primary) 40%, var(--line));
+}
+
+.fm-group-rows .fm-row:first-child::before {
+  top: -8px;
+}
+
+.fm-group-rows .fm-row:last-child::before {
+  bottom: 50%;
+}
+
+.fm-group-rows .fm-row::after {
+  content: "";
+  position: absolute;
+  left: 30px;
   top: 50%;
   width: 14px;
   border-top: 2px solid color-mix(in srgb, var(--primary) 40%, var(--line));
-}
-
-.fm-group-rows .fm-row:last-child::after {
-  content: "";
-  position: absolute;
-  left: -2px;
-  top: calc(50% + 1px);
-  bottom: 0;
-  border-left: 2px solid var(--surface);
 }
 
 /* "from 映雪2": the package it points at, as plain as the file name. */
