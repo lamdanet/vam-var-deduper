@@ -6567,7 +6567,7 @@ fn forum_zip() -> Vec<u8> {
         w.start_file("Acid.Look.3.var", aes).unwrap();
         w.write_all(&vec![b'A'; 300_000]).unwrap();
         use zip::unstable::write::FileOptionsExt;
-        let old = SimpleFileOptions::default().with_deprecated_encryption(b"s3cret");
+        let old = SimpleFileOptions::default().with_deprecated_encryption(b"s3cret").expect("non-empty password");
         w.start_file("deps/Bee.Hair.2.var", old).unwrap();
         w.write_all(b"hair bytes").unwrap();
         w.start_file("preview.png", SimpleFileOptions::default()).unwrap();
@@ -6747,7 +6747,7 @@ fn write_password_zip_fixtures() {
     };
     write("Pack1.zip", SimpleFileOptions::default().with_aes_encryption(zip::AesMode::Aes256, "alpha1"),
         vec![("ZzTest.LookA.1.var", var("a"))]);
-    write("Pack2.zip", SimpleFileOptions::default().with_deprecated_encryption(b"beta2"),
+    write("Pack2.zip", SimpleFileOptions::default().with_deprecated_encryption(b"beta2").expect("non-empty password"),
         vec![("Looks/ZzTest.HairB.2.var", var("b")), ("preview.png", b"png".to_vec())]);
 }
 

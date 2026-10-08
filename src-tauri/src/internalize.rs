@@ -22,7 +22,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
+use zip::{write::SimpleFileOptions, CompressionMethod, System, ZipArchive, ZipWriter};
 
 use crate::{
     execute::{binary_cache_sibling_descriptor, paired_support_paths, rewrite_external_text_payload},
@@ -436,7 +436,11 @@ pub(crate) fn apply_internalize(
         let writer = fs::File::create(&write_to)
             .with_context(|| format!("failed to create output file {}", write_to.display()))?;
         let mut target = ZipWriter::new(writer);
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        // Unix, as zip 2 always wrote: since zip 7 the default is the platform the
+        // app runs on, which would change every new entry's "made by" byte.
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .system(System::Unix);
 
         for index in 0..source.len() {
             let mut entry = source.by_index(index)?;
