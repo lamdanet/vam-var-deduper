@@ -18,8 +18,39 @@ release time, it fills it with the commit messages since the last release.
   right-click menu, the Extract presets link in its details, the button on a
   scene row, or for several selected packages at once. The presets use the
   package's own files, so keep it installed
+- **Updates from the Hub**: VAR Packages knows which of your packages have a
+  newer version on the Hub. The Updates filter lists them with Update All;
+  a package's details and right-click menu offer Update to vN and View on
+  Hub. The new version downloads beside the old one, which stays until you
+  clean old versions up
+- **Not on Hub**: a filter for packages whose exact version can't be
+  downloaded again, and a warning when you delete or clean them up
+- **Check integrity**: reads every file inside a package and checks it
+  against its checksum. Damaged packages get a Damaged chip and filter, and
+  Redownload replaces them with a fresh copy from the Hub. Unchanged
+  packages aren't read again, and every download is checked the same way
+- **Disable / Enable** a package in place with VaM's own `.var.disabled`
+  marker. Dependencies nothing else needs are disabled with it, and you're
+  told which packages would lose a dependency. A Disabled filter lists them
+- **Installed and Orphans**: the app remembers which packages you chose and
+  which came in as dependencies, across versions. The Orphans filter lists
+  dependencies nothing uses any more, with Remove all orphans, and a package's
+  details say what deleting it really frees, unused dependencies included
+- **Hide and favorite in VaM**: hide or star single items from a package's
+  content list, using VaM's own flags, so VaM's browser follows. Settings can
+  hide everything in dependency packages; turning that off brings back only
+  what it hid. Flags carry over to new versions of a package
+- **Drop to add**: drop `.var` files or folders on the window to add them to
+  your library, checked first and skipped when already there. Settings can
+  make it move them instead of copying
+- The first-run dialog finds a VaM folder next to the app by itself
 
 ### Changed
+- Downloads resume where they stopped instead of starting over, retry by
+  themselves after network trouble, and can be paused and resumed. The queue
+  survives a restart, waiting for Resume. What you asked for downloads before
+  dependencies, and a finished download fetches the dependencies it still
+  lacks. The panel shows total speed and what's left
 - **Scan Dependencies** replaces Download Dependencies, Find Dependencies
   Locally and Remove dependencies. It checks AddonPackages, the offload folder
   and any folders you add, shows where each dependency is, and lets you
