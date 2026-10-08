@@ -14261,6 +14261,21 @@ button.lib-dep-ref:hover {
   gap: 4px;
 }
 
+.lib-chip.lib-chip-update {
+  background: color-mix(in srgb, var(--lib-accent) 22%, rgba(0, 0, 0, 0.55));
+  color: #fff;
+}
+
+.lib-chip.lib-chip-local {
+  background: color-mix(in srgb, var(--lib-warning) 16%, transparent);
+  color: var(--lib-warning);
+}
+
+.lib-hub-checked {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .lib-pill.extract-pill {
   min-width: 0;
 }

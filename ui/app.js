@@ -3211,6 +3211,12 @@ const LIB_STATUSES = [
     label: "Old versions",
     title: "A newer version of the same package is in the scanned folders",
   },
+  { key: "updates", label: "Updates", title: "A newer version is on the Hub" },
+  {
+    key: "local",
+    label: "Not on Hub",
+    title: "Not on the Hub — once deleted, it can't be downloaded again. Keep a backup.",
+  },
   { key: "indexed", label: "In database", title: "Recorded in the local database index" },
   { key: "unindexed", label: "Not in database", title: "Not yet indexed — run Database → Build" },
 ];
@@ -3562,6 +3568,11 @@ function libCardHtml(it, idx) {
       `<span class="lib-chip lib-chip-old" title="A newer version of this package is in the scanned folders">Old</span>`,
     );
   }
+  if (it.hub_update_version) {
+    chips.push(
+      `<span class="lib-chip lib-chip-update" title="Version ${it.hub_update_version} is on the Hub">Update</span>`,
+    );
+  }
   if (compact && it.missing_dep_count > 0) {
     chips.push(
       `<span class="lib-chip lib-chip-warn" title="${it.missing_dep_count} missing dependencies"><span class="material-symbols-outlined">warning</span>${it.missing_dep_count}</span>`,
@@ -3841,6 +3852,24 @@ function libRenderToolbar() {
   } else if (status === "outdated" && total > 0) {
     actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-destructive" data-lib-action="clean-old">
         <span class="material-symbols-outlined">delete_sweep</span>Clean Old Versions…</button>`;
+  } else if (status === "updates" || status === "local") {
+    const checked = HUB_INDEX.error
+      ? `Couldn't reach the Hub${HUB_INDEX.loaded ? " — using the last copy" : ""}`
+      : HUB_INDEX.fetchedAt
+        ? `Checked ${libAgo(HUB_INDEX.fetchedAt)}`
+        : HUB_INDEX.loaded
+          ? "Checking…"
+          : "Not checked yet";
+    actions.innerHTML = `${
+      status === "updates"
+        ? `<button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-action="update-all" ${total ? "" : "disabled"}>
+            <span class="material-symbols-outlined">download</span>Update All (${total})</button>`
+        : ""
+    }
+      <span class="lib-aside lib-hub-checked">${escapeHtml(checked)}</span>
+      <button type="button" class="lib-icon-btn lib-icon-btn-sm" data-lib-action="hub-recheck" title="Check the Hub again">
+        <span class="material-symbols-outlined">refresh</span>
+      </button>`;
   } else {
     actions.innerHTML = "";
   }
@@ -4242,6 +4271,11 @@ function libDetailHeaderHtml(item, details) {
   }
   if (!item.readable && !(details && details.readable)) chips.push(`<span class="lib-chip lib-chip-error">Corrupted</span>`);
   if (!item.indexed) chips.push(`<span class="lib-chip lib-chip-muted" title="Not recorded in the database index">Not in DB</span>`);
+  if (item.on_hub === false) {
+    chips.push(
+      `<span class="lib-chip lib-chip-local" title="Not on the Hub — once deleted, it can't be downloaded again. Keep a backup.">Not on Hub</span>`,
+    );
+  }
   chips.push(libLicenseHtml(details?.license ?? item.license));
   if (details?.morph_count > 0) {
     chips.push(
@@ -4284,6 +4318,12 @@ function libDetailHeaderHtml(item, details) {
         </div>
       </div>
       <div class="lib-actions">
+        ${
+          item.hub_update_version
+            ? `<button type="button" class="lib-btn lib-btn-gradient lib-btn-full" data-lib-action="hub-update" title="Download ${escapeAttribute(item.hub_update_file || "")} from the Hub; this version stays until you remove it">
+                <span class="material-symbols-outlined">upgrade</span>Update to v${item.hub_update_version}</button>`
+            : ""
+        }
         ${libOffloadButtonHtml(item, { big: true })}
         <button type="button" class="lib-btn lib-btn-accent lib-btn-full" data-lib-action="open-details">
           <span class="material-symbols-outlined">open_in_new</span>Open in VAR Details
@@ -4298,6 +4338,12 @@ function libDetailHeaderHtml(item, details) {
           <button type="button" class="lib-icon-btn" data-lib-action="explorer" title="Show in Explorer">
             <span class="material-symbols-outlined">folder_open</span>
           </button>
+          ${
+            item.hub_resource_id
+              ? `<button type="button" class="lib-icon-btn" data-lib-action="view-hub" title="View on Hub">
+                  <span class="material-symbols-outlined">explore</span></button>`
+              : ""
+          }
         </div>
         <p class="lib-aside">${usedLine}</p>
         <p class="lib-path" title="${escapeAttribute(item.file_path)}">${escapeHtml(item.file_path)}</p>
@@ -5103,6 +5149,160 @@ function setupOffload() {
     if (e.key === "Escape" && !backdrop.classList.contains("hidden")) offloadClose();
   });
   renderSettingsOffload();
+}
+
+// ---- Hub package index (updates, Not on Hub) ----------------------------------------
+// The backend keeps the Hub's packages.json (hub_index.rs) and annotates the
+// Library's items with it: hub_update_version/file (a newer version is on the
+// Hub), on_hub (this exact file is), hub_resource_id. Checked at start-up,
+// every 30 minutes, and on "Check again".
+
+const HUB_INDEX = { generation: 0, fetchedAt: null, error: null, loaded: false, packages: 0 };
+
+async function hubIndexRefresh(force = false) {
+  if (!invoke) return;
+  try {
+    const st = await invoke("hub_index_refresh", { force });
+    const changed = st.generation !== HUB_INDEX.generation;
+    Object.assign(HUB_INDEX, {
+      generation: st.generation,
+      fetchedAt: st.fetchedAtMs ?? null,
+      error: st.error ?? null,
+      loaded: Boolean(st.loaded),
+      packages: st.packages || 0,
+    });
+    if (changed && state.vpHasListing) {
+      await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true }).catch(() => {});
+    }
+    libRenderToolbar();
+    if (force) {
+      if (st.error) showToast(`Couldn't check the Hub: ${st.error}`, "error", 5000);
+      else showToast(`Checked the Hub: ${st.packages.toLocaleString()} packages listed.`, "success");
+    }
+  } catch (e) {
+    addLog(`Hub index: ${String(e)}`);
+  }
+}
+
+function libAgo(ms) {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+}
+
+// Every listed item with a status (all pages), for Update All.
+async function libListAllWithStatus(status) {
+  const inputDir = vpResolveInputDir();
+  if (!invoke || !inputDir) return [];
+  const page = await invoke("list_var_packages", {
+    inputDir,
+    additionalInputDirs: getAdditionalDirs("varPackages"),
+    offset: 0,
+    limit: 1000,
+    search: null,
+    filters: serializeVarPackageFilters({ status }),
+    sort: "name",
+    sortDir: "asc",
+    forceRescan: false,
+    deepScan: state.varPackagesScannedDeep !== false,
+    offloadDir: offloadDir() || null,
+  });
+  return Array.isArray(page?.items) ? page.items : [];
+}
+
+// Download the Hub's newer version beside each package. The old version stays
+// (the Old versions filter's Clean Old Versions removes it), as in Backstage.
+async function libHubUpdate(items) {
+  const list = (items ?? []).filter((it) => it?.hub_update_file);
+  if (!invoke || !list.length) return;
+  const toast = showToast(`Looking up ${list.length} update${list.length === 1 ? "" : "s"} on the Hub…`, "info", 0);
+  let queued = 0;
+  const gone = [];
+  for (const it of list) {
+    let hit = null;
+    try {
+      hit = await invoke("hub_exact_download", { fileName: it.hub_update_file });
+    } catch (e) {
+      addLog(`Update ${it.package_id}: ${String(e)}`);
+    }
+    if (!hit) {
+      gone.push(it.hub_update_file);
+      continue;
+    }
+    const dir = it.offloaded ? await ensureDownloadsDir() : it.file_path.replace(/[\\/][^\\/]+$/, "");
+    if (!dir) continue;
+    const stem = hit.filename.replace(/\.var$/i, "");
+    const id = queueDownload({
+      packageId: stem,
+      url: hit.url,
+      filename: hit.filename,
+      host: "hub",
+      destDir: dir,
+      nest: false,
+      label: `${hit.filename} (update)`,
+      priority: "direct",
+      autoDeps: true,
+      onDone: (status) => {
+        if (status === "done") {
+          addLog(`Updated ${it.package_id} → ${stem}`);
+          downloadsRefreshSoon();
+        }
+      },
+    });
+    if (id != null) queued += 1;
+  }
+  toast.dismiss?.();
+  for (const f of gone) addLog(`Update: ${f} is listed on the Hub but can't be downloaded (paid, hosted elsewhere, or no longer served)`);
+  if (queued) {
+    showToast(
+      `Downloading ${queued} update${queued === 1 ? "" : "s"}${gone.length ? ` — ${gone.length} not downloadable, see Console` : ""}. ` +
+        "The old versions stay until you remove them (Old versions → Clean Old Versions).",
+      gone.length ? "info" : "success",
+      6000,
+    );
+  } else if (gone.length) {
+    showToast(
+      `${gone.length === 1 ? `${gone[0]} is` : `${gone.length} updates are`} listed on the Hub but can't be downloaded — paid, hosted elsewhere, or no longer served.`,
+      "error",
+      7000,
+    );
+  }
+}
+
+async function libHubUpdateAll() {
+  try {
+    libHubUpdate(await libListAllWithStatus("updates"));
+  } catch (e) {
+    showToast(`Update All failed: ${String(e?.message || e)}`, "error");
+  }
+}
+
+function libViewOnHub(rid) {
+  if (!rid) return;
+  document.querySelector('[data-sidebar-link="hub"]')?.click();
+  setTimeout(() => hubPageOpen(rid), 150);
+}
+
+// "N aren't on the Hub" for confirmations, from items already annotated or
+// (for package ids only) a lookup.
+function libNotOnHubNote(names) {
+  if (!names.length) return "";
+  const list = names.slice(0, 4).join(", ") + (names.length > 4 ? `, +${names.length - 4} more` : "");
+  return names.length === 1
+    ? `${names[0]} is not on the Hub — once deleted, it can't be downloaded again.`
+    : `${names.length} of them are not on the Hub — once deleted, they can't be downloaded again: ${list}.`;
+}
+
+async function libNotOnHubIds(packageIds) {
+  if (!invoke || !packageIds.length) return [];
+  try {
+    const hits = await invoke("hub_index_lookup", { packageIds });
+    return (hits ?? []).filter((h) => h.onHub === false).map((h) => h.packageId);
+  } catch (_e) {
+    return [];
+  }
 }
 
 // ---- Extract presets ----------------------------------------------------------------
@@ -6991,6 +7191,21 @@ function libRunAction(action, trigger) {
     case "bulk-extract":
       extractOpen(libSelectedSnaps());
       break;
+    case "hub-update":
+      if (item) libHubUpdate([item]);
+      break;
+    case "bulk-update":
+      libHubUpdate(libSelectedSnaps());
+      break;
+    case "update-all":
+      libHubUpdateAll();
+      break;
+    case "hub-recheck":
+      hubIndexRefresh(true);
+      break;
+    case "view-hub":
+      if (item?.hub_resource_id) libViewOnHub(item.hub_resource_id);
+      break;
     case "extract":
       if (item) extractOpen([item]);
       break;
@@ -7044,6 +7259,9 @@ function libContextMenu(event, item) {
         { label: "Organize selected by Creator…", action: () => libRunAction("bulk-organize") },
         { label: "Export selected Scene Images", action: () => libRunAction("bulk-export") },
         { label: "Extract presets from selected…", action: () => libRunAction("bulk-extract") },
+        ...(libSelectedSnaps().some((s) => s.hub_update_file)
+          ? [{ label: "Update selected from the Hub", action: () => libRunAction("bulk-update") }]
+          : []),
         { separator: true },
         libSelectAllItem(),
         { label: "Deselect", action: () => libRunAction("bulk-clear") },
@@ -7081,6 +7299,10 @@ function libContextMenu(event, item) {
         },
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
         { label: "Extract presets…", action: () => extractOpen([item]) },
+        ...(item.hub_update_version
+          ? [{ label: `Update to v${item.hub_update_version}`, action: () => libHubUpdate([item]) }]
+          : []),
+        ...(item.hub_resource_id ? [{ label: "View on Hub", action: () => libViewOnHub(item.hub_resource_id) }] : []),
         // Offloaded packages are filed by Restore, not moved into AddonPackages here.
         ...(item.offloaded
           ? []
@@ -7796,6 +8018,8 @@ async function vpApplyPlan() {
     // We only ever check other *packages*; loose files are out of scope, and
     // saying so is the honest alternative to a scan that can never be complete.
     msg += " Loose scenes and presets under Saves/ and Custom/ are not checked.";
+    const notOnHub = await libNotOnHubIds(picked.map((i) => VP_PLAN.actions[i]?.package_id).filter(Boolean));
+    if (notOnHub.length) msg += `\n\n${libNotOnHubNote(notOnHub)}`;
   }
   if (!(await showAppConfirm(msg))) return;
 
@@ -7970,7 +8194,13 @@ function vpDeleteModalOpen(filePath) {
     VP_DELETE.dependents = null;
 
     vpDeleteSetText("vp-delete-title", t("varPackagesDeleteTitle"));
-    vpDeleteSetText("vp-delete-message", t("varPackagesDeleteMessage", VP_DELETE.fileName));
+    const delItem = libFindItem(filePath) ?? state.vpSelected.get(filePath);
+    vpDeleteSetText(
+      "vp-delete-message",
+      `${t("varPackagesDeleteMessage", VP_DELETE.fileName)}${
+        delItem?.on_hub === false ? ` ${libNotOnHubNote([delItem.package_id])}` : ""
+      }`,
+    );
     vpDeleteSetText("vp-delete-scan-button", t("varPackagesDeleteScan"));
     vpDeleteSetText("vp-delete-dep-scan-button", t("varPackagesDeleteDepScan"));
     vpDeleteSetText("vp-delete-usage-header", t("varPackagesDeleteUsageHeader"));
@@ -8579,8 +8809,11 @@ async function vpBulkDelete() {
   let totalBytes = 0;
   for (const tgt of targets) totalBytes += tgt.size_bytes;
 
+  const notOnHub = targets.filter((tgt) => tgt.on_hub === false).map((tgt) => tgt.package_id);
   const ok = await showAppConfirm(
-    t("varPackagesBulkDeleteConfirm", targets.length, formatBytesLocal(totalBytes)),
+    `${t("varPackagesBulkDeleteConfirm", targets.length, formatBytesLocal(totalBytes))}${
+      notOnHub.length ? `\n\n${libNotOnHubNote(notOnHub)}` : ""
+    }`,
   );
   if (!ok) return;
 
@@ -16583,7 +16816,16 @@ function hubResourceState(r) {
   const exact = stems.find((s) => HUB.local.ids.has(s));
   if (exact) return { kind: "installed", stem: exact };
   if (inst && jobs.some((j) => j.status === "failed")) return { kind: "failed" };
-  if (stems.some((s) => HUB.local.bases.has(hubBaseOf(s)))) return { kind: "update" };
+  // Another version is on disk: an update only if the Hub's is newer than
+  // every local one; otherwise the local copy is what to show.
+  for (const s of stems) {
+    const versions = HUB.local.bases.get(hubBaseOf(s));
+    if (!versions?.length) continue;
+    const local = Math.max(...versions);
+    const m = /\.(\d+)$/.exec(s);
+    if (m && Number(m[1]) > local) return { kind: "update" };
+    return { kind: "installed", stem: `${hubBaseOf(s)}.${local}` };
+  }
   if (hubStr(r?.hubDownloadable) === "false") {
     return { kind: "external", url: hubStr(r.download_url) || hubStr(r.external_url) || hubResourceUrl(rid) };
   }
@@ -18546,6 +18788,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVamDir();
   setupOffload();
   setupExtract();
+  // The Hub package index: shortly after start-up, then every 30 minutes.
+  setTimeout(() => hubIndexRefresh(false), 1500);
+  setInterval(() => hubIndexRefresh(false), 30 * 60 * 1000);
   setupAbout();
   setupSources();
   setupSourcesPage();
