@@ -16720,3 +16720,172 @@ button.pkg-bar-row:not(:disabled):hover {
     display: none;
   }
 }
+
+/* ---- Package Explorer: files tree ---- */
+
+.pkg-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--lib-border);
+  border-radius: 9px;
+  background: var(--lib-surface);
+}
+
+.pkg-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lib-text-3);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pkg-seg-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.pkg-seg-btn:hover {
+  color: var(--lib-text);
+}
+
+.pkg-seg-btn.is-active {
+  background: var(--lib-elevated);
+  color: var(--lib-text);
+}
+
+.pkg-seg-btn.is-active .material-symbols-outlined {
+  color: var(--lib-accent);
+}
+
+.pkg-tree-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pkg-tree-tools .pkg-muted {
+  margin: 0 auto 0 0;
+}
+
+.pkg-tree-wrap {
+  padding: 8px;
+  max-height: 620px;
+  overflow: auto;
+  background:
+    radial-gradient(ellipse at 0% 50%, color-mix(in srgb, var(--lib-accent) 6%, transparent), transparent 60%),
+    var(--lib-surface);
+}
+
+.pkg-tree {
+  display: block;
+  user-select: none;
+}
+
+.pkg-te {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-opacity: 0.45;
+}
+
+.pkg-tn {
+  cursor: pointer;
+}
+
+.pkg-tn-hit {
+  fill: transparent;
+}
+
+.pkg-tn-dot {
+  fill: var(--c);
+  stroke: var(--c);
+  stroke-width: 2;
+  transition: r 0.15s;
+}
+
+.pkg-tn.is-open:not(.is-root) .pkg-tn-dot {
+  fill: var(--lib-surface);
+}
+
+.pkg-tn.is-root .pkg-tn-dot {
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--lib-accent) 70%, transparent));
+}
+
+.pkg-tn-sign {
+  fill: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.pkg-tn.is-open .pkg-tn-sign {
+  fill: var(--c);
+}
+
+.pkg-tn-label {
+  fill: var(--lib-text);
+  font-size: 12px;
+  font-weight: 600;
+  /* A halo in the card colour: edges pass behind the labels. */
+  paint-order: stroke;
+  stroke: var(--lib-surface);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+
+.pkg-tn.is-root .pkg-tn-label {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.pkg-tn-size {
+  fill: var(--lib-text-3);
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.pkg-tn:hover .pkg-tn-label {
+  fill: var(--lib-accent);
+}
+
+.pkg-tn:hover .pkg-tn-dot {
+  stroke-width: 3.5;
+}
+
+.pkg-tn.is-sel .pkg-tn-label {
+  fill: var(--lib-accent);
+}
+
+.pkg-tn.is-sel .pkg-tn-dot {
+  stroke-width: 4;
+}
+
+.pkg-tn.is-image {
+  cursor: zoom-in;
+}
+
+.pkg-tn.is-more .pkg-tn-label {
+  fill: var(--lib-text-2);
+  font-style: italic;
+}
+
+.pkg-tn.is-new,
+.pkg-te.is-new {
+  animation: pkg-tree-in 0.28s ease-out;
+}
+
+@keyframes pkg-tree-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
