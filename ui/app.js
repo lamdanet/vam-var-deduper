@@ -10428,14 +10428,11 @@ function fmRenderList() {
         ["all", "All"],
         ["todo", "Not chosen"],
         ["ready", "Chosen"],
+        ["absent", "Not installed"],
+        ["inside", "File missing"],
       ]
         .map(([k, label]) => `<button type="button" class="fm-filter${FM.filter === k ? " is-active" : ""}" data-fm-filter="${k}">${label} <small>${count(k)}</small></button>`)
-        .join("")}
-        <select class="fm-filter-kind${FM.filter === "absent" || FM.filter === "inside" ? " is-active" : ""}" data-fm-filter-kind aria-label="Show by what's missing">
-          <option value="">Any kind</option>
-          <option value="absent" ${FM.filter === "absent" ? "selected" : ""}>Not installed (${count("absent")})</option>
-          <option value="inside" ${FM.filter === "inside" ? "selected" : ""}>File missing (${count("inside")})</option>
-        </select></div>`;
+        .join("")}</div>`;
   }
   const rows = fmFiltered();
   if (!rows.length) {
@@ -11300,9 +11297,6 @@ function fmOnChange(e) {
       label: pkg === "SELF" ? `already inside ${fmSelfName()}` : pkg,
     });
     fmRefresh();
-  } else if (t.matches?.("[data-fm-filter-kind]")) {
-    FM.filter = t.value || "all";
-    fmRenderList();
   } else if (t.id === "fm-dbmode") {
     fmStoreSet("fm.dbMode", t.checked ? "1" : "0");
     fmRenderSource();
