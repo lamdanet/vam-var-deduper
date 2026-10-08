@@ -11,8 +11,9 @@ pnpm-lock.yaml
 
 # Rust/Cargo
 target/
-Cargo.lock
 **/*.rs.bk
+# The app's lockfile is committed so release builds use the tested versions.
+!src-tauri/Cargo.lock
 
 # Tauri
 src-tauri/target/
