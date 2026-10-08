@@ -5951,7 +5951,7 @@ function sourcesRenderSaved() {
       const archive = r.archive_entry
         ? `<span class="lib-pill" title="${escapeAttribute(r.archive_entry)}">zip${r.archive_password ? " · 🔒" : ""}</span>`
         : "";
-      return `<div class="sources-res-row sources-saved-row">
+      return `<div class="sources-res-row sources-saved-row" data-sources-saved-row="${i}">
           <span class="hub-dl-main">
             <span class="hub-dl-name" title="${escapeAttribute(r.filename)}">${escapeHtml(r.filename)}</span>
             <span class="hub-dl-meta">${escapeHtml(srcHostLabel(r.host))} · ${escapeHtml(sourcesShortLink(r.url))}</span>
@@ -5960,6 +5960,11 @@ function sourcesRenderSaved() {
           ${archive}
           ${inLib ? `<span class="lib-pill lib-pill-ok">In library</span>` : ""}
           <span class="sources-row-acts">
+            ${
+              inLib
+                ? `<button type="button" class="icon-button" data-sources-saved-details="${i}" title="Open your copy in VAR Details"><span class="material-symbols-outlined">description</span></button>`
+                : ""
+            }
             <button type="button" class="icon-button" data-sources-saved-open="${i}" title="Open the link in your browser"><span class="material-symbols-outlined">open_in_new</span></button>
             <button type="button" class="icon-button dep-scan-act-danger" data-sources-saved-remove="${i}" title="Forget this source"><span class="material-symbols-outlined">delete</span></button>
           </span>
@@ -6113,7 +6118,10 @@ function setupSourcesPage() {
     };
     const open = pick("data-sources-saved-open");
     const remove = pick("data-sources-saved-remove");
-    if (open) {
+    const details = pick("data-sources-saved-details");
+    if (details) {
+      sourcesOpenDetails(details).catch((err) => addLog(`Sources: ${String(err)}`));
+    } else if (open) {
       invoke("open_url", { url: open.url }).catch((err) => addLog(`Sources: ${String(err)}`));
     } else if (remove) {
       try {
@@ -6124,6 +6132,26 @@ function setupSourcesPage() {
         addLog(`Sources: ${String(err)}`);
       }
     }
+  });
+  // Saved rows in the library get the same way to your copy as found ones.
+  $("sources-saved")?.addEventListener("contextmenu", (e) => {
+    const el = e.target.closest?.("[data-sources-saved-row]");
+    const row = el ? SOURCES.saved[Number(el.getAttribute("data-sources-saved-row"))] : null;
+    if (!row) return;
+    e.preventDefault();
+    const items = [];
+    if (sourcesInLibrary(row.filename)) {
+      items.push(
+        { label: "Open in VAR Details", action: () => sourcesOpenDetails(row).catch((err) => addLog(`Sources: ${String(err)}`)) },
+        { label: "Show in VAR Packages", action: () => sourcesShowInLibrary(row) },
+        { separator: true },
+      );
+    }
+    items.push({
+      label: `Open link in browser (${srcHostLabel(row.host)})`,
+      action: () => invoke("open_url", { url: row.url }).catch((err) => addLog(`Sources: ${String(err)}`)),
+    });
+    showContextMenu(e.clientX, e.clientY, items);
   });
 }
 
