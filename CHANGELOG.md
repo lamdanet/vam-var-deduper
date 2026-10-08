@@ -52,8 +52,10 @@ release time, it fills it with the commit messages since the last release.
   and clothing show as image cards you can hide or star in VaM. A map shows
   what it needs and what needs it. Its files show as a tree of folders you
   open and close, drag around and zoom (Ctrl + wheel), as an indented list
-  like Explorer's, or as a map sized by bytes. It can also
-  compare its files with your database to find what other packages share.
+  like Explorer's, or as a map sized by bytes, and you can show only its
+  clothing, hair, morphs, textures and so on. Long dependency lists switch
+  to a list you can filter and search. It also compares its files with your
+  database to show what other packages share.
   Open it from the sidebar, a package's right-click menu or the Explore
   button in its details, or drop a `.var` on the page. VAR Details is still
   there
