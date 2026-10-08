@@ -16943,37 +16943,6 @@ button.pkg-stat:focus-visible::after {
   font-size: 16px;
 }
 
-/* The settings, folded to one line after a check. */
-.fm-source-line {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 0 2px;
-}
-
-.fm-source-line > .material-symbols-outlined {
-  font-size: 26px;
-  color: var(--primary);
-}
-
-.fm-source-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.fm-source-text b {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fm-source-text small {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
 .fm-dropzone {
   cursor: pointer;
 }
@@ -17131,21 +17100,6 @@ button.pkg-stat:focus-visible::after {
   flex-direction: column;
   gap: 10px;
   margin-top: 10px;
-}
-
-.fm-progress-line {
-  height: 5px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.fm-progress-line span {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent-success);
-  transition: width 0.25s;
 }
 
 .fm-filter-row {
@@ -17337,12 +17291,6 @@ button.pkg-stat:focus-visible::after {
   font-weight: 500;
 }
 
-.fm-folded-info {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
 .fm-top .card {
   align-self: stretch;
 }
@@ -17373,14 +17321,9 @@ button.pkg-stat:focus-visible::after {
   width: 36px;
   height: 36px;
   border-radius: 9px;
-  background: color-mix(in srgb, var(--accent-warn) 18%, transparent);
-  color: var(--accent-warn);
+  background: var(--surface-3);
+  color: var(--text-muted);
   font-size: 20px;
-}
-
-.fm-missing-pkg-icon.is-absent {
-  background: color-mix(in srgb, var(--accent-danger) 16%, transparent);
-  color: var(--accent-danger);
 }
 
 .fm-missing-pkg-text {
@@ -17503,9 +17446,9 @@ button.pkg-stat:focus-visible::after {
 
 .fm-done-acts {
   display: flex;
-  justify-content: flex-end;
-  padding: 0 16px 14px;
-  background: var(--surface-2);
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 20px 14px;
 }
 
 .fm-db-check {
@@ -17641,12 +17584,8 @@ button.pkg-stat:focus-visible::after {
   font-weight: 600;
 }
 
-.fm-row-pkg.is-absent {
-  color: color-mix(in srgb, var(--accent-danger) 75%, var(--text-muted));
-}
-
-.fm-row-pkg.is-inside {
-  color: color-mix(in srgb, var(--accent-warn) 75%, var(--text-muted));
+.fm-row-pkg {
+  color: var(--text-muted);
 }
 
 /* Run Fixes at the top of the panel, which stays beside the list. */
@@ -18022,12 +17961,6 @@ button.pkg-stat:focus-visible::after {
   font-size: 12.5px;
 }
 
-.fm-summary-ready {
-  margin: 6px 0 0;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
 .fm-chip-muted {
   color: var(--text-dim);
 }
@@ -18086,4 +18019,157 @@ button.pkg-stat:focus-visible::after {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 4px;
+}
+
+/* ---- Fix Missing: calmer, one place for each action ---- */
+
+/* The checked package on one line (the folded settings). */
+.fm-pkg-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 2px 20px 16px;
+}
+
+.fm-pkg-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--lib-thumb-bg);
+  border: 1px solid var(--line);
+}
+
+.fm-pkg-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fm-pkg-text {
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fm-pkg-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+}
+
+.fm-pkg-title small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fm-pkg-by {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.fm-pkg-where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.fm-pkg-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* The count of missing files stands out; the rest are plain chips. */
+.fm-chip-warn {
+  background: color-mix(in srgb, var(--accent-warn) 18%, transparent);
+  color: var(--accent-warn);
+}
+
+/* Run Fixes is at the top of Replacement Sources; the Fix card shows it
+   only when that panel is under the list. */
+@media (min-width: 1181px) {
+  .fm-view .fm-run-narrow {
+    display: none !important;
+  }
+}
+
+/* A row says where its copy comes from; Use shows on hover and on the
+   selected row. */
+.fm-row-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: 380px;
+}
+
+.fm-row-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fm-row-src > .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 15px;
+  color: var(--accent-success);
+}
+
+.fm-row-src.is-guess > .material-symbols-outlined {
+  color: var(--accent-warn);
+}
+
+.fm-row-src-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-dep {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.fm-row .fm-row-use {
+  flex: 0 0 auto;
+  visibility: hidden;
+}
+
+.fm-row:hover .fm-row-use,
+.fm-row.active .fm-row-use,
+.fm-row:focus .fm-row-use,
+.fm-row:focus-within .fm-row-use {
+  visibility: visible;
+}
+
+/* Red only for a file nothing can bring back; amber for one to look at. */
+.fm-row-state.is-look {
+  color: var(--accent-warn);
+}
+
+.fm-row-state.is-stuck {
+  color: var(--accent-danger);
 }
