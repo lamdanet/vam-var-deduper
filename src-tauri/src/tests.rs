@@ -62,6 +62,7 @@ fn write_test_var(var_path: &Path, files: &[(&str, &[u8])]) {
 }
 
 #[test]
+#[ignore = "needs the local fixture folder test/ (not in the repo)"]
 fn scan_detects_duplicates() {
     let input_dir = repo_root().join("test");
     let scanned = scan_directory_with_target_with_progress(&input_dir, &[], None, |_, _| {})
@@ -188,6 +189,7 @@ fn read_json_bytes_accepts_trailing_commas() {
 }
 
 #[test]
+#[ignore = "needs the local fixture folder tmp_verify_vars/ (not in the repo)"]
 fn scan_detects_duplicates_recursively() {
     let fixture_dir = repo_root().join("tmp_verify_vars");
     let nested_root = repo_root().join("tmp_recursive_scan");
@@ -390,6 +392,7 @@ fn execute_report_includes_rewritten_vap_files() {
 }
 
 #[test]
+#[ignore = "needs the local fixture folder tmp_verify_vars/ (not in the repo)"]
 fn execute_rewrites_vap_references() {
     let input_dir = repo_root().join("tmp_verify_vars");
     let output_dir = repo_root().join("tmp_rust_verify_vap_out");
@@ -473,6 +476,7 @@ fn execute_rewrites_vap_references() {
 }
 
 #[test]
+#[ignore = "needs the local fixture folder tmp_verify_vars/ (not in the repo)"]
 fn execute_replace_mode_backs_up_original_vap_files() {
     let temp_root = repo_root().join("tmp_rust_verify_vap_replace");
     let input_dir = temp_root.join("input");
@@ -555,6 +559,7 @@ fn execute_replace_mode_backs_up_original_vap_files() {
 }
 
 #[test]
+#[ignore = "needs the local fixture folder tmp_verify_vars/ (not in the repo)"]
 fn execute_scoped_to_target_package_only_changes_requested_var() {
     let input_dir = repo_root().join("tmp_verify_vars");
     let output_dir = repo_root().join("tmp_rust_verify_scoped_out");
@@ -609,6 +614,7 @@ fn execute_scoped_to_target_package_only_changes_requested_var() {
 }
 
 #[test]
+#[ignore = "needs the local fixture folder tmp_verify_vars/ (not in the repo)"]
 fn single_var_scan_hashes_only_target_related_size_candidates() {
     let input_dir = repo_root().join("tmp_verify_vars");
     let target_var_path = input_dir.join("DropB.var");
@@ -634,6 +640,7 @@ fn single_var_scan_hashes_only_target_related_size_candidates() {
 }
 
 #[test]
+#[ignore = "needs the local fixture folder tmp_verify_vars/ (not in the repo)"]
 fn execute_external_target_var_only_changes_that_var() {
     let temp_root = repo_root().join("tmp_rust_verify_external_target");
     let input_dir = temp_root.join("input");
