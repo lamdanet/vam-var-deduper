@@ -44,8 +44,10 @@ release time, it fills it with the commit messages since the last release.
   your library, checked first and skipped when already there. Settings can
   make it move them instead of copying
 - The first-run dialog finds a VaM folder next to the app by itself
-- **Package Explorer**: a new page that shows one package in pictures. You
-  get its cover and pictures, tiles with its size, content, morphs and
+- **Package Explorer**: a new page that shows one package in pictures. It
+  says in plain words what's wrong with the package, if anything (missing or
+  offloaded dependencies, not on the Hub, damaged…), and its main button
+  fixes the worst of it. You get its cover and pictures, tiles with its size, content, morphs and
   dependencies, and a chart of what its bytes are made of. Its scenes, looks
   and clothing show as image cards you can hide or star in VaM. A map shows
   what it needs and what needs it. Its files show as a tree of folders you
