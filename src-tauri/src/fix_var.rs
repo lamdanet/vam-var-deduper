@@ -467,6 +467,18 @@ fn find_local_candidates(
         .collect()
 }
 
+/// The package a fix points at, as written into the rewritten reference.
+/// The target itself (by its own id, or `SELF`) is written `SELF`, VaM's
+/// spelling for "this package"; the bool says whether the package must be a
+/// dependency (never for `SELF`, or the package would depend on itself).
+fn replacement_target(target_id: &str, replacement_pkg: &str) -> (String, bool) {
+    if replacement_pkg.eq_ignore_ascii_case("SELF") || replacement_pkg.eq_ignore_ascii_case(target_id) {
+        ("SELF".to_string(), false)
+    } else {
+        (replacement_pkg.to_string(), true)
+    }
+}
+
 /// Applies a batch of user-approved fixes to a target VAR. Rewrites
 /// `Pkg:/path` references in all text payloads, then updates `meta.json`
 /// dependencies: each replacement package is inserted; each broken package
@@ -495,8 +507,14 @@ pub(crate) fn apply_fix_var(
     let mut broken_pkgs_with_path: BTreeSet<String> = BTreeSet::new();
     let mut meta_only_broken: BTreeSet<String> = BTreeSet::new();
     let mut replacement_pkgs: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let target_id = target_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.trim_end_matches(".var").to_string())
+        .unwrap_or_default();
 
     for fix in fixes {
+        let (replacement_pkg, needs_dependency) = replacement_target(&target_id, &fix.replacement_pkg);
         if let Some(path) = &fix.broken_path {
             // Use the candidate's actual internal path when the user picked a
             // candidate whose path differs from the broken ref's path. Without
@@ -504,7 +522,7 @@ pub(crate) fn apply_fix_var(
             // broken reference (right pkg, wrong path).
             let new_path = fix.replacement_path.as_deref().unwrap_or(path.as_str());
             let old = format!("{}:/{}", fix.broken_pkg, path);
-            let new = format!("{}:/{}", fix.replacement_pkg, new_path);
+            let new = format!("{}:/{}", replacement_pkg, new_path);
             if old != new {
                 replacements.insert(old, new);
             }
@@ -512,9 +530,11 @@ pub(crate) fn apply_fix_var(
         } else {
             meta_only_broken.insert(fix.broken_pkg.clone());
         }
-        replacement_pkgs
-            .entry(fix.replacement_pkg.clone())
-            .or_insert(fix.replacement_license_type.clone());
+        if needs_dependency {
+            replacement_pkgs
+                .entry(replacement_pkg)
+                .or_insert(fix.replacement_license_type.clone());
+        }
     }
 
     if let Some(backup_root) = backup_root {
@@ -706,4 +726,17 @@ fn lookup_license_in_db(db: &Db, _package_id: &str) -> Result<Option<String>> {
     // kept as a hook so a future migration that adds the column can fill it
     // in without touching the fix path.
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replacement_target;
+
+    #[test]
+    fn a_copy_inside_the_target_is_a_self_reference() {
+        assert_eq!(replacement_target("Abie.A35.1", "Abie.A35.1"), ("SELF".to_string(), false));
+        assert_eq!(replacement_target("Abie.A35.1", "abie.a35.1"), ("SELF".to_string(), false));
+        assert_eq!(replacement_target("Abie.A35.1", "SELF"), ("SELF".to_string(), false));
+        assert_eq!(replacement_target("Abie.A35.1", "Other.Pack.3"), ("Other.Pack.3".to_string(), true));
+    }
 }
