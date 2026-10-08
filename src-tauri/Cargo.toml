@@ -24,7 +24,7 @@ regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls-no-alpn", "stream"] }
 tokio = { version = "1", features = ["rt", "time"] }
 futures-util = "0.3"
-rfd = "0.15"
+rfd = "0.16"
 rayon = "1.10"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
