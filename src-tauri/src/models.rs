@@ -110,10 +110,9 @@ pub(crate) struct AppConfig {
     pub(crate) internalize_replace_in_place: bool,
     #[serde(default = "default_backup_changed")]
     pub(crate) internalize_backup: bool,
-    /// VAR Packages "Collect Dependencies": the folders outside the library that
-    /// are searched for a package's dependencies. `Some` (even empty) means the
-    /// modal's "Remember these folders" box is ticked; `None` means it is not,
-    /// and the folders picked in a session are forgotten on exit.
+    /// Folders the old Find Dependencies Locally dialog remembered. Read once so
+    /// the UI can move them into the Scan Dependencies folders; always saved
+    /// as `None` since.
     #[serde(default)]
     pub(crate) dep_source_dirs: Option<Vec<String>>,
     /// Where Offload moves packages so VaM stops loading them. `None` means the
@@ -422,12 +421,6 @@ pub(crate) struct ProgressPayload {
     /// Result payload for `start_export_scene_images_task` (VAR Packages).
     #[serde(default)]
     pub(crate) export_scenes_result: Option<ExportScenesResponse>,
-    /// Result payload for `start_collect_deps_scan_task` (VAR Packages).
-    #[serde(default)]
-    pub(crate) collect_deps_scan_result: Option<CollectDepsScanResponse>,
-    /// Result payload for `start_collect_deps_copy_task` (VAR Packages).
-    #[serde(default)]
-    pub(crate) collect_deps_copy_result: Option<CollectDepsCopyResponse>,
     #[serde(default)]
     pub(crate) offload_result: Option<OffloadResponse>,
     #[serde(default)]
@@ -835,86 +828,6 @@ pub(crate) struct AnalyzeVarDepsResponse {
     /// Number of .var files seen across the library folders.
     pub(crate) library_var_count: usize,
     pub(crate) dependencies: Vec<DownloadDepItem>,
-}
-
-/// One dependency row in the VAR Packages "Collect Dependencies" modal.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct CollectDepItem {
-    /// The dependency id exactly as declared, e.g. "Creator.Pkg.3".
-    pub(crate) package_id: String,
-    /// "found" (in the search folders, copyable) | "in_library" | "missing".
-    pub(crate) status: String,
-    pub(crate) creator: Option<String>,
-    /// Trailing version segment ("3", "latest") or None.
-    pub(crate) version: Option<String>,
-    /// Set when the dependency was discovered in a *found* dependency's own
-    /// meta.json rather than the package's: that dependency's id.
-    pub(crate) via: Option<String>,
-    /// found: the file in the search folders that a copy would take.
-    /// in_library: the library file that satisfies it.
-    pub(crate) path: Option<String>,
-    pub(crate) file_name: Option<String>,
-    pub(crate) size: Option<u64>,
-    /// found only: false when that exact version was not there and `path` is
-    /// the newest version of the same package instead.
-    pub(crate) exact: bool,
-    /// Anything worth a second line: a version stand-in, a damaged copy skipped.
-    pub(crate) note: Option<String>,
-}
-
-/// Result of `start_collect_deps_scan_task`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct CollectDepsScanResponse {
-    pub(crate) package_id: String,
-    pub(crate) var_path: String,
-    /// The search folders that were actually walked.
-    pub(crate) search_dirs: Vec<String>,
-    /// `.var` files seen across the search folders.
-    pub(crate) search_var_count: usize,
-    /// True when at least one usable library folder was supplied.
-    pub(crate) library_used: bool,
-    pub(crate) library_var_count: usize,
-    /// `<library>/<Creator>`, where the package goes. None with `destination_error`.
-    pub(crate) creator_dir: Option<String>,
-    /// `<library>/<Creator>/deps`, where dependencies are copied.
-    pub(crate) deps_dir: Option<String>,
-    /// The package already sits in its creator folder, so a copy won't move it.
-    pub(crate) package_in_place: bool,
-    /// Why nothing can be copied yet (e.g. no library folder in Settings).
-    pub(crate) destination_error: Option<String>,
-    /// Copying is possible but probably not what the user wants.
-    pub(crate) destination_warning: Option<String>,
-    pub(crate) items: Vec<CollectDepItem>,
-    pub(crate) notes: Vec<String>,
-    pub(crate) was_cancelled: bool,
-}
-
-/// What happened to one dependency file in a Collect Dependencies copy.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct CollectDepCopyResult {
-    pub(crate) source_path: String,
-    pub(crate) dest_path: String,
-    /// "copied" | "exists" | "skipped" | "failed" | "cancelled".
-    pub(crate) status: String,
-    pub(crate) detail: String,
-    pub(crate) bytes: u64,
-}
-
-/// Result of `start_collect_deps_copy_task`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct CollectDepsCopyResponse {
-    /// Where the package is now: its new path when it was moved.
-    pub(crate) var_path: String,
-    pub(crate) var_moved: bool,
-    /// Why the package could not be moved, or which of its sidecars stayed behind.
-    pub(crate) var_note: Option<String>,
-    pub(crate) creator_dir: String,
-    pub(crate) deps_dir: String,
-    pub(crate) results: Vec<CollectDepCopyResult>,
-    pub(crate) copied: usize,
-    pub(crate) failed: usize,
-    pub(crate) bytes_copied: u64,
-    pub(crate) was_cancelled: bool,
 }
 
 /// Outcome of downloading one requested package on the Download VARs page.

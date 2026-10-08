@@ -5469,395 +5469,6 @@ fn var_package_sort_missing_modified_sorts_oldest() {
 }
 
 // ----------------------------------------------------------------------------
-// VAR Packages — Collect Dependencies.
-//
-// Real files throughout: the scan walks real folders and opens real archives,
-// and the copy's whole job is what lands on disk.
-// ----------------------------------------------------------------------------
-
-use crate::{
-    collect_deps::{
-        copy_dep_file, rank_dep_candidates, run_collect_deps_copy, run_collect_deps_scan,
-        usable_roots, FoundVar,
-    },
-    models::{CollectDepItem, CollectDepsScanResponse},
-    packages::RealFileOps,
-};
-
-fn path_strings(paths: &[&Path]) -> Vec<String> {
-    paths.iter().map(|p| p.display().to_string()).collect()
-}
-
-fn collect_scan(
-    var: &Path,
-    search: &[&Path],
-    library: &[&Path],
-    root: &Path,
-) -> CollectDepsScanResponse {
-    run_collect_deps_scan(
-        var,
-        &path_strings(search),
-        &path_strings(library),
-        &root.display().to_string(),
-        &no_cancel(),
-        &mut |_, _| {},
-    )
-    .expect("collect scan")
-}
-
-fn collect_item<'a>(resp: &'a CollectDepsScanResponse, id: &str) -> &'a CollectDepItem {
-    resp.items
-        .iter()
-        .find(|i| i.package_id == id)
-        .unwrap_or_else(|| panic!("no row for {id}: {:#?}", resp.items))
-}
-
-fn found_var(path: &str, size: u64) -> FoundVar {
-    let path = PathBuf::from(path);
-    let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-    FoundVar {
-        id_lc: stem.to_ascii_lowercase(),
-        version: crate::naming::package_version(&stem),
-        size,
-        path,
-    }
-}
-
-/// Library first, then the search folders (at any depth), else missing — and
-/// the destination is worked out before anything moves.
-#[test]
-fn collect_deps_scan_sorts_library_found_and_missing() {
-    let dir = pkg_test_dir("collect_scan");
-    let addon = dir.join("lib").join("AddonPackages");
-    let downloads = dir.join("downloads");
-    let package = addon.join("Me.Scene.1.var");
-    write_test_var_with_deps(&package, &["Lib.Have.1", "Out.Need.2", "Gone.Never.1"], &[]);
-    write_test_var_with_deps(&addon.join("Lib").join("Lib.Have.1.var"), &[], &[]);
-    let deep = downloads.join("nested").join("deeper").join("Out.Need.2.var");
-    write_test_var_with_deps(&deep, &[], &[]);
-    // Also in the search folders, but VAM already has it: never offered.
-    write_test_var_with_deps(&downloads.join("Lib.Have.1.var"), &[], &[]);
-
-    let resp = collect_scan(&package, &[&downloads], &[&addon], &addon);
-
-    assert_eq!(collect_item(&resp, "Lib.Have.1").status, "in_library");
-    let need = collect_item(&resp, "Out.Need.2");
-    assert_eq!(need.status, "found");
-    assert!(need.exact);
-    assert_eq!(need.path.as_deref(), Some(deep.display().to_string().as_str()));
-    assert_eq!(collect_item(&resp, "Gone.Never.1").status, "missing");
-    let order: Vec<&str> = resp.items.iter().map(|i| i.status.as_str()).collect();
-    assert_eq!(order, ["found", "missing", "in_library"]);
-
-    assert_eq!(
-        resp.creator_dir.as_deref(),
-        Some(addon.join("Me").display().to_string().as_str())
-    );
-    assert_eq!(
-        resp.deps_dir.as_deref(),
-        Some(addon.join("Me").join("deps").display().to_string().as_str())
-    );
-    assert!(!resp.package_in_place);
-    assert!(resp.destination_error.is_none());
-    assert!(resp.destination_warning.is_none());
-
-    // No library folder in Settings: still a useful scan, but nothing to copy into.
-    let no_root = run_collect_deps_scan(
-        &package,
-        &path_strings(&[&downloads]),
-        &path_strings(&[&addon]),
-        "",
-        &no_cancel(),
-        &mut |_, _| {},
-    )
-    .expect("scan without root");
-    assert!(no_root.destination_error.is_some());
-    assert_eq!(collect_item(&no_root, "Out.Need.2").status, "found");
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-#[test]
-fn collect_deps_rank_prefers_exact_then_newest_then_larger() {
-    let files = vec![
-        found_var("a/A.Pkg.1.var", 10),
-        found_var("a/A.Pkg.3.var", 10),
-        found_var("a/A.Pkg.5.var", 10),
-        found_var("b/A.Pkg.5.var", 20),
-    ];
-
-    let exact = rank_dep_candidates("A.Pkg.3", &files);
-    assert_eq!(exact[0].0.path, PathBuf::from("a/A.Pkg.3.var"));
-    assert!(exact[0].1);
-
-    // Not there: the newest stands in (the larger copy of it), flagged inexact.
-    let stand_in = rank_dep_candidates("A.Pkg.4", &files);
-    assert_eq!(stand_in[0].0.path, PathBuf::from("b/A.Pkg.5.var"));
-    assert!(!stand_in[0].1);
-
-    let latest = rank_dep_candidates("A.Pkg.latest", &files);
-    assert_eq!(latest[0].0.path, PathBuf::from("b/A.Pkg.5.var"));
-    assert!(latest[0].1);
-}
-
-/// A truncated download must never be what gets copied while a good copy of
-/// the same package exists.
-#[test]
-fn collect_deps_skips_a_damaged_copy_for_the_next_best() {
-    let dir = pkg_test_dir("collect_damaged");
-    let downloads = dir.join("downloads");
-    let library = dir.join("lib");
-    fs::create_dir_all(&library).unwrap();
-    let package = dir.join("Me.Scene.1.var");
-    write_test_var_with_deps(&package, &["X.Dep.2", "Y.Only.1"], &[]);
-    fs::create_dir_all(&downloads).unwrap();
-    fs::write(downloads.join("X.Dep.2.var"), b"cut off mid-download").unwrap();
-    let good = downloads.join("old").join("X.Dep.1.var");
-    write_test_var_with_deps(&good, &[], &[]);
-    fs::write(downloads.join("Y.Only.1.var"), b"also broken").unwrap();
-
-    let resp = collect_scan(&package, &[&downloads], &[&library], &library);
-
-    let x = collect_item(&resp, "X.Dep.2");
-    assert_eq!(x.status, "found");
-    assert_eq!(x.path.as_deref(), Some(good.display().to_string().as_str()));
-    assert!(!x.exact);
-    assert!(x.note.as_deref().unwrap_or("").contains("damaged"), "{x:?}");
-
-    let y = collect_item(&resp, "Y.Only.1");
-    assert_eq!(y.status, "missing");
-    assert!(y.note.as_deref().unwrap_or("").contains("can't be read"), "{y:?}");
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-/// A found dependency's own meta.json is read, and what it needs is resolved too.
-#[test]
-fn collect_deps_follows_dependencies_of_found_packages() {
-    let dir = pkg_test_dir("collect_transitive");
-    let downloads = dir.join("downloads");
-    let library = dir.join("lib");
-    fs::create_dir_all(&library).unwrap();
-    let package = dir.join("Me.Scene.1.var");
-    write_test_var_with_deps(&package, &["B.Mid.1"], &[]);
-    write_test_var_with_deps(&downloads.join("B.Mid.1.var"), &["C.Leaf.1"], &[]);
-    write_test_var_with_deps(&downloads.join("C.Leaf.1.var"), &[], &[]);
-
-    let resp = collect_scan(&package, &[&downloads], &[&library], &library);
-
-    let leaf = collect_item(&resp, "C.Leaf.1");
-    assert_eq!(leaf.status, "found");
-    assert_eq!(leaf.via.as_deref(), Some("B.Mid.1"));
-    assert!(collect_item(&resp, "B.Mid.1").via.is_none());
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-/// This app's backup trees hold copies of packages, not sources for them, and
-/// the package being collected for is never its own dependency's source.
-#[test]
-fn collect_deps_search_skips_app_backups_and_the_package_itself() {
-    let dir = pkg_test_dir("collect_skips");
-    let downloads = dir.join("downloads");
-    let library = dir.join("lib");
-    fs::create_dir_all(&library).unwrap();
-    // Lives in the search folder itself; depends on an older version of itself.
-    let package = downloads.join("Me.Scene.2.var");
-    write_test_var_with_deps(&package, &["Me.Scene.1", "D.Only.1"], &[]);
-    write_test_var_with_deps(&downloads.join("backup").join("D.Only.1.var"), &[], &[]);
-
-    let resp = collect_scan(&package, &[&downloads], &[&library], &library);
-
-    assert_eq!(collect_item(&resp, "Me.Scene.1").status, "missing");
-    assert_eq!(collect_item(&resp, "D.Only.1").status, "missing");
-    assert!(
-        resp.notes.iter().any(|n| n.contains("backup folder")),
-        "{:?}",
-        resp.notes
-    );
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-#[test]
-fn collect_deps_usable_roots_drop_nested_and_missing_folders() {
-    let dir = pkg_test_dir("collect_roots");
-    let outer = dir.join("a");
-    let inner = outer.join("b");
-    fs::create_dir_all(&inner).unwrap();
-    let gone = dir.join("zzz");
-
-    let (roots, missing) = usable_roots(&path_strings(&[&inner, &outer, &gone, &outer]));
-    assert_eq!(roots, vec![outer.clone()]);
-    assert_eq!(missing, vec![gone.display().to_string()]);
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-/// The whole point: the package (with its .disabled marker and preview image)
-/// lands in its creator folder, and its dependency is COPIED into deps/ beside
-/// it — the download archive keeps its copy.
-#[test]
-fn collect_deps_copy_moves_package_and_image_and_copies_deps() {
-    let dir = pkg_test_dir("collect_copy");
-    let addon = dir.join("AddonPackages");
-    fs::create_dir_all(&addon).unwrap();
-    let downloads = dir.join("downloads");
-    let package = downloads.join("Me.Scene.1.var");
-    write_test_var_with_deps(&package, &["Out.Need.2"], &[]);
-    fs::write(downloads.join("Me.Scene.1.jpg"), b"preview").unwrap();
-    fs::write(disabled_sidecar(&package), b"").unwrap();
-    let dep = downloads.join("stuff").join("Out.Need.2.var");
-    write_sized_var(&dep, 4096);
-    let dep_bytes = fs::read(&dep).unwrap();
-
-    let root = addon.display().to_string();
-    let resp = run_collect_deps_copy(
-        &package,
-        &root,
-        &[dep.display().to_string()],
-        &RealFileOps,
-        &no_cancel(),
-        &mut |_, _| {},
-    )
-    .expect("copy");
-
-    let creator = addon.join("Me");
-    let moved = creator.join("Me.Scene.1.var");
-    assert!(resp.var_moved, "{resp:?}");
-    assert_eq!(resp.var_path, moved.display().to_string());
-    assert!(moved.is_file() && !package.exists());
-    assert!(creator.join("Me.Scene.1.jpg").is_file());
-    assert!(!downloads.join("Me.Scene.1.jpg").exists());
-    assert!(disabled_sidecar(&moved).is_file());
-    assert!(resp.var_note.is_none(), "{resp:?}");
-
-    let copied = creator.join("deps").join("Out.Need.2.var");
-    assert_eq!(resp.copied, 1);
-    assert_eq!(resp.results[0].status, "copied");
-    assert_eq!(fs::read(&copied).unwrap(), dep_bytes);
-    assert!(dep.is_file(), "a copy, not a move");
-    let leftovers: Vec<_> = fs::read_dir(creator.join("deps"))
-        .unwrap()
-        .flatten()
-        .filter(|e| e.file_name().to_string_lossy().ends_with(".part"))
-        .collect();
-    assert!(leftovers.is_empty());
-
-    // Again, from where the package is now: nothing moves, nothing is redone.
-    let again = run_collect_deps_copy(
-        &moved,
-        &root,
-        &[dep.display().to_string()],
-        &RealFileOps,
-        &no_cancel(),
-        &mut |_, _| {},
-    )
-    .expect("second copy");
-    assert!(!again.var_moved);
-    assert_eq!(again.results[0].status, "exists");
-    assert_eq!(again.copied, 0);
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-/// fs::rename and File::create both clobber silently; neither may ever reach
-/// a file the user already has. An existing `Deps/` is reused whatever its case.
-#[test]
-fn collect_deps_copy_never_overwrites_a_different_file() {
-    let dir = pkg_test_dir("collect_no_clobber");
-    let addon = dir.join("AddonPackages");
-    let package = addon.join("Me").join("Me.Scene.1.var");
-    write_test_var_with_deps(&package, &["Out.Need.2"], &[]);
-    let existing = addon.join("Me").join("Deps").join("Out.Need.2.var");
-    fs::create_dir_all(existing.parent().unwrap()).unwrap();
-    fs::write(&existing, b"the user's own, different file").unwrap();
-    let dep = dir.join("downloads").join("Out.Need.2.var");
-    write_sized_var(&dep, 4096);
-
-    let resp = run_collect_deps_copy(
-        &package,
-        &addon.display().to_string(),
-        &[dep.display().to_string()],
-        &RealFileOps,
-        &no_cancel(),
-        &mut |_, _| {},
-    )
-    .expect("copy");
-
-    assert!(!resp.var_moved, "already in its creator folder");
-    assert_eq!(resp.results[0].status, "skipped");
-    assert_eq!(resp.results[0].dest_path, existing.display().to_string());
-    assert_eq!(fs::read(&existing).unwrap(), b"the user's own, different file");
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-/// A library root ABOVE AddonPackages would file everything where VAM never
-/// looks. Refused before the package moves or a single byte is copied.
-#[test]
-fn collect_deps_copy_refuses_a_root_outside_addon_packages_up_front() {
-    let dir = pkg_test_dir("collect_bad_root");
-    let vam = dir.join("VAM");
-    let package = vam.join("AddonPackages").join("Me.Scene.1.var");
-    write_test_var_with_deps(&package, &["Out.Need.2"], &[]);
-    let dep = dir.join("downloads").join("Out.Need.2.var");
-    write_sized_var(&dep, 64);
-
-    let err = run_collect_deps_copy(
-        &package,
-        &vam.display().to_string(),
-        &[dep.display().to_string()],
-        &RealFileOps,
-        &no_cancel(),
-        &mut |_, _| {},
-    )
-    .expect_err("must refuse");
-
-    assert!(err.contains("AddonPackages"), "{err}");
-    assert!(package.is_file());
-    assert!(!vam.join("Me").exists());
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-/// Cancel never leaves a truncated .var (or its .part) where VAM would load it,
-/// and a run cancelled before it starts doesn't move the package either.
-#[test]
-fn collect_deps_cancelled_copy_leaves_nothing_behind() {
-    let dir = pkg_test_dir("collect_cancel");
-    let addon = dir.join("AddonPackages");
-    fs::create_dir_all(&addon).unwrap();
-    let package = dir.join("downloads").join("Me.Scene.1.var");
-    write_test_var_with_deps(&package, &["Out.Need.2"], &[]);
-    let dep = dir.join("downloads").join("Out.Need.2.var");
-    write_sized_var(&dep, 4096);
-    let cancelled = std::sync::atomic::AtomicBool::new(true);
-
-    let deps_dir = dir.join("deps");
-    let one = copy_dep_file(&dep, &deps_dir, &cancelled, &mut |_| {});
-    assert_eq!(one.status, "cancelled");
-    assert!(!deps_dir.join("Out.Need.2.var").exists());
-    assert!(!deps_dir.join("Out.Need.2.var.part").exists());
-
-    let resp = run_collect_deps_copy(
-        &package,
-        &addon.display().to_string(),
-        &[dep.display().to_string()],
-        &RealFileOps,
-        &cancelled,
-        &mut |_, _| {},
-    )
-    .expect("cancelled copy");
-    assert!(resp.was_cancelled);
-    assert!(!resp.var_moved);
-    assert!(package.is_file());
-    assert_eq!(resp.results[0].status, "cancelled");
-
-    fs::remove_dir_all(&dir).expect("cleanup");
-}
-
-// ----------------------------------------------------------------------------
 // VAR Packages library: classifier, dependency graph, search
 // ----------------------------------------------------------------------------
 
@@ -6184,25 +5795,6 @@ fn offload_moves_into_creator_folders_and_back() {
     assert!(move_package(&back, &addon, &offload, true, false).is_err());
     assert!(back.is_file());
     fs::remove_dir_all(&root).expect("cleanup");
-}
-
-#[test]
-fn remove_plan_marks_unshared_dependencies_safe_but_selects_nothing() {
-    let items = vec![
-        offload_item("A.Scene.1", &["B.Look.1", "C.Hair.1"], false),
-        offload_item("B.Look.1", &["D.Tex.1"], false),
-        offload_item("C.Hair.1", &[], false),
-        offload_item("D.Tex.1", &[], false),
-        // An offloaded package still counts as a user for a deletion.
-        offload_item("X.Scene.1", &["C.Hair.1"], true),
-    ];
-    let plan = crate::offload::build_plan(&items, &[0], crate::offload::PlanMode::Remove);
-    let dep = |id: &str| plan.deps.iter().find(|d| d.package_id == id).unwrap();
-    assert!(!plan.targets[0].movable, "the picked package itself is never removed");
-    assert!(plan.deps.iter().all(|d| d.movable && !d.default_selected));
-    assert!(dep("B.Look.1").safe && dep("D.Tex.1").safe);
-    assert!(!dep("C.Hair.1").safe);
-    assert_eq!(dep("C.Hair.1").used_by, vec!["X.Scene.1".to_string()]);
 }
 
 #[test]
@@ -6917,4 +6509,61 @@ fn the_same_link_written_differently_is_saved_once() {
     // A genuinely different link for the file: kept beside the first.
     assert_eq!(crate::db::insert_download_links(&db, &[line("Acid.Look.3.var https://pixeldrain.com/u/ZzZ99")]).unwrap(), 1);
     assert_eq!(crate::db::links_for_file(&db, "Acid.Look.3.var").len(), 2);
+}
+
+#[test]
+fn dependency_scan_prefers_the_copy_in_the_first_scan_folder() {
+    use crate::tasks::build_dependency_items;
+    use std::collections::{BTreeMap, BTreeSet};
+    let root = std::env::temp_dir().join(format!("vam_depscan_rank_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let addon = root.join("AddonPackages");
+    let offload = root.join("AddonPackages_offload");
+    let extra = root.join("Downloads");
+    for dir in [&addon, &offload, &extra] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    // A newer copy elsewhere doesn't beat the one VaM already loads.
+    fs::write(addon.join("A.Look.2.var"), b"x").unwrap();
+    fs::write(extra.join("A.Look.5.var"), b"x").unwrap();
+    // Offloaded only: found there, the exact version over the newest.
+    fs::write(offload.join("B.Hair.1.var"), b"x").unwrap();
+    fs::write(offload.join("B.Hair.3.var"), b"x").unwrap();
+    // Only in an added folder.
+    fs::write(extra.join("C.Tex.1.var"), b"x").unwrap();
+
+    let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for id in ["A.Look.5", "B.Hair.1", "B.Hair.latest", "C.Tex.1", "D.Gone.1"] {
+        deps.insert(id.to_string(), BTreeSet::new());
+    }
+    let dirs: Vec<String> = [&addon, &offload, &extra].iter().map(|d| d.display().to_string()).collect();
+    let (used, count, items) = build_dependency_items(&deps, &dirs);
+    assert!(used);
+    assert_eq!(count, 5);
+    let path = |id: &str| {
+        let item = items.iter().find(|i| i.package_id == id).unwrap();
+        item.local_path.as_deref().map(|p| PathBuf::from(p).strip_prefix(&root).unwrap().to_path_buf())
+    };
+    assert_eq!(path("A.Look.5"), Some(PathBuf::from("AddonPackages").join("A.Look.2.var")));
+    assert_eq!(path("B.Hair.1"), Some(PathBuf::from("AddonPackages_offload").join("B.Hair.1.var")));
+    assert_eq!(path("B.Hair.latest"), Some(PathBuf::from("AddonPackages_offload").join("B.Hair.3.var")));
+    assert_eq!(path("C.Tex.1"), Some(PathBuf::from("Downloads").join("C.Tex.1.var")));
+    assert_eq!(path("D.Gone.1"), None);
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn restore_takes_packages_from_any_scan_folder_but_never_addon_packages() {
+    use crate::offload::restore_source_root;
+    let addon = PathBuf::from(r"D:\VaM\AddonPackages");
+    let roots = vec![
+        PathBuf::from(r"D:\VaM\AddonPackages_offload"),
+        PathBuf::from(r"D:\VaM\AddonPackages\Sub"),
+        PathBuf::from(r"E:\Downloads"),
+    ];
+    let root = |p: &str| restore_source_root(Path::new(p), &roots, &addon).cloned();
+    assert_eq!(root(r"D:\VaM\AddonPackages_offload\A\A.B.1.var"), Some(roots[0].clone()));
+    assert_eq!(root(r"e:\downloads\x\A.B.1.var"), Some(roots[2].clone()));
+    assert_eq!(root(r"D:\VaM\AddonPackages\Sub\A.B.1.var"), None, "already loaded");
+    assert_eq!(root(r"F:\Elsewhere\A.B.1.var"), None);
 }

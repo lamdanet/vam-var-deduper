@@ -4608,7 +4608,7 @@ fn run_analyze_var_dependencies_task(
 /// pasted-text paths. `deps` maps a declared package id → the source VAR ids that
 /// referenced it (empty for the text path). Returns
 /// `(library_used, library_var_count, sorted_rows)`.
-fn build_dependency_items(
+pub(crate) fn build_dependency_items(
     deps: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     library_dirs: &[String],
 ) -> (bool, usize, Vec<DownloadDepItem>) {
@@ -4620,10 +4620,12 @@ fn build_dependency_items(
         .collect();
     let library_used = !library_roots.is_empty();
     let mut library_var_count = 0usize;
-    // base (lowercased) -> the highest-version local file for that family. Built
-    // from filenames only (no per-file stat); found items are stat'd on demand
-    // below so we don't metadata-call the whole library.
-    let mut available: HashMap<String, (PathBuf, i64)> = HashMap::new();
+    // base (lowercased) -> every local file of that family, with its version
+    // and the rank of the folder it is in (the first library dir holding it, so
+    // AddonPackages, listed first, wins). Built from filenames only (no per-file
+    // stat); found items are stat'd on demand below so we don't metadata-call
+    // the whole library.
+    let mut available: HashMap<String, Vec<(PathBuf, i64, usize)>> = HashMap::new();
     if library_used {
         if let Ok(files) = collect_local_var_files_multi(&library_roots) {
             library_var_count = files.len();
@@ -4636,12 +4638,11 @@ fn build_dependency_items(
                 let version = dependency_version_segment(&stem)
                     .and_then(|v| v.parse::<i64>().ok())
                     .unwrap_or(0);
-                match available.get(&base) {
-                    Some((_, existing)) if *existing >= version => {}
-                    _ => {
-                        available.insert(base, (f, version));
-                    }
-                }
+                let rank = library_roots
+                    .iter()
+                    .position(|root| crate::offload::path_is_under(&f, root))
+                    .unwrap_or(library_roots.len());
+                available.entry(base).or_default().push((f, version, rank));
             }
         }
     }
@@ -4649,8 +4650,15 @@ fn build_dependency_items(
     let mut items: Vec<DownloadDepItem> = Vec::new();
     for (dep_id, src_set) in deps {
         let base = dependency_package_base(dep_id);
+        // The copy that satisfies it: from the first folder that has the family,
+        // the exact version asked for when it is there, else the newest.
         let local = if library_used {
-            available.get(&base.to_ascii_lowercase())
+            available.get(&base.to_ascii_lowercase()).and_then(|files| {
+                let want = wanted_version(dep_id);
+                files.iter().min_by_key(|(_, version, rank)| {
+                    (*rank, want != Some(*version), std::cmp::Reverse(*version))
+                })
+            })
         } else {
             None
         };
@@ -4664,7 +4672,7 @@ fn build_dependency_items(
         // For found items, surface the local file's size + filename + path so the
         // row shows what's already on disk (and can load a scene preview).
         let (file_size, filename, source_host, local_path) = match local {
-            Some((path, _)) => (
+            Some((path, _, _)) => (
                 std::fs::metadata(path).ok().map(|m| m.len()),
                 path.file_name().and_then(|n| n.to_str()).map(str::to_string),
                 Some("library".to_string()),

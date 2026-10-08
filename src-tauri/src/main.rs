@@ -1,7 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod archives;
-mod collect_deps;
 mod config;
 mod db;
 mod execute;
@@ -25,7 +24,6 @@ mod utils;
 use tauri::Manager;
 
 use crate::{
-    collect_deps::{start_collect_deps_copy_task, start_collect_deps_scan_task},
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
@@ -143,8 +141,6 @@ fn main() {
             start_plan_clean_duplicates_task,
             start_plan_organize_by_creator_task,
             move_var_to_creator_folder,
-            start_collect_deps_scan_task,
-            start_collect_deps_copy_task,
             start_apply_package_plan_task,
             delete_var_package,
             export_var_scene_image,

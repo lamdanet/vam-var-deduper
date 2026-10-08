@@ -7,9 +7,6 @@
 //! they need (transitively) resolved against the library listing, and for each
 //! dependency who else uses it. The UI shows the plan, the user adjusts the
 //! selection, and the move runs as a background task.
-//!
-//! The same plan backs Remove Dependencies, which deletes a package's
-//! dependencies (to the Recycle Bin) instead of moving the package.
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -101,8 +98,6 @@ pub(crate) enum PlanMode {
     Offload,
     /// Move offloaded packages and their dependencies back.
     Restore,
-    /// Delete the packages' dependencies; the packages themselves stay.
-    Remove,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,17 +118,15 @@ pub(crate) struct OffloadPlanEntry {
     /// depend on this one.
     pub(crate) required_by: Vec<String>,
     /// Package ids of packages outside the plan that depend on this one —
-    /// offloading or removing it breaks them. For Offload only packages in
-    /// AddonPackages count (nothing else is loaded); for Remove, any.
+    /// offloading it breaks them. Only packages in AddonPackages count
+    /// (nothing else is loaded).
     pub(crate) used_by: Vec<String>,
-    /// The plan can act on it (offload: in AddonPackages; restore: offloaded;
-    /// remove: any dependency, never the picked packages).
+    /// The plan can act on it (offload: in AddonPackages; restore: offloaded).
     pub(crate) movable: bool,
     /// Dependencies: nothing outside the plan needs it, directly or through a
-    /// dependency that stays — so offloading or removing it breaks nothing.
+    /// dependency that stays — so offloading it breaks nothing.
     pub(crate) safe: bool,
-    /// Offload: `safe`; Restore: everything movable; Remove: nothing, since
-    /// deleting is opt-in.
+    /// Offload: `safe`; Restore: everything movable.
     pub(crate) default_selected: bool,
 }
 
@@ -203,9 +196,8 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], mode: 
     let mut used_by: HashMap<usize, Vec<usize>> = HashMap::new();
     for (u, item) in items.iter().enumerate() {
         let member = in_plan.contains(&u);
-        // Only packages VaM loads can be broken by an offload; a deletion
-        // breaks any package.
-        if !member && mode != PlanMode::Remove && location_of(item) != "active" {
+        // Only packages VaM loads can be broken by an offload.
+        if !member && location_of(item) != "active" {
             continue;
         }
         let mut seen: HashSet<usize> = HashSet::new();
@@ -225,7 +217,6 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], mode: 
     let movable = |i: usize| match mode {
         PlanMode::Offload => location_of(&items[i]) == "active",
         PlanMode::Restore => location_of(&items[i]) == "offloaded",
-        PlanMode::Remove => !target_set.contains(&i),
     };
 
     // The safe set: a dependency is left out when a package outside the plan
@@ -241,7 +232,7 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], mode: 
             required_by.get(&d).is_some_and(|users| {
                 users.iter().any(|&r| {
                     !target_set.contains(&r)
-                        && (mode == PlanMode::Remove || location_of(&items[r]) == "active")
+                        && location_of(&items[r]) == "active"
                         && !safe.contains(&r)
                 })
             })
@@ -255,11 +246,10 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], mode: 
         }
     }
     // Restore brings back everything the packages need; Offload takes what is
-    // safe; Remove starts with nothing.
+    // safe.
     let selected = |i: usize, is_target: bool| match mode {
         PlanMode::Restore => movable(i),
         PlanMode::Offload => (is_target && movable(i)) || safe.contains(&i),
-        PlanMode::Remove => false,
     };
 
     let paths = |list: Option<&Vec<usize>>| -> Vec<String> {
@@ -305,7 +295,7 @@ pub(crate) fn build_plan(items: &[VarPackageListItem], targets: &[usize], mode: 
     }
 }
 
-/// What Offload, Restore or Remove Dependencies would act on for the picked
+/// What Offload or Restore would act on for the picked
 /// packages, from the listing the VAR Packages page is showing.
 #[tauri::command(async)]
 pub(crate) fn plan_offload(
@@ -450,16 +440,30 @@ fn repoint_db_paths(db: &Db, moves: &[OffloadMove]) {
     let _ = tx.commit();
 }
 
+/// The folder a restored package is moved out of: the first of `roots` that
+/// holds it. A root that is (or is inside) AddonPackages never counts — what is
+/// there is already loaded.
+pub(crate) fn restore_source_root<'a>(src: &Path, roots: &'a [PathBuf], addon: &Path) -> Option<&'a PathBuf> {
+    roots
+        .iter()
+        .filter(|root| !same_dir(root, addon) && !path_is_under(root, addon))
+        .find(|root| path_is_under(src, root))
+}
+
 /// Offloads (or, with `restore`, restores) the given packages as a background
 /// task. `addon_dir` is AddonPackages and `offload_dir` the offload folder;
 /// `by_creator` files each package under a creator folder at the destination.
+/// A restore also takes packages from `source_dirs` (Scan Dependencies' extra
+/// folders) into AddonPackages.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start_offload_task(
     file_paths: Vec<String>,
     restore: bool,
     addon_dir: String,
     offload_dir: String,
     by_creator: bool,
+    source_dirs: Option<Vec<String>>,
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
@@ -472,15 +476,22 @@ pub(crate) fn start_offload_task(
         return Err("Set an offload folder in Settings first.".to_string());
     }
     check_folders(&addon, &offload)?;
-    if restore {
-        if !offload.is_dir() {
-            return Err(format!("The offload folder does not exist: {}", offload.display()));
-        }
-    } else {
+    if !restore {
         fs::create_dir_all(&offload)
             .map_err(|e| format!("Couldn't create the offload folder {}: {e}", offload.display()))?;
     }
-    let (src_root, dest_root) = if restore { (offload, addon) } else { (addon, offload) };
+    // Restore: every folder a package may come from, the offload folder first.
+    let source_roots: Vec<PathBuf> = std::iter::once(offload.clone())
+        .chain(
+            source_dirs
+                .unwrap_or_default()
+                .iter()
+                .map(|d| d.trim())
+                .filter(|d| !d.is_empty())
+                .map(PathBuf::from),
+        )
+        .collect();
+    let dest_root = if restore { addon.clone() } else { offload.clone() };
 
     let verb = if restore { "Restoring" } else { "Offloading" };
     let (task_id, tasks, cancel) = begin_task(&state, "offload_starting", verb)?;
@@ -494,7 +505,7 @@ pub(crate) fn start_offload_task(
 
     thread::spawn(move || {
         let mut response = OffloadResponse { restore, ..Default::default() };
-        let mut left_dirs: Vec<PathBuf> = Vec::new();
+        let mut left_dirs: Vec<(PathBuf, PathBuf)> = Vec::new();
         let total = file_paths.len().max(1) as f64;
         for (n, fp) in file_paths.iter().enumerate() {
             if cancel.load(Ordering::SeqCst) {
@@ -514,10 +525,25 @@ pub(crate) fn start_offload_task(
                 format!("{verb} {package_id} ({}/{})", n + 1, file_paths.len()),
             );
             let size = fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
+            let src_root = if restore {
+                match restore_source_root(&src, &source_roots, &addon) {
+                    Some(root) => root.clone(),
+                    None => {
+                        response.failed.push(OffloadFailure {
+                            package_id,
+                            file_path: fp.clone(),
+                            error: "It isn't in the offload folder or a scan folder.".to_string(),
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                addon.clone()
+            };
             match move_package(&src, &src_root, &dest_root, by_creator, restore) {
                 Ok((dest, notes)) => {
                     if let Some(parent) = src.parent() {
-                        left_dirs.push(parent.to_path_buf());
+                        left_dirs.push((parent.to_path_buf(), src_root.clone()));
                     }
                     response.moved_bytes += size;
                     response
@@ -538,7 +564,13 @@ pub(crate) fn start_offload_task(
         }
 
         // A creator folder whose last package just left shouldn't linger.
-        prune_empty_dirs(left_dirs, &src_root);
+        let mut by_root: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for (dir, root) in left_dirs {
+            by_root.entry(root).or_default().push(dir);
+        }
+        for (root, dirs) in by_root {
+            prune_empty_dirs(dirs, &root);
+        }
 
         let renamed: Vec<(String, String)> =
             response.moved.iter().map(|m| (m.from.clone(), m.to.clone())).collect();
