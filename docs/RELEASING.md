@@ -37,7 +37,8 @@ step. Build, commit and push again to fix it.
 
 1. Open the repo on GitHub, then **Actions**, then **Release**, then **Run workflow**.
 2. Leave the branch on **main**.
-3. Leave **Version** empty to use the version from `Cargo.toml`, or type it (`X.Y.Z`).
+3. Leave **Version** empty. The workflow uses the version from `Cargo.toml`.
+   If you do type one, it must be the same as `Cargo.toml`, or the run stops.
    Tick **pre-release** for a test build.
 4. Click **Run workflow**. The workflow creates the `vX.Y.Z` tag on the
    latest `main` commit and publishes the release.
@@ -45,9 +46,9 @@ step. Build, commit and push again to fix it.
 Or start it from a terminal with the GitHub CLI:
 
 ```sh
-gh workflow run release.yml --ref main            # version from Cargo.toml
-gh workflow run release.yml --ref main -f version=X.Y.Z -f prerelease=true
-gh run watch                                     # follow it
+gh workflow run release.yml --ref main                     # normal release
+gh workflow run release.yml --ref main -f prerelease=true  # test build
+gh run watch                                               # follow it
 ```
 
 ### B. Push a tag
@@ -57,7 +58,9 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-Pushing the tag starts the workflow and releases that commit.
+Pushing the tag starts the workflow and releases that commit. The tag has to
+match the version in `Cargo.toml`. For example, tag `v0.2.0` needs
+`version = "0.2.0"`.
 
 A full build takes roughly 10 to 20 minutes, because the release profile uses LTO.
 The release appears under **Releases** with notes generated from the commits
@@ -75,21 +78,32 @@ since the previous release. You can edit the notes on GitHub afterwards.
 
 ## Releasing without GitHub Actions (fully manual)
 
-Use this only if Actions can't be used. It needs the build tools from the main
-setup (Rust, plus VS C++ tools with the Windows SDK) and the GitHub CLI
-signed in (`gh auth login`).
+Use this only if Actions can't be used. You need:
+
+- Rust (stable), installed with `rustup`
+- Visual Studio C++ build tools with the Windows 11 SDK
+- Node.js, which runs the build-output cleanup after `npm run tauri:build`
+- The GitHub CLI, signed in with `gh auth login`
+
+Do step 1 (bump, commit, push) first. Then run this in PowerShell from the
+repo root. It reads the version from `Cargo.toml`, so there is nothing to type:
 
 ```powershell
 git switch main; git pull
 npm run tauri:build      # = cargo build --release, then prunes old build output
-$v = "X.Y.Z"
+$v = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
 $name = "VAM-VAR-Deduper-v$v-windows-x64"
 New-Item -ItemType Directory -Force "dist/$name" | Out-Null
 Copy-Item src-tauri/target/release/vam_var_deduper_tauri.exe "dist/$name/VAM-VAR-Deduper.exe"
 Compress-Archive -Force -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
 Copy-Item "dist/$name/VAM-VAR-Deduper.exe" "dist/$name.exe"
-gh release create "v$v" "dist/$name.zip" "dist/$name.exe" --target main --title "VAM VAR Deduper v$v" --generate-notes
+Get-FileHash "dist/$name.zip", "dist/$name.exe" -Algorithm SHA256 |
+  ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+  Set-Content -Encoding ascii dist/SHA256SUMS.txt
+gh release create "v$v" "dist/$name.zip" "dist/$name.exe" dist/SHA256SUMS.txt --target main --title "VAM VAR Deduper v$v" --generate-notes
 ```
+
+Add `--prerelease` to the last line for a test build.
 
 Close the app before building. If it is running from `target/release`, the
 build can't replace the exe.
