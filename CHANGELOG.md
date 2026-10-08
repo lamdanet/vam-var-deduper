@@ -44,21 +44,27 @@ release time, it fills it with the commit messages since the last release.
   your library, checked first and skipped when already there. Settings can
   make it move them instead of copying
 - The first-run dialog finds a VaM folder next to the app by itself
-- **Fix Missing**: Missing Resources' layout, made easier to work through. The
-  settings fold to one line after a check, so the results are in view. The
-  package card shows the package and what was found. The list is grouped by
-  the package each reference points at, says in words what's wrong (not
-  installed, or a file missing) and what's chosen, and has To choose / Chosen
-  filters. The best replacement is one click (Use it), and Auto-pick takes
-  every exact copy. Replacement Sources stays beside the list as it scrolls:
-  it shows the missing package (why it's missing, Find it / Download,
-  Explore), marks how many other missing files each replacement covers
-  (Use for all), keeps Apply to the same package / filtered / all, and
-  searches the database by itself when your folders have no copy, putting
-  the packages that cover the most first and offering to download ones you
-  don't have. Run Fixes says how many it will apply. Package Explorer has a Check refs button and
-  shows what the last check found, with Fix references. Missing Resources is
-  still there
+- **Fix Missing**: Missing Resources' layout, made easier to work through.
+  After a check, a summary says what's easy and what needs a look: for
+  example, 32 of 33 missing files are already inside the package (no
+  download, no new dependency), with one button to choose every exact copy.
+  The settings fold to one line so the results are in view. Every missing
+  file in the list has a Use button for its best replacement; Enter does the
+  same and moves to the next one. Packages with several missing files get a
+  header with how many are chosen, and the list filters by To choose, Chosen,
+  Not installed or File missing. Replacement Sources stays beside the list
+  with Run Fixes at its top. It puts the best replacement first, lists one
+  row per package (its other copies behind "N more copies"), marks how many
+  other missing files each package covers (Use for all), and only offers
+  Apply to the same package / shown / all where that does something. The
+  missing package's details (why it's missing, Find it / Download, Explore)
+  open on request, or by themselves when there's no copy to use. The
+  database is searched when your folders have no copy, or always if you tick
+  that, putting the packages that cover the most first and offering to
+  download ones you don't have. The fixed copy's folder shows by name, and
+  after a fix the page leads you to check the fixed copy. Package Explorer
+  has a Check refs button and shows what the last check found, with Fix
+  references. Missing Resources is still there
 - **Package Explorer**: a new page that shows one package in pictures. It
   says in plain words what's wrong with the package, if anything (missing or
   offloaded dependencies, not on the Hub, damaged…), and its main button
