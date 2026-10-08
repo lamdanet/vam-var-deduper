@@ -14,7 +14,9 @@ Always release from `main`.
 
 ## Quick release: one command
 
-From the repo root, on `main`, with your changes committed:
+From the repo root, on `main`, with your changes committed (except
+`CHANGELOG.md`, which may be uncommitted because it goes into the release
+commit):
 
 ```sh
 npm run release -- 0.2.0     # release an exact version
@@ -30,11 +32,18 @@ It does steps 1 and 2B below for you
 1. Checks that you're on `main`, have nothing uncommitted, aren't behind
    GitHub, and that the new version is higher and not already tagged.
 2. Sets the version in `src-tauri/Cargo.toml`.
-3. Runs `cargo check`. This updates `Cargo.lock` and makes sure the app still
-   builds. If the check fails, the version change is undone.
-4. Commits `Release vX.Y.Z`, tags `vX.Y.Z`, and pushes `main` and the tag
+3. Turns the **Unreleased** section of `CHANGELOG.md` into
+   `## [X.Y.Z] - <today>` and adds a new empty Unreleased above it. If you
+   didn't write anything under Unreleased, it fills in the commit messages
+   since the last release. See [Release notes](#release-notes).
+4. Runs `cargo check`. This updates `Cargo.lock` and makes sure the app still
+   builds. If the check fails, the version and changelog changes are undone.
+5. Commits `Release vX.Y.Z`, tags `vX.Y.Z`, and pushes `main` and the tag
    together. Either both reach GitHub or neither does.
-5. The tag push starts the release workflow on GitHub.
+6. The tag push starts the release workflow on GitHub.
+
+`--dry-run` also prints the release notes it would use, so you can check
+them first.
 
 Options (put them after the version):
 
@@ -54,14 +63,60 @@ like this one, see [CUSTOM-COMMANDS.md](CUSTOM-COMMANDS.md).
 The sections below are the same steps done by hand, plus what to do when
 something goes wrong.
 
+## Release notes
+
+[CHANGELOG.md](../CHANGELOG.md) is the single source of release notes. Each
+version's section is used in two places:
+
+- **The GitHub release page.** The workflow uses the version's section as the
+  release description and adds GitHub's comparison link below it.
+- **The app.** Settings → About → **Release notes** shows the whole changelog,
+  newest first, with the running version marked. The changelog is built into
+  the exe, so each build shows the notes it shipped with. The version badge
+  there also comes from `Cargo.toml`, so it updates on its own.
+
+The file looks like this:
+
+```markdown
+## [Unreleased]
+
+### Added
+- Release notes in Settings → About
+
+### Fixed
+- VAR Packages no longer gets stuck on "Scanning…"
+
+## [0.2.0] - 2026-10-08
+
+- …
+```
+
+**Writing notes.** Add a line under `## [Unreleased]` when you make a change
+users will notice. Write it for users ("what changed for me"), not as a commit
+message. Grouping under `### Added`, `### Changed` and `### Fixed` is optional.
+The app shows bullets, `**bold**`, `` `code` `` and those group headings.
+Link targets are not shown, only the link text.
+
+**Forgot to write any?** The release command fills Unreleased with the commit
+messages since the last release tag. This repo's commit subjects are already
+written for users, so that works as a fallback. Check them with `--dry-run`
+first. Before your **first** release there is no earlier tag, so that would
+list every commit ever made. For that one, write a short summary under
+Unreleased instead.
+
+**Fixing notes after a release:** edit the release on GitHub (the pencil icon
+on the Releases page), and fix the same section in `CHANGELOG.md` so the app
+shows the corrected text from the next build on.
+
 ## 1. Bump the version
 
 The version lives in one place: `version = "X.Y.Z"` under `[package]` in
 `src-tauri/Cargo.toml`. Tauri reads it from there, so `tauri.conf.json` and
 `package.json` deliberately have no version field.
 
-Edit that line, build once so `Cargo.lock` picks up the new version, then
-commit and push:
+Edit that line. In `CHANGELOG.md`, rename `## [Unreleased]` to
+`## [X.Y.Z] - YYYY-MM-DD` and add a new empty `## [Unreleased]` above it. Then
+build once so `Cargo.lock` picks up the new version, and commit and push:
 
 ```sh
 cargo check --manifest-path src-tauri/Cargo.toml
@@ -105,8 +160,10 @@ match the version in `Cargo.toml`. For example, tag `v0.2.0` needs
 `version = "0.2.0"`.
 
 A full build takes roughly 10 to 20 minutes, because the release profile uses LTO.
-The release appears under **Releases** with notes generated from the commits
-since the previous release. You can edit the notes on GitHub afterwards.
+The release appears under **Releases**, with that version's section of
+`CHANGELOG.md` as its notes and GitHub's comparison link below. If the
+changelog has no section for the version, the workflow warns and uses only
+GitHub's generated notes. You can edit the notes on GitHub afterwards.
 
 ## If a release fails or is wrong
 
@@ -142,7 +199,12 @@ Copy-Item "dist/$name/VAM-VAR-Deduper.exe" "dist/$name.exe"
 Get-FileHash "dist/$name.zip", "dist/$name.exe" -Algorithm SHA256 |
   ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
   Set-Content -Encoding ascii dist/SHA256SUMS.txt
-gh release create "v$v" "dist/$name.zip" "dist/$name.exe" dist/SHA256SUMS.txt --target main --title "VAM VAR Deduper v$v" --generate-notes
+# This version's section of CHANGELOG.md, as the release notes
+(Get-Content CHANGELOG.md -Raw) -split '(?m)^## \[' |
+  Where-Object { $_.StartsWith("$v]") } |
+  ForEach-Object { ($_ -split "`n", 2)[1].Trim() } |
+  Set-Content -Encoding utf8 dist/notes.md
+gh release create "v$v" "dist/$name.zip" "dist/$name.exe" dist/SHA256SUMS.txt --target main --title "VAM VAR Deduper v$v" --notes-file dist/notes.md --generate-notes
 ```
 
 Add `--prerelease` to the last line for a test build.
