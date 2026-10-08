@@ -9,7 +9,7 @@ use std::{
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use walkdir::WalkDir;
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
+use zip::{write::SimpleFileOptions, CompressionMethod, System, ZipArchive, ZipWriter};
 
 use crate::{
     db::{self, Db},
@@ -682,7 +682,11 @@ fn rewrite_package(
     let write_path = staging_path.as_deref().unwrap_or(target_path);
     let writer = fs::File::create(write_path)?;
     let mut target = ZipWriter::new(writer);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    // Unix, as zip 2 always wrote: since zip 7 the default is the platform the
+    // app runs on, which would change every new entry's "made by" byte.
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .system(System::Unix);
 
     for index in 0..source.len() {
         let mut entry = source.by_index(index)?;
