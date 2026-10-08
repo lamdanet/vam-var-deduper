@@ -33,7 +33,8 @@ first. If yours is already there, add a 👍 or more detail to it.
 You need:
 
 - Windows 10 or 11
-- [Rust](https://rustup.rs) (stable)
+- [rustup](https://rustup.rs). The first `cargo` command in the repo installs
+  the Rust version pinned in `rust-toolchain.toml`, the same one CI uses
 - Visual Studio C++ build tools, with the **Windows 11 SDK** component
 - Node.js (optional), for the helper scripts in `scripts/`
 
@@ -48,7 +49,9 @@ CI runs all of these. Any clippy warning fails the build. If a lint really
 doesn't fit, add `#[allow(clippy::…)]` with a one-line comment saying why,
 like the Tauri commands in `src-tauri/src/tasks.rs`.
 
-Rust 1.87 or newer is needed (`rustup update` if the build says otherwise).
+The Rust version is pinned in `rust-toolchain.toml`, so your clippy matches
+CI's. Moving to a newer Rust is its own PR: change the version there and fix
+whatever new lints clippy reports.
 
 ## Where things are
 

@@ -2,7 +2,7 @@
 name = "vam_var_deduper_tauri"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/lamdanet/vam-var-deduper"
 

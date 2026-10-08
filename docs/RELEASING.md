@@ -180,7 +180,7 @@ GitHub's generated notes. You can edit the notes on GitHub afterwards.
 
 Use this only if Actions can't be used. You need:
 
-- Rust (stable), installed with `rustup`
+- `rustup`, which installs the Rust version pinned in `rust-toolchain.toml`
 - Visual Studio C++ build tools with the Windows 11 SDK
 - Node.js, which runs the build-output cleanup after `npm run tauri:build`
 - The GitHub CLI, signed in with `gh auth login`
