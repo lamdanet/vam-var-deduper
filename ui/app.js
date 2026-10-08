@@ -10328,8 +10328,7 @@ function fmNeed(ref) {
   return "stuck";
 }
 
-// Where a row's best copy comes from, and whether it adds a dependency;
-// Use shows on hover and on the selected row.
+// Where a row's best copy comes from, and whether it adds a dependency.
 function fmRowSourceHtml(key, best) {
   const exact = best.match === "crc";
   const name = best.isSelf ? `copy inside ${fmSelfName()}` : `copy in ${pkgIdParts(best.package_id).name}`;
@@ -10340,7 +10339,6 @@ function fmRowSourceHtml(key, best) {
         <span class="fm-row-src-name">${exact ? "" : "same path · "}${escapeHtml(name)}</span>
         ${best.isSelf ? "" : `<span class="fm-dep" title="${escapeAttribute(`${best.package_id} becomes a dependency`)}">+ dependency</span>`}
       </span>
-      <button type="button" class="${key === FM.selected ? "accent-button" : "ghost-button"} fm-row-use" data-fm-use="${escapeAttribute(key)}" title="Use ${escapeAttribute(where)} (Enter)"><span class="material-symbols-outlined">check</span>Use</button>
     </span>`;
 }
 
@@ -10426,7 +10424,6 @@ function fmRenderList() {
                   : a?.state === "available" || a?.state === "failed"
                     ? `<span class="fm-row-right">
                         <span class="fm-row-src"><span class="material-symbols-outlined">download</span><span class="fm-row-src-name">${a.state === "failed" ? "download failed" : "download available"}</span></span>
-                        <button type="button" class="ghost-button fm-row-use" data-fm-download="${escapeAttribute(ref.ref_pkg)}" title="${escapeAttribute(`Download ${ref.ref_pkg}: this file then works as it is`)}">${a.state === "failed" ? "Retry" : "Download"}</button>
                       </span>`
                     : a?.state === "resolving"
                       ? `<span class="fm-dim">looking for a download…</span>`
@@ -10450,7 +10447,7 @@ function fmRenderList() {
         <span class="fm-row-text"><span class="fm-row-name" title="${escapeAttribute(path)}">${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</span>
           <span class="fm-row-dir">${fmTypeChip(type.label)}${
             single
-              ? `<span class="fm-row-pkg" title="${escapeAttribute(`Package it points at: ${ref.ref_pkg} (${absent ? "not installed" : "installed, but this file isn't in it"})`)}"><span class="material-symbols-outlined">inventory_2</span>${escapeHtml(p.name)}</span>`
+              ? `<span class="fm-row-pkg" title="${escapeAttribute(`Package it points at: ${ref.ref_pkg} (${absent ? "not installed" : "installed, but this file isn't in it"})`)}"><span class="material-symbols-outlined">inventory_2</span><span class="fm-row-pkg-from">from</span>${escapeHtml(p.name)}</span>`
               : ""
           }${
             type.rest ? `<span class="fm-row-folder" title="${escapeAttribute(`Folder: ${type.folder}`)}"><span class="material-symbols-outlined">folder</span>${escapeHtml(type.rest)}</span>` : ""
@@ -10541,7 +10538,6 @@ function fmMissingPkgHtml(ref, { hasExact, fixed }) {
       <p class="fm-why">${escapeHtml(why)}</p>
       <div class="fm-info-acts">
         ${get}
-        <button type="button" class="${btn}" data-fm-explore-pkg="${escapeAttribute(pkgId)}" data-fm-explore-file="${escapeAttribute(local?.file_path ?? "")}">${quiet ? "" : `<span class="material-symbols-outlined">space_dashboard</span>`}Explore</button>
       </div>
     </div>`;
 }
