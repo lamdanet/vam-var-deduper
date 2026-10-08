@@ -99,7 +99,8 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
           flags=()
-          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          # Ticked on a manual run, or a version like 0.2.0-beta.1.
+          if [ "$PRERELEASE" = "true" ] || [[ "$VERSION" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "v$VERSION" dist/*.zip dist/*.exe dist/SHA256SUMS.txt \
             --target "$GITHUB_SHA" \
             --title "VAM VAR Deduper v$VERSION" \
