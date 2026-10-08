@@ -14266,6 +14266,15 @@ button.lib-dep-ref:hover {
   color: #fff;
 }
 
+.lib-chip.lib-chip-orphan {
+  background: color-mix(in srgb, var(--lib-text-3) 30%, rgba(0, 0, 0, 0.5));
+  color: #fff;
+}
+
+.lib-role-line {
+  margin-top: 2px;
+}
+
 .lib-chip.lib-chip-local {
   background: color-mix(in srgb, var(--lib-warning) 16%, transparent);
   color: var(--lib-warning);

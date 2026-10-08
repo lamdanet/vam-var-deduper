@@ -1225,6 +1225,10 @@ async function runDownloadJob(job) {
     job.localPath = localPath;
     job.attempts = 0;
     addLog(`Downloads: ${job.label} → ${dir}`);
+    // What it was downloaded as: something the user asked for, or a dependency.
+    if (job.packageId && !job.replace) {
+      invoke("set_package_roles", { packageIds: [job.packageId], installed: job.priority === "direct" }).catch(() => {});
+    }
   } else if (status === "paused") {
     // Back in line; the partial file waits for Resume.
     job.status = "queued";
@@ -3190,6 +3194,11 @@ const LIB_STATUSES = [
   { key: null, label: "All", title: "Every package in the scanned folders", count: "all" },
   { key: "favorites", label: "Favorites" },
   {
+    key: "installed",
+    label: "Installed",
+    title: "Packages you chose, not just pulled in as another package's dependency",
+  },
+  {
     key: "dependency",
     label: "Dependencies",
     title: "Used by at least one other scanned package",
@@ -3198,6 +3207,12 @@ const LIB_STATUSES = [
     key: "standalone",
     label: "Top-level",
     title: "Not used by any other scanned package",
+    indent: true,
+  },
+  {
+    key: "orphan",
+    label: "Orphans",
+    title: "Dependencies nothing in your library uses any more (or only other orphans do)",
     indent: true,
   },
   {
@@ -3582,6 +3597,9 @@ function libCardHtml(it, idx) {
       `<span class="lib-chip lib-chip-old" title="A newer version of this package is in the scanned folders">Old</span>`,
     );
   }
+  if (it.orphan) {
+    chips.push(`<span class="lib-chip lib-chip-orphan" title="A dependency nothing in your library uses any more">Orphan</span>`);
+  }
   if (it.hub_update_version) {
     chips.push(
       `<span class="lib-chip lib-chip-update" title="Version ${it.hub_update_version} is on the Hub">Update</span>`,
@@ -3871,6 +3889,10 @@ function libRenderToolbar() {
   } else if (status === "outdated" && total > 0) {
     actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-destructive" data-lib-action="clean-old">
         <span class="material-symbols-outlined">delete_sweep</span>Clean Old Versions…</button>`;
+  } else if (status === "orphan" && total > 0) {
+    const bytes = state.varPackagesFacets?.total_bytes ?? 0;
+    actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-destructive" data-lib-action="remove-orphans" title="Send every orphaned dependency to the Recycle Bin">
+        <span class="material-symbols-outlined">delete_sweep</span>Remove all orphans (${total}${bytes ? ` · ${escapeHtml(formatBytesLocal(bytes))}` : ""})</button>`;
   } else if (status === "damaged") {
     const fixable = (state.varPackagesItems ?? []).filter((it) => it.on_hub !== false).length;
     actions.innerHTML = `
@@ -4306,6 +4328,9 @@ function libDetailHeaderHtml(item, details) {
     );
   }
   if (!item.indexed) chips.push(`<span class="lib-chip lib-chip-muted" title="Not recorded in the database index">Not in DB</span>`);
+  if (item.orphan) {
+    chips.push(`<span class="lib-chip lib-chip-orphan" title="A dependency nothing in your library uses any more">Orphan</span>`);
+  }
   if (item.on_hub === false) {
     chips.push(
       `<span class="lib-chip lib-chip-local" title="Not on the Hub — once deleted, it can't be downloaded again. Keep a backup.">Not on Hub</span>`,
@@ -4398,7 +4423,12 @@ function libDetailHeaderHtml(item, details) {
               : ""
           }
         </div>
-        <p class="lib-aside">${usedLine}</p>
+        <p class="lib-aside" data-lib-frees="${escapeAttribute(item.file_path)}">${usedLine}</p>
+        <p class="lib-aside lib-role-line">${
+          item.installed ? "Installed — you chose it." : `A dependency${item.orphan ? " nothing uses any more" : ""}.`
+        } <button type="button" class="lib-small-link" data-lib-action="${item.installed ? "mark-dependency" : "mark-installed"}">${
+          item.installed ? "Mark as dependency" : "Mark as installed"
+        }</button></p>
         <p class="lib-path" title="${escapeAttribute(item.file_path)}">${escapeHtml(item.file_path)}</p>
       </div>
     </section>`;
@@ -4454,6 +4484,8 @@ function libRenderDetail() {
     libUsedBySectionHtml(item, details) +
     libContentSectionHtml(item, details);
   libThumbWatch(host);
+  // Nothing uses it: say what deleting it frees, unused dependencies included.
+  if (!item.used_by_count) libFillFrees(item);
 }
 
 function libSelectionPanelHtml() {
@@ -5551,6 +5583,79 @@ async function libSetDisabled(items, disable) {
     showToast(`${disable ? "Disabled" : "Enabled"} ${what}${extra}.`, "success");
   }
   await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true }).catch(() => {});
+}
+
+// ---- Installed vs dependency, orphans (roles.rs) -------------------------------------
+// A package family is "installed" (you chose it) or a dependency (pulled in
+// for another package). Dependencies nothing uses any more are orphans.
+
+async function libSetRole(items, installed) {
+  const ids = (items ?? []).map((it) => it.package_id).filter(Boolean);
+  if (!invoke || !ids.length) return;
+  try {
+    await invoke("set_package_roles", { packageIds: ids, installed });
+  } catch (e) {
+    showToast(String(e?.message || e), "error");
+    return;
+  }
+  showToast(
+    `${ids.length === 1 ? libTitle(items[0]) : `${ids.length} packages`} marked as ${installed ? "installed" : "dependenc" + (ids.length === 1 ? "y" : "ies")}.`,
+    "success",
+  );
+  await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true }).catch(() => {});
+}
+
+// "Frees X" in the details panel, extended with what deleting it would leave
+// unused.
+async function libFillFrees(item) {
+  if (!invoke || !item?.file_path) return;
+  let plan = null;
+  try {
+    plan = await invoke("plan_remove_packages", { filePaths: [item.file_path] });
+  } catch (_e) {
+    return;
+  }
+  const el = document.querySelector(`#lib-detail [data-lib-frees="${CSS.escape(item.file_path)}"]`);
+  if (!el || !plan?.deps?.length) return;
+  const n = plan.deps.length;
+  el.textContent = `Deleting it frees ${formatBytesLocal(item.size_bytes)} — ${formatBytesLocal(
+    item.size_bytes + plan.depsBytes,
+  )} with the ${n} dependenc${n === 1 ? "y" : "ies"} only it uses.`;
+  el.title = plan.deps.map((d) => d.packageId).join("\n");
+}
+
+async function libRemoveOrphans() {
+  let orphans = [];
+  try {
+    orphans = await libListAllItems("orphan");
+  } catch (e) {
+    showToast(String(e?.message || e), "error");
+    return;
+  }
+  if (!orphans.length) return;
+  const bytes = orphans.reduce((sum, o) => sum + (o.size_bytes || 0), 0);
+  const notOnHub = orphans.filter((o) => o.on_hub === false).map((o) => o.package_id);
+  const ok = await showAppConfirm(
+    `Send ${orphans.length} orphaned dependenc${orphans.length === 1 ? "y" : "ies"} (${formatBytesLocal(bytes)}) to the Recycle Bin? ` +
+      `Nothing in your library uses ${orphans.length === 1 ? "it" : "them"} any more.${
+        notOnHub.length ? `\n\n${libNotOnHubNote(notOnHub)}` : ""
+      }`,
+  );
+  if (!ok) return;
+  const toast = showToast(`Removing ${orphans.length} orphans…`, "info", 0);
+  const { removed, failures, freed } = await vpDeleteFilesSequential(orphans, (i, n, f) =>
+    toast.update(`Removing orphans… ${i} / ${n} · ${formatBytesLocal(f)}`),
+  );
+  for (const f of failures) addLog(`Remove orphans: ${f.name} — ${f.err}`);
+  toast.update(
+    failures.length
+      ? `Removed ${removed.length}; ${failures.length} failed — see Console.`
+      : `Removed ${removed.length} orphans · ${formatBytesLocal(freed)} freed (in the Recycle Bin).`,
+    failures.length ? "error" : "success",
+  );
+  toast.dismiss(6000);
+  vpPruneSelection(removed.map((r) => r.file_path));
+  await vpRefreshAfterMutation();
 }
 
 // ---- Extract presets ----------------------------------------------------------------
@@ -7448,6 +7553,21 @@ function libRunAction(action, trigger) {
     case "disable":
       if (item) libSetDisabled([item], true);
       break;
+    case "mark-installed":
+      if (item) libSetRole([item], true);
+      break;
+    case "mark-dependency":
+      if (item) libSetRole([item], false);
+      break;
+    case "bulk-mark-installed":
+      libSetRole(libSelectedSnaps(), true);
+      break;
+    case "bulk-mark-dependency":
+      libSetRole(libSelectedSnaps(), false);
+      break;
+    case "remove-orphans":
+      libRemoveOrphans();
+      break;
     case "enable":
       if (item) libSetDisabled([item], false);
       break;
@@ -7535,6 +7655,8 @@ function libContextMenu(event, item) {
         { label: "Export selected Scene Images", action: () => libRunAction("bulk-export") },
         { label: "Extract presets from selected…", action: () => libRunAction("bulk-extract") },
         { label: "Check integrity of selected", action: () => libRunAction("bulk-verify") },
+        { label: "Mark selected as installed", action: () => libRunAction("bulk-mark-installed") },
+        { label: "Mark selected as dependencies", action: () => libRunAction("bulk-mark-dependency") },
         ...(libSelectedSnaps().some((s) => !s.disabled && !s.offloaded)
           ? [{ label: "Disable selected…", action: () => libRunAction("bulk-disable") }]
           : []),
@@ -7582,6 +7704,10 @@ function libContextMenu(event, item) {
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
         { label: "Extract presets…", action: () => extractOpen([item]) },
         { label: "Check integrity", action: () => libVerify([item], { recheck: true }) },
+        {
+          label: item.installed ? "Mark as dependency" : "Mark as installed",
+          action: () => libSetRole([item], !item.installed),
+        },
         ...(item.offloaded
           ? []
           : [{ label: item.disabled ? "Enable" : "Disable…", action: () => libSetDisabled([item], !item.disabled) }]),
