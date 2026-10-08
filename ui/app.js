@@ -2862,6 +2862,8 @@ const LIB_CATEGORIES = [
   { key: "hair", label: "Hairstyles" },
 ];
 const LIB_TYPE_HUE = { scene: 220, subscene: 210, look: 330, pose: 25, clothing: 270, hair: 40 };
+// Content the Extract presets dialog reads people from (extract.rs source_type).
+const LIB_EXTRACTABLE = new Set(["scene", "look", "legacyLook"]);
 const LIB_CONTENT_TAGS = {
   legacyScene: { label: "Legacy", color: "#fbbf24" },
   legacyLook: { label: "Legacy", color: "#fbbf24" },
@@ -3848,10 +3850,16 @@ function libContentSectionHtml(item, details) {
     rows: content.filter((c) => c.category === cat.key),
   })).filter((g) => g.rows.length);
   const count = Number(details.item_count) || content.length;
+  const extractable = content.some((c) => LIB_EXTRACTABLE.has(c.fine));
   const head = `
     <div class="lib-group-head">
       <span class="lib-group-title">Content ${count ? `<small>(${count})</small>` : "<small>(none detected)</small>"}</span>
       <span class="lib-group-tools">
+        ${
+          extractable
+            ? `<button type="button" class="lib-small-link" data-lib-action="extract" title="Save the clothing, hair, morphs or appearance of the people in its scenes as VaM presets"><span class="material-symbols-outlined">person_add</span>Extract presets</button>`
+            : ""
+        }
         <button type="button" class="lib-small-link is-quiet" data-lib-action="browse-files" title="Open in VAR Details"><span class="material-symbols-outlined">account_tree</span>Browse files</button>
         <button type="button" class="lib-small-link" data-lib-action="images" title="Every image in the package"><span class="material-symbols-outlined">grid_view</span>View images</button>
       </span>
@@ -3876,6 +3884,13 @@ function libContentSectionHtml(item, details) {
             <span class="lib-content-name">${escapeHtml(c.name)}${
               tag ? `<span class="lib-content-tag" style="color:${tag.color}bb">${escapeHtml(tag.label)}</span>` : ""
             }</span>
+            ${
+              LIB_EXTRACTABLE.has(c.fine)
+                ? `<button type="button" class="lib-content-act" data-lib-extract="${escapeAttribute(c.path)}" title="Extract presets from this ${
+                    c.category === "scene" ? "scene" : "look"
+                  }"><span class="material-symbols-outlined">person_add</span></button>`
+                : ""
+            }
           </div>`;
         })
         .join("");
@@ -4080,6 +4095,7 @@ function libSelectionPanelHtml() {
           <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-clean"><span class="material-symbols-outlined">content_copy</span>Clean Duplicates</button>
           <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-organize"><span class="material-symbols-outlined">create_new_folder</span>Organize</button>
           <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-export"><span class="material-symbols-outlined">image</span>Export images</button>
+          <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-extract" title="Save the clothing, hair, morphs or appearance of the people in their scenes as VaM presets"><span class="material-symbols-outlined">person_add</span>Extract presets</button>
           <button type="button" class="lib-btn lib-btn-sm lib-btn-outline" data-lib-action="bulk-clear">Deselect</button>
         </div>
       </div>
@@ -4781,6 +4797,368 @@ function setupOffload() {
     if (e.key === "Escape" && !backdrop.classList.contains("hidden")) offloadClose();
   });
   renderSettingsOffload();
+}
+
+// ---- Extract presets ----------------------------------------------------------------
+// After VaM Backstage's "Extract appearance / outfit preset", plus hair and
+// morph presets: the people in a package's scenes, legacy looks and
+// appearance presets, saved as VaM presets under
+// Custom/Atom/Person/<Kind>/extracted (extract_probe / extract_run). The
+// presets reference the package's files, so they need it installed.
+
+const EXTRACT_KINDS = [
+  { key: "appearance", label: "Appearance", title: "The whole look: body, skin, morphs, clothing and hair" },
+  { key: "clothing", label: "Clothing", title: "The outfit, with its materials and sim settings" },
+  { key: "hair", label: "Hair", title: "The hairstyle, with its materials and sim settings" },
+  { key: "morphs", label: "Morphs", title: "The body and face shape: every morph the person has set" },
+];
+const EXTRACT_STORE = "extract.kinds";
+const EXTRACT_PROBE_BATCH = 4;
+const EXTRACT_SOURCE_LABEL = { scene: "Scene", look: "Legacy look", appearancePreset: "Appearance preset" };
+
+const EXTRACT = {
+  token: 0,
+  items: [],
+  // Probe results; each person gains `checked`.
+  packages: [],
+  loaded: 0,
+  // Limit to one source (a scene row's Extract button).
+  only: "",
+  kinds: new Set(["clothing", "hair", "morphs"]),
+  running: false,
+};
+
+function extractLoadKinds() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EXTRACT_STORE) || "null");
+    if (Array.isArray(saved)) EXTRACT.kinds = new Set(saved.filter((k) => EXTRACT_KINDS.some((x) => x.key === k)));
+  } catch (_e) {}
+}
+
+function extractSaveKinds() {
+  try {
+    localStorage.setItem(EXTRACT_STORE, JSON.stringify([...EXTRACT.kinds]));
+  } catch (_e) {}
+}
+
+// Every person row, flattened: { pkg, source, atom }.
+function extractRows() {
+  const rows = [];
+  for (const pkg of EXTRACT.packages) {
+    for (const source of pkg.sources ?? []) {
+      for (const atom of source.atoms ?? []) rows.push({ pkg, source, atom });
+    }
+  }
+  return rows;
+}
+
+// What a run would do: presets to write, and ones that exist and are kept.
+function extractPlan() {
+  const overwrite = Boolean($("extract-overwrite")?.checked);
+  let write = 0;
+  let keep = 0;
+  for (const { atom } of extractRows()) {
+    if (!atom.checked) continue;
+    for (const kind of EXTRACT.kinds) {
+      const target = atom.targets?.[kind];
+      if (!target) continue;
+      if (target.exists && !overwrite) keep += 1;
+      else write += 1;
+    }
+  }
+  return { write, keep };
+}
+
+function extractRenderHead() {
+  const items = EXTRACT.items;
+  const one = items.length === 1 ? items[0] : null;
+  const title = one ? `Extract presets — ${libTitle(one)}` : `Extract presets from ${items.length} packages`;
+  vpSetText("extract-title", title);
+  $("extract-title").title = title;
+  vpSetText("extract-sub", one ? [libCreator(one), libVersion(one) && `v${libVersion(one)}`].filter(Boolean).join(" · ") : "");
+  const thumb = $("extract-thumb");
+  if (thumb) {
+    thumb.innerHTML = one
+      ? `${libThumbHtml(one.file_path, libGradient(one.file_name || one.package_id), "hub-dl-thumb-img")}</div>`
+      : "";
+    libThumbWatch(thumb);
+  }
+  const kinds = $("extract-kinds");
+  if (kinds) {
+    kinds.innerHTML = EXTRACT_KINDS.map(
+      (k) => `<label class="check-row extract-kind" title="${escapeAttribute(k.title)}">
+          <input type="checkbox" data-extract-kind="${k.key}"${EXTRACT.kinds.has(k.key) ? " checked" : ""} />
+          <span>${escapeHtml(k.label)}</span>
+        </label>`,
+    ).join("");
+  }
+}
+
+function extractAtomMeta(atom) {
+  const parts = [];
+  if (atom.clothing) parts.push(`${atom.clothing} clothing`);
+  if (atom.hair) parts.push(`${atom.hair} hair`);
+  if (atom.morphs) parts.push(`${atom.morphs} morph${atom.morphs === 1 ? "" : "s"}`);
+  return parts.join(" · ") || "Nothing set";
+}
+
+// Per selected kind: will be written / already there / nothing to extract.
+function extractAtomChips(atom) {
+  const overwrite = Boolean($("extract-overwrite")?.checked);
+  return EXTRACT_KINDS.filter((k) => EXTRACT.kinds.has(k.key))
+    .map((k) => {
+      const target = atom.targets?.[k.key];
+      if (!target) {
+        return `<span class="lib-pill extract-pill is-none" title="Nothing to extract">${escapeHtml(k.label)}</span>`;
+      }
+      if (target.exists) {
+        return `<span class="lib-pill ${overwrite ? "lib-pill-warn" : "lib-pill-ok"} extract-pill" title="${escapeAttribute(
+          `${overwrite ? "Will be replaced" : "Already extracted — kept"}: ${target.path}`,
+        )}">${escapeHtml(k.label)} ✓</span>`;
+      }
+      return `<span class="lib-pill lib-pill-info extract-pill" title="${escapeAttribute(target.path)}">${escapeHtml(k.label)}</span>`;
+    })
+    .join("");
+}
+
+function extractRenderBody() {
+  const body = $("extract-body");
+  if (!body) return;
+  const scroll = body.scrollTop;
+  const total = EXTRACT.items.length;
+  const loading =
+    EXTRACT.loaded < total
+      ? `<div class="hub-dl-loading"><p class="hub-dl-empty">Reading scenes… ${EXTRACT.loaded} / ${total} packages</p>
+          <div class="lib-skeleton" style="width:60%"></div></div>`
+      : "";
+  const rows = extractRows();
+  const multiPkg = total > 1;
+  let index = 0;
+  const groups = [];
+  for (const pkg of EXTRACT.packages) {
+    for (const source of pkg.sources ?? []) {
+      const people = (source.atoms ?? [])
+        .map((atom) => {
+          const i = index++;
+          const name = atom.atomId || "Person";
+          return `<label class="check-row hub-dl-row">
+              <input type="checkbox" data-extract-idx="${i}"${atom.checked ? " checked" : ""} />
+              <span class="hub-dl-main">
+                <span class="hub-dl-name">${escapeHtml(name)}</span>
+                <span class="hub-dl-meta">${escapeHtml(extractAtomMeta(atom))}</span>
+              </span>
+              <span class="extract-chips">${extractAtomChips(atom)}</span>
+            </label>`;
+        })
+        .join("");
+      const thumbPath = source.internalPath.replace(/\.[^./]+$/, ".jpg");
+      const thumb = source.hasThumb
+        ? `${libThumbHtml(pkg.file_path, libContentGradient(source.label, "scene"), "extract-src-thumb", thumbPath)}</div>`
+        : `<div class="extract-src-thumb" style="--lib-thumb-bg:${escapeAttribute(libContentGradient(source.label, "scene"))}"></div>`;
+      groups.push(`<div class="hub-dl-group">
+          <div class="hub-dl-group-head extract-src-head" title="${escapeAttribute(source.internalPath)}">
+            ${thumb}
+            <span class="extract-src-text">
+              <span class="hub-dl-group-title">${escapeHtml(source.label)}</span>
+              <small>${escapeHtml(EXTRACT_SOURCE_LABEL[source.sourceType] || "")}${
+                multiPkg ? ` · ${escapeHtml(pkg.packageId)}` : ""
+              }</small>
+            </span>
+          </div>
+          ${
+            source.error
+              ? `<p class="hub-dl-empty is-error">Couldn't read it: ${escapeHtml(source.error)}</p>`
+              : `<div class="hub-dl-list">${people}</div>`
+          }
+        </div>`);
+    }
+    if (pkg.error) {
+      groups.push(`<p class="hub-dl-empty is-error">${escapeHtml(pkg.packageId)}: ${escapeHtml(pkg.error)}</p>`);
+    }
+  }
+  const allHead = rows.length > 1
+    ? `<div class="hub-dl-group-head extract-all-head">
+        <span class="hub-dl-group-title">People <small>(${rows.length})</small></span>
+        <label class="check-row hub-dl-all"><input type="checkbox" id="extract-all" /><span>Select all</span></label>
+      </div>`
+    : "";
+  const empty =
+    !rows.length && EXTRACT.loaded >= total
+      ? `<p class="hub-dl-empty">${
+          EXTRACT.only
+            ? "No people in this scene."
+            : `No scenes, looks or appearance presets with people in ${total === 1 ? "this package" : "these packages"}.`
+        }</p>`
+      : "";
+  body.innerHTML = `${allHead}${groups.join("")}${empty}${loading}`;
+  libThumbWatch(body);
+  body.scrollTop = scroll;
+}
+
+function extractSync() {
+  const rows = extractRows();
+  const all = $("extract-all");
+  if (all) {
+    const on = rows.filter((r) => r.atom.checked).length;
+    all.checked = on > 0 && on === rows.length;
+    all.indeterminate = on > 0 && on < rows.length;
+  }
+  const { write, keep } = extractPlan();
+  vpSetText(
+    "extract-total",
+    write || keep
+      ? `${write} preset${write === 1 ? "" : "s"} to write${keep ? ` · ${keep} already extracted` : ""}`
+      : EXTRACT.kinds.size
+        ? "Nothing selected"
+        : "Pick what to extract",
+  );
+  const confirm = $("extract-confirm");
+  if (confirm) {
+    confirm.disabled = EXTRACT.running || !write;
+    confirm.textContent = EXTRACT.running ? "Extracting…" : write > 1 ? `Extract (${write})` : "Extract";
+  }
+  $("extract-body")?.classList.toggle("is-busy", EXTRACT.running);
+}
+
+// Open for library items (`items`: package snapshots). `only`: one source's
+// internal path, from a scene row in the details panel.
+async function extractOpen(items, { only = "" } = {}) {
+  const picked = (items ?? []).filter((it) => it?.file_path);
+  if (!invoke || !picked.length || EXTRACT.running) return;
+  if (!vamDir()) {
+    showToast("Set your VaM directory in Settings first.", "error");
+    openVamDirSettings();
+    return;
+  }
+  const token = ++EXTRACT.token;
+  Object.assign(EXTRACT, { items: picked, packages: [], loaded: 0, only });
+  extractRenderHead();
+  extractRenderBody();
+  extractSync();
+  $("extract-backdrop")?.classList.remove("hidden");
+  for (let i = 0; i < picked.length; i += EXTRACT_PROBE_BATCH) {
+    const batch = picked.slice(i, i + EXTRACT_PROBE_BATCH);
+    let probed = [];
+    try {
+      probed = await invoke("extract_probe", { paths: batch.map((it) => it.file_path), vamDir: vamDir() });
+    } catch (e) {
+      probed = batch.map((it) => ({ file_path: it.file_path, packageId: it.package_id, sources: [], error: String(e?.message || e) }));
+    }
+    if (token !== EXTRACT.token) return;
+    for (const pkg of probed ?? []) {
+      // The backend names the path filePath; keep the library's spelling too.
+      pkg.file_path = pkg.filePath ?? pkg.file_path;
+      if (only) pkg.sources = (pkg.sources ?? []).filter((s) => s.internalPath.toLowerCase() === only.toLowerCase());
+      for (const source of pkg.sources ?? []) for (const atom of source.atoms ?? []) atom.checked = true;
+      EXTRACT.packages.push(pkg);
+    }
+    EXTRACT.loaded = Math.min(picked.length, i + batch.length);
+    extractRenderBody();
+    extractSync();
+  }
+}
+
+function extractClose() {
+  if (EXTRACT.running) return;
+  EXTRACT.token += 1;
+  $("extract-backdrop")?.classList.add("hidden");
+}
+
+async function extractConfirm() {
+  if (EXTRACT.running || !invoke) return;
+  const items = [];
+  for (const pkg of EXTRACT.packages) {
+    for (const source of pkg.sources ?? []) {
+      const people = (source.atoms ?? []).filter((a) => a.checked);
+      if (!people.length) continue;
+      items.push({ filePath: pkg.file_path, internalPath: source.internalPath, atomIds: people.map((a) => a.atomId) });
+    }
+  }
+  const kinds = EXTRACT_KINDS.map((k) => k.key).filter((k) => EXTRACT.kinds.has(k));
+  if (!items.length || !kinds.length) return;
+  EXTRACT.running = true;
+  extractSync();
+  let result = null;
+  try {
+    result = await invoke("extract_run", {
+      request: {
+        vamDir: vamDir(),
+        items,
+        kinds,
+        overwrite: Boolean($("extract-overwrite")?.checked),
+        keepExpressions: !$("extract-skip-expressions")?.checked,
+      },
+    });
+  } catch (e) {
+    EXTRACT.running = false;
+    extractSync();
+    showToast(`Extract failed: ${String(e?.message || e)}`, "error", 6000);
+    return;
+  }
+  EXTRACT.running = false;
+  extractClose();
+  const written = result?.written ?? [];
+  const skipped = result?.skipped ?? [];
+  const errors = result?.errors ?? [];
+  for (const path of written) addLog(`Extract presets: wrote ${path}`);
+  for (const e of errors) addLog(`Extract presets: ${e.source} — ${e.reason}`);
+  if (written.length) {
+    showToast(
+      `Extracted ${written.length} preset${written.length === 1 ? "" : "s"}${
+        skipped.length ? `, kept ${skipped.length} that already existed` : ""
+      }${errors.length ? ` — ${errors.length} failed, see Console` : ""}. In VaM: Custom/Atom/Person/…/extracted.`,
+      errors.length ? "error" : "success",
+      errors.length ? 7000 : 5000,
+    );
+  } else if (errors.length) {
+    showToast(`Nothing was extracted: ${errors[0].reason}${errors.length > 1 ? " (see Console)" : ""}`, "error", 6000);
+  } else {
+    showToast(skipped.length ? `All ${skipped.length} presets were already extracted.` : "Nothing to extract.", "info");
+  }
+}
+
+function setupExtract() {
+  extractLoadKinds();
+  const backdrop = $("extract-backdrop");
+  if (!backdrop) return;
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) extractClose();
+  });
+  $("extract-cancel")?.addEventListener("click", extractClose);
+  $("extract-confirm")?.addEventListener("click", () => {
+    extractConfirm().catch((e) => addLog(`Extract presets: ${String(e)}`));
+  });
+  $("extract-kinds")?.addEventListener("change", (e) => {
+    const key = e.target?.getAttribute?.("data-extract-kind");
+    if (!key) return;
+    if (e.target.checked) EXTRACT.kinds.add(key);
+    else EXTRACT.kinds.delete(key);
+    extractSaveKinds();
+    extractRenderBody();
+    extractSync();
+  });
+  for (const id of ["extract-overwrite", "extract-skip-expressions"]) {
+    $(id)?.addEventListener("change", () => {
+      extractRenderBody();
+      extractSync();
+    });
+  }
+  $("extract-body")?.addEventListener("change", (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement) || EXTRACT.running) return;
+    const rows = extractRows();
+    if (input.id === "extract-all") {
+      for (const r of rows) r.atom.checked = input.checked;
+      extractRenderBody();
+    } else if (input.hasAttribute("data-extract-idx")) {
+      const row = rows[Number(input.getAttribute("data-extract-idx"))];
+      if (row) row.atom.checked = input.checked;
+    }
+    extractSync();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !backdrop.classList.contains("hidden")) extractClose();
+  });
 }
 
 // ---- Download sources ------------------------------------------------------------
@@ -6304,6 +6682,12 @@ function libRunAction(action, trigger) {
     case "bulk-export":
       vpBulkExportImages().catch((e) => addLog(`Bulk export: ${String(e)}`));
       break;
+    case "bulk-extract":
+      extractOpen(libSelectedSnaps());
+      break;
+    case "extract":
+      if (item) extractOpen([item]);
+      break;
     case "bulk-clear": {
       const lead = libFindItem(state.vpLead);
       if (lead) vpSelectOnly(lead);
@@ -6353,6 +6737,7 @@ function libContextMenu(event, item) {
         { label: "Clean Duplicates of selected…", action: () => libRunAction("bulk-clean") },
         { label: "Organize selected by Creator…", action: () => libRunAction("bulk-organize") },
         { label: "Export selected Scene Images", action: () => libRunAction("bulk-export") },
+        { label: "Extract presets from selected…", action: () => libRunAction("bulk-extract") },
         { separator: true },
         libSelectAllItem(),
         { label: "Deselect", action: () => libRunAction("bulk-clear") },
@@ -6389,6 +6774,7 @@ function libContextMenu(event, item) {
           action: () => sourceOpen({ packageId, fileName: item.file_name || `${packageId}.var` }),
         },
         { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
+        { label: "Extract presets…", action: () => extractOpen([item]) },
         // Offloaded packages are filed by Restore, not moved into AddonPackages here.
         ...(item.offloaded
           ? []
@@ -6477,6 +6863,12 @@ function libHandleSharedClick(event) {
         ? libDepItem({ file_path: fp, resolved_id: id, size_bytes: offload.getAttribute("data-offload-size"), offloaded: true })
         : null);
     if (item) offloadOpen([item], offload.getAttribute("data-lib-offload") === "restore");
+    return true;
+  }
+  const extract = target.closest?.("[data-lib-extract]");
+  if (extract) {
+    const item = libCurrentItem();
+    if (item) extractOpen([item], { only: extract.getAttribute("data-lib-extract") });
     return true;
   }
   const action = target.closest?.("[data-lib-action]");
@@ -17834,6 +18226,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   setupVamDir();
   setupOffload();
+  setupExtract();
   setupAbout();
   setupSources();
   setupSourcesPage();

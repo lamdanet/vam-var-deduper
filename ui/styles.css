@@ -14162,6 +14162,130 @@ button.lib-dep-ref:hover {
   color: var(--lib-text-3);
 }
 
+/* ---- Extract presets dialog -------------------------------------------------- */
+
+.extract-card .hub-dl-body.is-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.extract-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.check-row.extract-kind {
+  padding: 5px 10px;
+  border: 1px solid var(--lib-border);
+  border-radius: 6px;
+  background: var(--lib-elevated);
+  color: var(--lib-text);
+}
+
+.check-row.extract-kind:has(input:checked) {
+  border-color: color-mix(in srgb, var(--lib-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--lib-accent) 12%, var(--lib-elevated));
+}
+
+.extract-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+
+.extract-all-head {
+  padding: 0 2px;
+}
+
+.extract-src-head {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.extract-src-thumb {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--lib-thumb-bg, var(--lib-elevated));
+}
+
+.extract-src-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.extract-src-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.extract-src-text .hub-dl-group-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extract-src-text small {
+  font-size: 11px;
+  color: var(--lib-text-3);
+}
+
+.extract-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.lib-pill.extract-pill {
+  min-width: 0;
+}
+
+.lib-pill.extract-pill.is-none {
+  background: transparent;
+  color: var(--lib-text-3);
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Details panel: a scene row's Extract button, shown on hover. */
+.lib-content-act {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lib-text-3);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.lib-content-row:hover .lib-content-act,
+.lib-content-act:focus-visible {
+  opacity: 1;
+}
+
+.lib-content-act:hover {
+  background: var(--lib-hover);
+  color: var(--lib-text);
+}
+
+.lib-view .lib-content-act .material-symbols-outlined {
+  font-size: 15px;
+}
+
 .offload-dest {
   display: flex;
   flex-direction: column;

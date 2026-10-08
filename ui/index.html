@@ -3228,6 +3228,43 @@
 
     <!-- Offload / Restore: the picked packages, every dependency they need
          (shared ones unticked for Offload), and where they go. -->
+    <!-- Extract presets: the people in a package's scenes, legacy looks and
+         appearance presets saved as VaM presets (extract.rs). Before
+         #dialog-backdrop for the usual DOM-order stacking reason. -->
+    <div id="extract-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card hub-dl-card extract-card" role="dialog" aria-modal="true" aria-labelledby="extract-title">
+        <div class="hub-dl-head">
+          <div id="extract-thumb" class="hub-dl-thumb"></div>
+          <div class="hub-dl-headtext">
+            <h3 id="extract-title">Extract presets</h3>
+            <p id="extract-sub" class="hub-dl-sub"></p>
+          </div>
+        </div>
+        <p class="offload-intro">
+          Saves the people in these scenes as VaM presets, in
+          <code>Custom/Atom/Person/&lt;kind&gt;/extracted</code>. The presets use the package's own clothing,
+          hair and morph files, so keep it installed.
+        </p>
+        <div id="extract-kinds" class="extract-kinds" role="group" aria-label="Presets to extract"></div>
+        <div class="extract-options">
+          <label class="check-row" for="extract-skip-expressions" title="Smile, eyes closed, mouth open and other expression morphs a scene leaves set">
+            <input id="extract-skip-expressions" type="checkbox" checked />
+            <span>Skip expression morphs</span>
+          </label>
+          <label class="check-row" for="extract-overwrite">
+            <input id="extract-overwrite" type="checkbox" />
+            <span>Replace presets that were already extracted</span>
+          </label>
+        </div>
+        <div id="extract-body" class="hub-dl-body"></div>
+        <div class="dialog-actions hub-dl-actions">
+          <span id="extract-total" class="hub-dl-total"></span>
+          <button id="extract-cancel" class="ghost-button" type="button">Cancel</button>
+          <button id="extract-confirm" class="primary-button" type="button">Extract</button>
+        </div>
+      </div>
+    </div>
+
     <div id="offload-backdrop" class="dialog-backdrop hidden">
       <div class="dialog-card hub-dl-card offload-card" role="dialog" aria-modal="true" aria-labelledby="offload-title">
         <div class="hub-dl-head">
