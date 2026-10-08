@@ -35,7 +35,7 @@ tauri-plugin-dialog = "2"
 trash = "5"
 walkdir = "2"
 # aes-crypto: AES-encrypted zips (7-Zip's "AES-256"), shared as download sources.
-zip = { version = "2", default-features = false, features = ["deflate", "deflate64", "aes-crypto"] }
+zip = { version = "8", default-features = false, features = ["deflate", "deflate64", "aes-crypto"] }
 
 # GetDriveTypeW, to refuse recycling on volumes that have no Recycle Bin (exFAT/
 # FAT32 removables, NukeOnDelete) — there `trash::delete` permanently deletes and
