@@ -82,10 +82,6 @@
                 <span class="material-symbols-outlined">link</span>
                 <span class="sidebar-label">Sources</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="var-details">
-                <span class="material-symbols-outlined">description</span>
-                <span class="sidebar-label" id="sidebar-var-details-label">VAR Details</span>
-              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="pkg-explorer">
                 <span class="material-symbols-outlined">space_dashboard</span>
                 <span class="sidebar-label">Package Explorer</span>
@@ -144,7 +140,7 @@
                     <button id="dbf-pick-target-var-button" class="ghost-button" type="button"></button>
                     <button id="dbf-open-var-details-button" class="ghost-button" type="button" title="Open the target VAR's details" disabled>
                       <span class="material-symbols-outlined">open_in_new</span>
-                      <span id="dbf-open-var-details-label">VAR Details</span>
+                      <span id="dbf-open-var-details-label">Details</span>
                     </button>
                   </div>
                 </div>
@@ -1244,329 +1240,13 @@
         </div>
       </section>
 
-      <!-- VAR Details View (hidden by default; revealed by clicking a row in VAR Packages) -->
-      <section id="var-details-view" class="app-main var-details-view hidden">
-        <header class="var-details-header">
-          <button class="var-details-back" id="var-details-back" type="button">
-            <span class="material-symbols-outlined">arrow_back</span>
-            <span>VAR Packages</span>
-          </button>
-          <h1 class="var-details-title" id="var-details-title">VAR Details</h1>
-          <button class="var-details-fav-btn" id="var-details-fav-button" type="button" hidden
-                  aria-pressed="false" title="Add to favorites">
-            <span class="material-symbols-outlined">star</span>
-            <span class="var-details-fav-label" id="var-details-fav-label">Favorite</span>
-          </button>
-        </header>
-
-        <div class="var-details-grid">
-          <article class="card var-details-source">
-            <header class="card-eyebrow">Source Configuration</header>
-            <div class="var-details-dropzone" id="var-details-dropzone">
-              <div class="var-details-dropzone-icon">
-                <span class="material-symbols-outlined">upload_file</span>
-              </div>
-              <h4 class="var-details-dropzone-title">Drag and drop package files</h4>
-              <p class="var-details-dropzone-subtitle">Supports .var, .zip and .vmi. Max 2GB.</p>
-              <div class="var-details-dropzone-actions">
-                <button id="var-details-select-files" class="primary-button" type="button">Select Files</button>
-                <span class="var-details-dropzone-or">or</span>
-                <button id="var-details-browse-dir" class="ghost-button" type="button">Browse Directory</button>
-              </div>
-            </div>
-            <div class="var-details-action">
-              <div class="var-details-folder-field">
-                <label class="var-details-folder-label" for="var-details-package-input">Package File</label>
-                <div class="var-details-folder-row">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">description</span>
-                    <input id="var-details-package-input" type="text" placeholder="C:\Path\To\Creator.Package.var" spellcheck="false" />
-                  </div>
-                  <button id="var-details-package-pick" class="ghost-button" type="button">
-                    <span class="material-symbols-outlined">file_open</span>
-                    <span>Browse</span>
-                  </button>
-                </div>
-              </div>
-              <div class="var-details-folder-field">
-                <span class="var-details-folder-label">VAR Folder (for Scan Local)</span>
-                <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
-                <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
-                <input id="var-details-folder-input" type="hidden" />
-              </div>
-              <div class="var-details-folder-field">
-                <label class="var-details-folder-label" id="var-details-additional-dirs-label"></label>
-                <div class="additional-dirs">
-                  <div id="var-details-additional-dirs" class="additional-dirs-list"></div>
-                  <button id="var-details-add-folder-button" class="ghost-button" type="button"></button>
-                </div>
-              </div>
-              <div class="var-details-scan-buttons">
-                <button id="var-details-scan-db-button" class="var-details-scan-button is-primary" type="button">
-                  <span class="material-symbols-outlined">database</span>
-                  <span id="var-details-scan-db-label">Scan to Database</span>
-                </button>
-                <button id="var-details-scan-local-button" class="var-details-scan-button is-secondary" type="button">
-                  <span class="material-symbols-outlined">folder_zip</span>
-                  <span id="var-details-scan-local-label">Scan Local</span>
-                </button>
-                <button id="var-details-scan-deps-button" class="var-details-scan-button is-secondary" type="button">
-                  <span class="material-symbols-outlined">account_tree</span>
-                  <span id="var-details-scan-deps-label">Scan Dependencies</span>
-                </button>
-              </div>
-            </div>
-          </article>
-
-          <article class="card var-details-info">
-            <header class="card-eyebrow">VAR Info</header>
-            <!-- Availability banner: shown only when the opened VAR isn't present
-                 locally, offering to download it from the Hub. JS-rendered. -->
-            <div id="var-details-availability" class="var-details-availability hidden"></div>
-            <div class="var-details-info-body">
-              <div class="var-details-preview" id="var-details-preview">
-                <span class="material-symbols-outlined">image_not_supported</span>
-                <div class="var-details-preview-caption">Scene Preview</div>
-              </div>
-              <div class="var-details-meta">
-                <div class="var-details-meta-tile">
-                  <span class="var-details-meta-label">Filename</span>
-                  <span class="var-details-meta-value" id="var-details-meta-filename">—</span>
-                </div>
-                <div class="var-details-meta-tile">
-                  <span class="var-details-meta-label">Creator</span>
-                  <span class="var-details-meta-value" id="var-details-meta-creator">—</span>
-                  <div class="var-details-creator-flags" id="var-details-creator-flags" hidden>
-                    <button
-                      type="button"
-                      class="var-details-creator-flag-btn"
-                      data-creator-flag="favorite"
-                      id="var-details-creator-flag-favorite"
-                      title="Favorite: this creator's VARs won't be scanned for replacement"
-                    >★ Favorite</button>
-                    <button
-                      type="button"
-                      class="var-details-creator-flag-btn"
-                      data-creator-flag="blocked"
-                      id="var-details-creator-flag-blocked"
-                      title="Block: this creator's packages won't appear as download candidates"
-                    >⊘ Block</button>
-                  </div>
-                </div>
-                <div class="var-details-meta-tile">
-                  <span class="var-details-meta-label">Size</span>
-                  <span class="var-details-meta-value" id="var-details-meta-size">—</span>
-                </div>
-                <div class="var-details-meta-tile">
-                  <span class="var-details-meta-label">Modified Date</span>
-                  <span class="var-details-meta-value" id="var-details-meta-modified">—</span>
-                </div>
-                <div class="var-details-meta-tile var-details-meta-status" id="var-details-meta-status-tile">
-                  <div>
-                    <span class="var-details-meta-label">Status</span>
-                    <span class="var-details-meta-value" id="var-details-meta-status">—</span>
-                  </div>
-                  <span class="var-details-status-dot" id="var-details-status-dot"></span>
-                </div>
-                <div class="var-details-meta-tile var-details-meta-path" id="var-details-meta-path-tile" hidden>
-                  <div>
-                    <span class="var-details-meta-label">Path</span>
-                    <span class="var-details-meta-value" id="var-details-meta-path" title="">—</span>
-                  </div>
-                  <button
-                    type="button"
-                    class="var-details-meta-path-action"
-                    id="var-details-meta-path-action"
-                    title="Show in Explorer"
-                    aria-label="Show in Explorer"
-                    hidden
-                  >
-                    <span class="material-symbols-outlined">folder_open</span>
-                  </button>
-                </div>
-                <div class="var-details-meta-tile var-details-meta-sendto" id="var-details-meta-sendto-tile" hidden>
-                  <span class="var-details-meta-label">Send as Target VAR</span>
-                  <div class="var-details-meta-sendto-actions">
-                    <button
-                      type="button"
-                      class="var-details-meta-sendto-button"
-                      id="var-details-send-dbfind"
-                      title="Send to Clean VARs as Target VAR"
-                    >
-                      <span class="material-symbols-outlined">difference</span>
-                      <span>Clean VARs</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="var-details-meta-sendto-button"
-                      id="var-details-send-missing-button"
-                      title="Send the current VAR to the Missing Resources page as the Target VAR and switch to that view."
-                    >
-                      <span class="material-symbols-outlined">link_off</span>
-                      <span>Missing Resources</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="var-details-meta-sendto-button"
-                      id="var-details-send-internalize-button"
-                      title="Send the current VAR to the Internalize Resources page as the Target VAR and switch to that view."
-                    >
-                      <span class="material-symbols-outlined">download_for_offline</span>
-                      <span>Internalize Resources</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </article>
-        </div>
-
-        <!-- Progress -->
-        <article class="card var-details-progress-card" id="var-details-progress-card">
-          <div class="var-details-pipeline">
-            <div class="var-details-pipeline-row">
-              <span class="var-details-pipeline-label">Progress</span>
-              <span class="var-details-pipeline-percent" id="var-details-pipeline-percent">0%</span>
-            </div>
-            <div class="var-details-pipeline-track">
-              <div class="var-details-pipeline-fill" id="var-details-pipeline-fill"></div>
-            </div>
-            <div class="var-details-pipeline-status">
-              <span class="var-details-pipeline-dot" id="var-details-pipeline-dot"></span>
-              <span class="var-details-pipeline-text" id="var-details-pipeline-text">Idle</span>
-            </div>
-          </div>
-        </article>
-
-        <!-- Overlap Summary -->
-        <article class="card var-details-overlap" id="var-details-overlap-card">
-          <header class="var-details-overlap-header">
-            <div class="var-details-overlap-title">
-              <h3>Overlap Analysis</h3>
-              <span class="var-details-asset-count" id="var-details-overlap-source">Not Scanned</span>
-            </div>
-            <span class="var-details-overlap-hint" id="var-details-overlap-hint">
-              Run a scan to compare this package against your collection.
-            </span>
-          </header>
-          <div class="var-details-overlap-grid" id="var-details-overlap-grid">
-            <div class="var-details-stat-tile">
-              <span class="var-details-stat-label">Total Resources</span>
-              <span class="var-details-stat-value" id="var-details-stat-total">—</span>
-            </div>
-            <div class="var-details-stat-tile">
-              <span class="var-details-stat-label">Shared</span>
-              <span class="var-details-stat-value" id="var-details-stat-shared">—</span>
-              <span class="var-details-stat-sub" id="var-details-stat-shared-sub"></span>
-            </div>
-            <div class="var-details-stat-tile">
-              <span class="var-details-stat-label">Unique</span>
-              <span class="var-details-stat-value" id="var-details-stat-unique">—</span>
-              <span class="var-details-stat-sub" id="var-details-stat-unique-sub"></span>
-            </div>
-            <div class="var-details-stat-tile">
-              <span class="var-details-stat-label">Reclaimable</span>
-              <span class="var-details-stat-value" id="var-details-stat-reclaim">—</span>
-              <span class="var-details-stat-sub">across other VARs</span>
-            </div>
-          </div>
-          <div class="var-details-verdict" id="var-details-verdict" hidden></div>
-        </article>
-
-        <!-- Top Sharing Packages -->
-        <article class="card var-details-top-packages" id="var-details-top-packages-card">
-          <header class="var-details-top-packages-header">
-            <div class="var-details-top-packages-title">
-              <h3>Top Sharing Packages</h3>
-              <div class="var-details-filter-group" id="var-details-top-packages-sort" role="tablist" aria-label="Top sharing sort" hidden>
-                <button class="var-details-filter-button is-active" type="button" role="tab" aria-selected="true" data-top-sort="count">By Count</button>
-                <button class="var-details-filter-button" type="button" role="tab" aria-selected="false" data-top-sort="size">By Size</button>
-              </div>
-            </div>
-            <span class="var-details-top-packages-hint" id="var-details-top-packages-hint">
-              Other VARs that contain the most resources from this package.
-            </span>
-          </header>
-          <ul class="var-details-top-packages-list" id="var-details-top-packages-list">
-            <li class="var-details-top-packages-empty" id="var-details-top-packages-empty">
-              Run a scan to see overlapping packages.
-            </li>
-          </ul>
-        </article>
-
-        <!-- Resources -->
-        <article class="card var-details-browser">
-          <header class="var-details-browser-header">
-            <div class="var-details-browser-title">
-              <h3>Resources</h3>
-              <span class="var-details-asset-count" id="var-details-asset-count">Not Scanned</span>
-            </div>
-            <div class="var-details-browser-actions">
-              <div class="var-details-filter-group" role="tablist" aria-label="Resource filter">
-                <button id="var-details-filter-all" class="var-details-filter-button is-active" type="button" role="tab" aria-selected="true" data-resource-filter="all">All</button>
-                <button id="var-details-filter-shared" class="var-details-filter-button" type="button" role="tab" aria-selected="false" data-resource-filter="shared">Shared</button>
-              </div>
-              <div class="var-details-search">
-                <span class="material-symbols-outlined input-leading-icon">search</span>
-                <input id="var-details-search" type="text" placeholder="Search resources..." />
-              </div>
-            </div>
-          </header>
-          <div class="var-details-table-wrap">
-            <table class="var-details-table">
-              <thead>
-                <tr>
-                  <th class="vd-col-preview">Type</th>
-                  <th class="vd-col-name">Resource</th>
-                  <th class="vd-col-cat">Category</th>
-                  <th class="vd-col-crc">CRC32</th>
-                  <th class="vd-col-category">Sharing</th>
-                  <th class="vd-col-size">Size</th>
-                </tr>
-              </thead>
-              <tbody id="var-details-tbody">
-                <tr class="var-details-empty-row">
-                  <td colspan="6" id="var-details-empty">
-                    Select a package to view its resources.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="var-details-browser-footer">
-            <span id="var-details-browser-summary"></span>
-            <div class="var-details-pagination" id="var-details-pagination" hidden>
-              <button class="var-details-page-nav" id="var-details-page-prev" type="button">
-                <span class="material-symbols-outlined">chevron_left</span>
-              </button>
-              <span class="var-details-page-indicator" id="var-details-page-indicator">1 / 1</span>
-              <button class="var-details-page-nav" id="var-details-page-next" type="button">
-                <span class="material-symbols-outlined">chevron_right</span>
-              </button>
-            </div>
-          </div>
-        </article>
-
-        <!-- Sheet-style overlay panel for the active resource preview. Lives at
-             the end of the view so its fixed position is relative to the
-             viewport, mirroring the shadcn/ui Sheet component (slides in from
-             the right with an overlay). Hidden by default. -->
-        <div id="var-details-resource-preview-overlay" class="var-details-sheet-overlay hidden" data-vd-preview-close="1"></div>
-        <aside
-          id="var-details-resource-preview"
-          class="var-details-sheet card hidden"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="var-details-resource-preview-title"
-        ></aside>
-      </section>
+      <!-- Package Explorer: one package, shown visually (setupPackageExplorer in app.js). -->
+      <section id="pkg-view" class="app-main lib-view pkg-view hidden"></section>
 
       <!-- Reclaim Space View (hidden by default; revealed by sidebar Reclaim Space link).
            Scans a folder of local VARs, aggregates their unique CRC set, and ranks DB
            packages by total bytes covered — the user could download those packages and
            rewire local VARs to depend on the shared resources, reclaiming duplicate bytes. -->
-      <!-- Package Explorer: one package, shown visually (setupPackageExplorer in app.js). -->
-      <section id="pkg-view" class="app-main lib-view pkg-view hidden"></section>
 
       <section id="reclaim-space-view" class="app-main reclaim-space-view hidden">
         <header class="var-details-header">
@@ -2395,7 +2075,7 @@
             Paste a forum post or a few links — Pixeldrain files and lists, MEGA files and folders, MediaFire,
             or links straight to a .var or .zip. Every .var they hold is listed, including the ones inside
             (password-protected) zips, ready to save as download sources — which Scan Dependencies,
-            VAR Details and the Hub then download from.
+            Package Explorer and the Hub then download from.
           </p>
         </header>
 
@@ -2566,7 +2246,7 @@
                   <span>Move them into AddonPackages instead of copying</span>
                 </label>
                 <p class="settings-path-hint">
-                  Drop .var files or folders anywhere (except VAR Details, Missing Resources and Internalize, which take
+                  Drop .var files or folders anywhere (except Package Explorer, Missing Resources and Internalize, which take
                   one .var) to add them to your library. Each is checked first; ones already in the library are skipped.
                 </p>
               </div>
@@ -3476,14 +3156,13 @@
             var settings = document.getElementById("settings-view");
             var buildDb = document.getElementById("build-db-view");
             var varPackages = document.getElementById("var-packages-view");
-            var varDetails = document.getElementById("var-details-view");
             var resourceList = document.getElementById("resource-list-view");
             var reclaim = document.getElementById("reclaim-space-view");
             var uniqueResources = document.getElementById("unique-resources-view");
             var missingResources = document.getElementById("missing-resources-view");
             var internalizeResources = document.getElementById("internalize-resources-view");
             var dbfPage = document.getElementById("dbf-page");
-            if (!settings || !buildDb || !varPackages || !varDetails || !resourceList || !reclaim || !uniqueResources || !missingResources || !internalizeResources || !dbfPage) return;
+            if (!settings || !buildDb || !varPackages || !resourceList || !reclaim || !uniqueResources || !missingResources || !internalizeResources || !dbfPage) return;
             // Hub (after VaM Backstage's Hub page) is hidden with the rest.
             var hubView = document.getElementById("hub-view");
             if (hubView) hubView.classList.add("hidden");
@@ -3494,7 +3173,6 @@
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
-            varDetails.classList.add("hidden");
             resourceList.classList.add("hidden");
             reclaim.classList.add("hidden");
             uniqueResources.classList.add("hidden");
@@ -3520,9 +3198,6 @@
             } else if (route === "var-packages") {
               varPackages.classList.remove("hidden");
               if (window.__refreshVarPackagesView) window.__refreshVarPackagesView();
-            } else if (route === "var-details") {
-              varDetails.classList.remove("hidden");
-              if (window.__refreshVarDetailsView) window.__refreshVarDetailsView();
             } else if (route === "resource-list") {
               resourceList.classList.remove("hidden");
               if (window.__refreshResourceListView) window.__refreshResourceListView();

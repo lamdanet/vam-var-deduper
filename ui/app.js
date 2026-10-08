@@ -196,82 +196,6 @@ const state = {
   // global activeTask slot so it doesn't clobber Overview/Find Duplicates if
   // the user starts one while the other is running.
   buildDbBackfill: { taskId: null, running: false, cancelRequested: false },
-  // Selected package for the VAR Details drill-down. `item` mirrors the
-  // VarPackageListItem row that was clicked in the VAR Packages table;
-  // `resources` caches the load_db_package_resources response so re-opening
-  // the same package is instant.
-  varDetails: {
-    packageId: null,
-    item: null,
-    // How the current item was loaded. "local" — picked/dropped/typed by the
-    // user, file is on disk. "folder" — VAR Packages folder-mode row, file is
-    // on disk. "db" — VAR Packages database-mode row OR a top-package click
-    // for an indexed package whose file may not be on disk anymore. The
-    // analyzer reads this flag to decide whether to harvest from the .var
-    // file (local/folder) or fall back to load_db_package_resources (db).
-    itemSource: null,
-    // True when the current item is known to live on local disk: either it
-    // was loaded from a real file path (loadVarDetailsFromPath, source="local"),
-    // came from VAR Packages in folder mode (source="folder"), or a Scan Local
-    // has just completed against it. False for DB-only synthetic rows whose
-    // file_path is just an index hint and may be stale.
-    itemIsLocal: false,
-    // VAR folder used by Scan Local. Mirrors #var-details-folder-input and is
-    // initialized from the global config's input_dir.
-    inputDir: "",
-    // Raw DbFindResponse from start_db_find_task. Cleared on package change.
-    dbFindResult: null,
-    // Derived overlap metrics from computeVarOverlap(). Cleared with dbFindResult.
-    overlap: null,
-    // Per-resource rows derived from dbFindResult.groups (one row per source_ref).
-    resources: [],
-    // Resource-table filter: "all" includes both shared and unique rows;
-    // "shared" only shows resources with at least one DB match.
-    resourceFilter: "all",
-    // package_ids of Top Sharing Packages rows currently expanded to show
-    // their per-resource breakdown.
-    expandedPackages: new Set(),
-    // Sort mode for the Top Sharing Packages list — "count" ranks by number
-    // of shared resources, "size" by total shared bytes. Toggle only surfaces
-    // for local-source scans where users care about reclaim potential.
-    topPackagesSortBy: "count",
-    // "none" before any scan; "database" or "local" after a successful run.
-    assetSource: "none",
-    assetPage: 0,
-    resourcesLoading: false,
-    resourcesError: null,
-    search: "",
-    scanning: false,
-    scanKind: null,
-    scanTaskId: null,
-    progress: 0,
-    progressMessage: "",
-    // Internal path of the row currently selected in the Resources table. Drives
-    // the inline preview panel — null hides it. Resets whenever the active
-    // package changes so previews from one VAR don't bleed into another.
-    selectedResourceKey: null,
-    // "Download this VAR" banner state, shown only when the opened VAR isn't
-    // present locally. state: "idle"|"resolving"|"available"|"unavailable"
-    // |"downloading"|"cancelling"|"done"|"failed". resolvedFor guards one resolve
-    // per package; presenceChecked gates the banner until path_exists confirms
-    // the file really is absent (a stale-but-present DB path = still in library).
-    availability: {
-      state: "idle",
-      resolvedFor: null,
-      presenceChecked: false,
-      // Whether the VAR's file is actually present on disk. Drives the banner —
-      // kept separate from itemIsLocal (which Scan Local flips for its own UI).
-      filePresent: false,
-      url: null,
-      filename: null,
-      size: null,
-      host: null,
-      percent: 0,
-      detail: "",
-      error: null,
-      taskId: null,
-    },
-  },
   // Reclaim Space page — scans a folder of local VARs, aggregates their unique
   // CRC set, and ranks DB packages by total bytes covered. Independent of any
   // VAR Details state so the two pages can coexist with separate scan tasks.
@@ -429,8 +353,6 @@ function buildGroupHaystacks(groups) {
   for (const g of groups) buildGroupHaystack(g);
 }
 
-const VAR_DETAILS_PAGE_SIZE = 20;
-const VAR_DETAILS_TOP_PACKAGES = 10;
 
 const I18N = {
   en_US: {
@@ -1704,7 +1626,7 @@ function setupDownloadsManager() {
         const job = state.downloads.find((j) => j.id === Number(o.getAttribute("data-dl-open")));
         if (!job) return;
         closeDownloadsPanel();
-        openCandidatePackageInVarDetails(job.packageId, job.localPath || "");
+        openCandidatePackage(job.packageId, job.localPath || "");
       }
     });
   }
@@ -2292,7 +2214,6 @@ function closeDedupComplete() {
   $("complete-open-backup").dataset.path = "";
   $("complete-backdrop").classList.add("hidden");
 }
-
 
 function getGroupTargetRefs(group) {
   const targetPackageId = getActiveTargetPackageId();
@@ -3384,7 +3305,7 @@ function libIsMissingView() {
 // ---- Thumbnails ------------------------------------------------------------
 
 // file_path (or `${file_path}::${entry}` for content rows) -> data URL | null.
-// Also read by ensureVarDetailsPreview, so VAR Details opens with the image the
+// Also read by Package Explorer, so it opens with the image the
 // card already showed.
 const varPackageThumbCache = new Map();
 const VP_THUMB_CACHE_MAX = 900;
@@ -5794,7 +5715,7 @@ function setupVamPrefs() {
 // A visual page for one package: its cover and pictures, stat tiles, what its
 // bytes are made of, its content as image cards, a map of what it needs and
 // what needs it, a treemap of its files and what it shares with the rest of
-// the database. An alternative to VAR Details, built on the library's data and
+// the database. It replaced VAR Details; built on the library's data and
 // actions.
 
 const PKG = {
@@ -6603,7 +6524,7 @@ function pkgActionsHtml(item, details, primaryAct) {
   ];
   return `${primary}<div class="pkg-tools" role="group" aria-label="Library">${library.join("")}</div>
     <div class="pkg-tools" role="group" aria-label="Tools">${tools.join("")}</div>
-    <button type="button" class="pkg-act pkg-act-more" data-pkg-act="more" title="More: VAR Details, images, send to, delete…">
+    <button type="button" class="pkg-act pkg-act-more" data-pkg-act="more" title="More: images, send to, creator, delete…">
       <span class="material-symbols-outlined">more_horiz</span><span>More</span></button>`;
 }
 
@@ -7988,7 +7909,6 @@ function pkgOutlineHtml() {
     </div>`;
 }
 
-
 function pkgTreeClick(t) {
   const tz = t.closest?.("[data-pkg-tz]");
   if (tz) {
@@ -8057,7 +7977,6 @@ function pkgTreeClick(t) {
   pkgRenderFiles();
   return true;
 }
-
 
 // ---- Files: by kind --------------------------------------------------------------------
 // What a file is for, by where it sits first and its extension second — so a
@@ -8368,8 +8287,8 @@ function pkgRenderShared() {
 const PKG_OVERLAP_STORE = "pkg.overlapSource";
 
 // "db": the database index (fast). "folders": every .var in AddonPackages, the
-// offload folder and your library folders, read now (what VAR Details called
-// Scan Local).
+// offload folder and your library folders, read now (what VAR Details used to
+// call Scan Local).
 function pkgOverlapSource() {
   try {
     return localStorage.getItem(PKG_OVERLAP_STORE) === "folders" ? "folders" : "db";
@@ -8533,7 +8452,7 @@ async function pkgLoadSharedFolders() {
 
 // ---- Clothing and hair: their textures and previews -----------------------------------
 // A .vam (or its .vaj / .vab) opens a sheet of the images that belong to the
-// item, with their sizes (what VAR Details showed in its preview panel).
+// item, with their sizes (what VAR Details used to show in its preview panel).
 
 const PKG_VAM_RE = /\.(vam|vaj|vab)$/i;
 const PKG_VAM_CACHE = new Map();
@@ -8681,7 +8600,6 @@ function pkgMoreMenu(event) {
   const y = rect ? rect.bottom + 4 : event.clientY;
   const items = [
     ...(item.__lib ? [{ label: "Show in VAR Packages", action: () => pkgRevealInLibrary(item) }] : []),
-    { label: "Open in VAR Details", action: () => openVarDetailsView(item, "folder") },
     { label: "View all images", action: () => vpImagesOpen(item.file_path) },
     { label: "Export scene image", action: () => exportOneSceneImage(item.file_path, item.package_id) },
     { label: "Add download source…", action: () => sourceOpen({ packageId: item.package_id, fileName: item.file_name || `${item.package_id}.var` }) },
@@ -9085,14 +9003,14 @@ function setupPackageExplorer() {
 }
 
 // ---- Drop .var files on the window (dropin.rs) ---------------------------------------
-// Anywhere except the pages that take a single .var (VAR Details, Missing
+// Anywhere except the pages that take a single .var (Package Explorer, Missing
 // Resources, Internalize): the dropped packages are checked and copied — or
 // moved, per Settings — into AddonPackages.
 
 const DROP_STORE = "dropin.moveFiles";
 
 function dropTakenByPage() {
-  return ["var-details-view", "pkg-view", "missing-resources-view", "internalize-resources-view"].some(
+  return ["pkg-view", "missing-resources-view", "internalize-resources-view"].some(
     (id) => $(id) && !$(id).classList.contains("hidden"),
   );
 }
@@ -10878,7 +10796,7 @@ function libColumns() {
 
 // Grid-aware keyboard navigation, after Backstage's: arrows/Home/End move the
 // selection, Shift extends it, Ctrl/Cmd+A selects every match, Esc collapses a
-// multi-selection, Enter opens VAR Details, Delete recycles.
+// multi-selection, Enter opens the package's details, Delete recycles.
 function libOnKeyDown(event) {
   const view = $("var-packages-view");
   if (!view || view.classList.contains("hidden") || libIsMissingView()) return;
@@ -13439,7 +13357,7 @@ function vpDeleteRowMenuItems(packageId, filePath) {
         if (VP_DELETE.running) return;
         // Close first: this navigates away, so the delete is abandoned.
         vpDeleteModalClose(false);
-        openCandidatePackageInVarDetails(pkg, path);
+        openCandidatePackage(pkg, path);
       },
     },
     {
@@ -13567,7 +13485,7 @@ function setupVarPackagesMaintenance() {
     $(containerId)?.addEventListener("click", (event) => {
       const btn = event.target.closest?.("[data-vp-delete]");
       if (!btn) return;
-      // Stop the row/card's own "open VAR Details" handler from also firing.
+      // Stop the row/card's own "open details" handler from also firing.
       event.preventDefault();
       event.stopPropagation();
       vpDeleteOne(btn.getAttribute("data-vp-delete"), btn).catch((e) =>
@@ -13580,7 +13498,7 @@ function setupVarPackagesMaintenance() {
     $(containerId)?.addEventListener("click", (event) => {
       const btn = event.target.closest?.("[data-vp-images]");
       if (!btn) return;
-      // Same reason as the delete button: don't also open VAR Details.
+      // Same reason as the delete button: don't also open its details.
       event.preventDefault();
       event.stopPropagation();
       vpImagesOpen(btn.getAttribute("data-vp-images"));
@@ -13647,153 +13565,6 @@ function switchToBuildDatabase() {
   }
 }
 
-// Toggle every sibling .app-main view off and reveal the VAR Details page.
-// Used both by the sidebar route switch and by row-clicks inside the VAR
-// Packages table. Sidebar nav also flips the .active class on its own.
-function showVarDetailsView() {
-  const varDetails = $("var-details-view");
-  if (!varDetails) return;
-  // Every page is an .app-main section; show only VAR Details.
-  document.querySelectorAll(".app-main").forEach((view) => {
-    view.classList.toggle("hidden", view !== varDetails);
-  });
-
-  const sidebarLinks = document.querySelectorAll("[data-sidebar-link]");
-  sidebarLinks.forEach((link) => {
-    link.classList.toggle(
-      "active",
-      link.getAttribute("data-sidebar-link") === "var-details"
-    );
-  });
-}
-
-// Set the package shown by the VAR Details view and reset its table state.
-// `source` is "local" | "folder" | "db" — determines which scan path the
-// analyzer takes (file harvest vs DB-only lookup).
-function selectVarDetailsItem(item, source = null) {
-  if (!item || !item.package_id) return;
-  state.varDetails.packageId = item.package_id;
-  state.varDetails.item = item;
-  state.varDetails.itemSource = source;
-  // "local" → loaded from a picked .var path (verified on disk).
-  // "folder" → from VAR Packages in folder mode (also verified on disk).
-  // "db" or null → DB-only or unknown; file_path may be stale.
-  state.varDetails.itemIsLocal = source === "local" || source === "folder";
-  state.varDetails.search = "";
-  state.varDetails.resources = [];
-  state.varDetails.dbFindResult = null;
-  state.varDetails.overlap = null;
-  state.varDetails.assetSource = "none";
-  state.varDetails.assetPage = 0;
-  state.varDetails.resourcesError = null;
-  state.varDetails.resourcesLoading = false;
-  state.varDetails.expandedPackages = new Set();
-  state.varDetails.selectedResourceKey = null;
-  // Reset the download-availability banner for the newly selected package so it
-  // re-resolves (or stays hidden when the file is present).
-  state.varDetails.availability = {
-    state: "idle",
-    resolvedFor: null,
-    presenceChecked: state.varDetails.itemIsLocal, // known-local needs no check
-    filePresent: state.varDetails.itemIsLocal, // local/folder sources are on disk
-    url: null,
-    filename: null,
-    size: null,
-    host: null,
-    percent: 0,
-    detail: "",
-    error: null,
-    taskId: null,
-  };
-  // For DB/unknown-source items the indexed file_path may be stale. Verify it
-  // exists; if so, treat the VAR as in-library (no banner). If not (or no path),
-  // the banner appears and offers to download.
-  if (!state.varDetails.itemIsLocal) {
-    if (item.file_path && invoke) {
-      const checking = item;
-      invoke("path_exists", { path: item.file_path })
-        .then((exists) => {
-          if (state.varDetails.item !== checking) return;
-          state.varDetails.availability.filePresent = !!exists;
-          if (exists) state.varDetails.itemIsLocal = true;
-          state.varDetails.availability.presenceChecked = true;
-          renderVarDetails();
-        })
-        .catch(() => {
-          if (state.varDetails.item !== checking) return;
-          state.varDetails.availability.presenceChecked = true;
-          renderVarDetails();
-        });
-    } else {
-      state.varDetails.availability.presenceChecked = true;
-    }
-  }
-  if (typeof item.creatorFlag !== "number") item.creatorFlag = 0;
-  const searchInput = $("var-details-search");
-  if (searchInput) searchInput.value = "";
-  renderVarDetails();
-  ensureVarDetailsPreview(item);
-  refreshCreatorFlagForItem(item);
-}
-
-// VAR Packages rows/cards (folder mode) and DB rows arrive without an embedded
-// scene image — only `loadVarDetailsFromPath` pre-fills `scene_image_data`.
-// When the details view opens for such an item, pull its scene preview on
-// demand via `get_var_file_stats`, reusing the grid's thumbnail cache so a
-// click from the Local grid is instant. Fire-and-forget; a missing/unreadable
-// file just leaves the placeholder in place.
-async function ensureVarDetailsPreview(item) {
-  if (!item || item.scene_image_data || !item.file_path || !invoke) return;
-  const filePath = item.file_path;
-  const apply = (dataUrl) => {
-    if (!dataUrl) return;
-    item.scene_image_data = dataUrl;
-    if (state.varDetails.item === item) renderVarDetailsPreview(dataUrl);
-  };
-  if (varPackageThumbCache.has(filePath)) {
-    apply(varPackageThumbCache.get(filePath));
-    return;
-  }
-  try {
-    const stats = await invoke("get_var_file_stats", { packagePath: filePath });
-    const dataUrl = stats?.scene_image_data ?? null;
-    varPackageThumbCache.set(filePath, dataUrl);
-    apply(dataUrl);
-  } catch {
-    /* file missing or unreadable — keep the placeholder */
-  }
-}
-
-// Pulls the persisted creator flag for the freshly selected VAR. The buttons
-// render in their default (inactive) state immediately; this fills in the
-// active class once the DB call returns. Fire-and-forget by design — failures
-// just leave the buttons in their default state.
-async function refreshCreatorFlagForItem(item) {
-  if (!item || !item.creator) return;
-  try {
-    const flag = await invoke("get_creator_flag", { creatorName: item.creator });
-    if (state.varDetails.item !== item) return;
-    item.creatorFlag = Number(flag) || 0;
-    renderVarDetails();
-  } catch (err) {
-    console.warn("get_creator_flag failed", err);
-  }
-}
-
-// Click-through entry point used by VAR Packages row clicks: switch to the
-// details view AND populate it with the clicked item. The asset table stays
-// empty until the user runs a scan.
-function openVarDetailsView(item, source = null) {
-  showVarDetailsView();
-  if (item && item.package_id) {
-    selectVarDetailsItem(item, source);
-  } else {
-    renderVarDetails();
-  }
-}
-
-window.__openVarDetailsView = openVarDetailsView;
-
 // The one way to open a package's details: Package Explorer, which also
 // handles packages only the database knows and files that are gone (it finds
 // a download). `target` is a listing item, a database stub or a .var path.
@@ -13801,44 +13572,25 @@ async function openPackageDetails(target) {
   pkgOpen(target);
 }
 
-
-// Action-button entry point: open a candidate package in VAR Details.
-// Prefers a freshly-loaded view from disk when we have a real file path
-// (local candidates carry the absolute .var path in `package_file`);
-// falls back to a cached VAR Packages row, then to a synthetic DB stub.
-// Hoisted to file scope so both the Missing Resources and Internalize
-// Resources IIFEs can call it — they're sibling closures and a function
-// defined inside one is invisible from the other.
-function openCandidatePackageInVarDetails(packageId, packageFile) {
-  if (!packageId || typeof openVarDetailsView !== "function") return;
+// Action-button entry point: open a candidate package's details. Local
+// candidates carry the absolute .var path in `package_file`; otherwise a
+// cached VAR Packages row, else the package by id (database only). Hoisted to
+// file scope so both the Missing Resources and Internalize Resources IIFEs can
+// call it — they're sibling closures and a function defined inside one is
+// invisible from the other.
+function openCandidatePackage(packageId, packageFile) {
+  if (!packageId) return;
   const hasPath = packageFile && /[\\/]/.test(packageFile) && /\.var$/i.test(packageFile);
   if (hasPath) {
     openPackageDetails(packageFile);
     return;
   }
   const cached = (state.varPackagesItems ?? []).find((it) => it.package_id === packageId);
-  if (cached) {
-    openPackageDetails(cached, "folder");
-    return;
-  }
-  const fileName = packageFile ? String(packageFile).split(/[\\/]/).pop() : `${packageId}.var`;
-  openVarDetailsView({
-    package_id: packageId,
-    file_name: fileName,
-    file_path: hasPath ? packageFile : "",
-    creator: deriveCreatorFromPackageId(packageId),
-    size_bytes: 0,
-    modified_ms: null,
-    indexed: true,
-    scene_image_data: null,
-  }, "db");
+  openPackageDetails(cached ?? { package_id: packageId, file_path: "" });
 }
 
-// Sidebar entry point: re-render with whatever package (if any) is already
-// cached on state. Never auto-fetches resources — the user must trigger a
-// scan explicitly. View toggling is handled by index.html's switch.
 // ===========================================================================
-// Scan Dependencies (VAR Details, VAR Packages, the top bar's paste mode).
+// Scan Dependencies (VAR Packages, Package Explorer, the top bar's paste mode).
 //
 // Reads the packages' recursive meta.json dependency tree, checks each dep
 // against AddonPackages, the offload folder and the folders added here, and
@@ -13863,7 +13615,6 @@ const DEP_SCAN = {
   checked: new Set(),
 };
 
-
 function depScanSetText(id, v) {
   const el = $(id);
   if (el) el.textContent = String(v ?? "");
@@ -13876,8 +13627,9 @@ function depFileName(p) {
 
 /// The folders a scan checks, in the order a dependency's copy is picked from:
 /// AddonPackages (the VAR library folder), the offload folder, then the folders
-/// added here and a custom downloads folder. Falls back to the VAR Details
-/// folder so the scan is not "everything unknown" when nothing is set.
+/// added here and a custom downloads folder. Falls back to AddonPackages and the
+/// folders Scan Local used to keep, so the scan is not "everything unknown"
+/// when nothing is set.
 function depLibraryDirs() {
   const dl = depUniqueDirs([
     ($("settings-library-folder")?.value || "").trim(),
@@ -13885,10 +13637,7 @@ function depLibraryDirs() {
     ...depExtraDirs(),
   ]);
   if (dl.length) return dl;
-  return [
-    ($("var-details-folder-input")?.value || "").trim(),
-    ...getAdditionalDirs("varDetails"),
-  ].filter(Boolean);
+  return [vamAddonPackagesDir(), ...getAdditionalDirs("varDetails")].filter(Boolean);
 }
 
 // The scan folders besides AddonPackages and the offload folder (either may
@@ -13921,7 +13670,7 @@ function depScanBusy(busy) {
   DEP_SCAN.running = busy;
   // Every entry point into this modal is disabled while a task runs, so a second
   // one can't start mid-flight.
-  for (const id of ["var-details-scan-deps-button", "find-deps-toggle", "dep-scan-analyze-text", "dep-scan-text-input", "dep-scan-root-settings", "dep-scan-add-folder"]) {
+  for (const id of ["find-deps-toggle", "dep-scan-analyze-text", "dep-scan-text-input", "dep-scan-root-settings", "dep-scan-add-folder"]) {
     const el = $(id);
     if (el) el.disabled = busy;
   }
@@ -14001,18 +13750,17 @@ function depMapItems(res) {
 }
 
 // `target` names the packages to scan: { filePath, packageId } for one, or
-// { filePaths, label } for several. Omitted (the VAR Details button) → the
-// package currently open in VAR Details. `filter` picks the tab it opens on.
+// { filePaths, label } for several. `filter` picks the tab it opens on.
 async function depStartScan(target, { filter = "all" } = {}) {
   if (!invoke || DEP_SCAN.running) return;
   depHubResetFailures();
   const filePaths = (
-    target?.filePaths ?? [target?.filePath || state.varDetails?.item?.file_path || ""]
+    target?.filePaths ?? [target?.filePath || ""]
   ).filter(Boolean);
   const label =
     target?.label ||
     target?.packageId ||
-    (filePaths.length === 1 ? state.varDetails?.item?.package_id || depFileName(filePaths[0]) : "");
+    (filePaths.length === 1 ? depFileName(filePaths[0]) : "");
   if (!filePaths.length) {
     addLog("Scan Dependencies: no .var file on disk to scan.");
     return;
@@ -14656,10 +14404,7 @@ async function depDownloadAllMissing() {
   for (const it of queue) await depDownloadOne(it.pkg, dest);
 }
 
-function setupVarDetailsDeps() {
-  $("var-details-scan-deps-button")?.addEventListener("click", () => {
-    depStartScan().catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
-  });
+function setupDepScanDialog() {
 
   $("dep-scan-analyze-text")?.addEventListener("click", () => {
     depAnalyzeText().catch((e) => addLog(`Find Dependencies: ${String(e)}`));
@@ -14800,33 +14545,11 @@ function setupVarDetailsDeps() {
       // Read both before closing — depScanClose clears DEP_SCAN.items.
       const pkg = it.pkg;
       const path = it.localPath;
-      // The backdrop is position:fixed inset:0, so navigating without closing
-      // would leave VAR Details sitting behind it. Not the sidebar-link route the
-      // "Change in Settings" handler takes: showVarDetailsView already unhides the
-      // view and moves the sidebar highlight, and the link would additionally
-      // re-render the previously selected package for a frame.
+      // The backdrop is position:fixed inset:0: close it before opening the
+      // package, or the dialog would sit over the page.
       depScanClose();
-      openCandidatePackageInVarDetails(pkg, path);
+      openCandidatePackage(pkg, path);
     }
-  });
-}
-
-window.__refreshVarDetailsView = function () {
-  renderVarDetails();
-};
-
-function closeVarDetailsView() {
-  const varDetails = $("var-details-view");
-  const varPackages = $("var-packages-view");
-  if (!varDetails || !varPackages) return;
-  varDetails.classList.add("hidden");
-  varPackages.classList.remove("hidden");
-  const sidebarLinks = document.querySelectorAll("[data-sidebar-link]");
-  sidebarLinks.forEach((link) => {
-    link.classList.toggle(
-      "active",
-      link.getAttribute("data-sidebar-link") === "var-packages"
-    );
   });
 }
 
@@ -14909,7 +14632,6 @@ async function loadFavorites() {
 // no-ops when their views are hidden or empty.
 function refreshFavoriteIndicators() {
   renderVarPackages();
-  renderVarDetailsFavoriteButton();
   dbPkgsRender();
 }
 
@@ -14991,54 +14713,6 @@ async function blockCreatorByPackageId(packageId) {
   }
 }
 
-// Build a synthetic VarPackageListItem from an arbitrary .var path the user
-// picked or dropped onto the page. Calls get_var_file_stats for size/modified
-// + scene preview, and reuses any cached row from state.varPackagesItems so
-// the indexed flag survives.
-async function loadVarDetailsFromPath(filePath) {
-  if (!filePath || !invoke) return;
-  const trimmed = String(filePath).trim();
-  if (!trimmed) return;
-  if (!/\.var$/i.test(trimmed)) {
-    const message = `Only .var files are supported (got "${trimmed}").`;
-    addLog(`VAR Details: ${message}`);
-    state.varDetails.resourcesError = message;
-    renderVarDetails();
-    return;
-  }
-
-  let stats = null;
-  try {
-    stats = await invoke("get_var_file_stats", { packagePath: trimmed });
-  } catch (error) {
-    const message = `Could not read "${trimmed}" — ${String(error)}`;
-    addLog(`VAR Details: ${message}`);
-    state.varDetails.resourcesError = message;
-    renderVarDetails();
-    return;
-  }
-
-  const fileName = trimmed.split(/[\\/]/).pop() || trimmed;
-  const packageId = fileName.replace(/\.var$/i, "");
-  const cached = (state.varPackagesItems ?? []).find(
-    (it) => it.package_id === packageId || it.file_path === trimmed
-  );
-
-  const item = {
-    file_path: trimmed,
-    file_name: fileName,
-    package_id: packageId,
-    creator: cached?.creator ?? deriveCreatorFromPackageId(packageId),
-    size_bytes: stats?.size_bytes ?? cached?.size_bytes ?? 0,
-    modified_ms: stats?.modified_ms ?? cached?.modified_ms ?? null,
-    indexed: cached ? Boolean(cached.indexed) : false,
-    scene_image_data: stats?.scene_image_data ?? null,
-  };
-
-  showVarDetailsView();
-  selectVarDetailsItem(item, "local");
-}
-
 // Send a VAR (by path) to another page as its Target VAR and navigate there.
 // Shared by the VAR Details "Send as Target VAR" tile and the VAR Packages
 // grid right-click menu. `page`: "db-find" | "missing-resources" | "internalize-resources".
@@ -15111,657 +14785,9 @@ function sendVarToTargetPage(page, path) {
   addLog(`Sent target VAR to Clean VARs: ${target}`);
 }
 
-// Sums DbFindResponse.groups into the per-package overlap summary the UI
-// renders. shared* metrics are denominated in "this VAR's resources" — every
-// group with at least one db_match counts as one shared resource. perPackage
-// aggregates how many of THIS VAR's resources also live inside each other
-// package, so the user can see who could most benefit from deduping against
-// this base candidate.
-function computeVarOverlap(response) {
-  const totalResources = Number(response?.source_resources ?? 0);
-  let sharedResources = 0;
-  let reclaimable = 0;
-  const perPackage = new Map();
-  for (const g of response?.groups ?? []) {
-    const matches = Array.isArray(g.db_matches) ? g.db_matches : [];
-    if (matches.length === 0) continue;
-    sharedResources += 1;
-    reclaimable += Number(g.reclaimable_bytes ?? 0);
-    const groupSize = Number(g.size ?? 0);
-    // Source path inside THIS var that's being shared. Collapse multiple
-    // source_refs (rare; same CRC at different paths) by taking the first.
-    const srcPath = g.source_refs?.[0]?.internal_path ?? "";
-    for (const m of matches) {
-      const key = String(m.package_id ?? "");
-      if (!key) continue;
-      const slot = perPackage.get(key) ?? {
-        sharedCount: 0,
-        sharedBytes: 0,
-        filePath: m.file_path ?? "",
-        resources: [],
-      };
-      slot.sharedCount += 1;
-      slot.sharedBytes += groupSize;
-      slot.resources.push({
-        internal_path: srcPath,
-        other_path: m.internal_path ?? "",
-        size: groupSize,
-      });
-      perPackage.set(key, slot);
-    }
-  }
-  const unique = Math.max(0, totalResources - sharedResources);
-  return {
-    totalResources,
-    sharedResources,
-    unique,
-    overlapPercent: totalResources ? (sharedResources / totalResources) * 100 : 0,
-    uniquePercent: totalResources ? (unique / totalResources) * 100 : 0,
-    reclaimable,
-    // Full per-package list, unsliced. The renderer sorts and slices based
-    // on the current topPackagesSortBy mode so toggling between count/size
-    // is instant and doesn't require recomputing the overlap.
-    topPackages: [...perPackage.entries()]
-      .map(([packageId, v]) => ({ packageId, ...v })),
-    distinctPackages: perPackage.size,
-  };
-}
-
-// Reshape DbFindResponse.groups into one row per source_ref so the resource
-// table can render a flat list with per-row "shared with N" badges. A single
-// CRC may appear multiple times inside the same VAR (rare), so we expand
-// every source_ref individually.
-function buildVarDetailsResources(response) {
-  const out = [];
-  for (const g of response?.groups ?? []) {
-    const sharedWith = Array.isArray(g.db_matches) ? g.db_matches.length : 0;
-    const truncatedExtra = Number(g.db_matches_truncated ?? 0);
-    for (const ref of g.source_refs ?? []) {
-      out.push({
-        package_id: ref.package_id,
-        package_file: ref.file_path,
-        internal_path: ref.internal_path,
-        size: Number(ref.size ?? g.size ?? 0),
-        crc32: g.crc32,
-        crc32_hex: g.crc32_hex,
-        shared_with: sharedWith,
-        shared_with_truncated: truncatedExtra,
-      });
-    }
-  }
-  // Order: most-shared first, then by path so similar resources cluster.
-  out.sort((a, b) => (b.shared_with - a.shared_with) || a.internal_path.localeCompare(b.internal_path));
-  return out;
-}
-
-// Single entry point for both Scan to Database and Scan Local. Calls
-// start_db_find_task with the right request, polls progress locally, then
-// stores the DbFindResponse + computed overlap on state.varDetails. For
-// DB-sourced items the request is sent with `source_package_id` so the
-// backend harvests CRCs from the index instead of opening a (possibly
-// missing) .var on disk — Scan Local then matches those CRCs against the
-// picked folder, giving accurate "shared with" + size data even for
-// packages that aren't local.
-async function runVarDetailsAnalysis(mode) {
-  const item = state.varDetails.item;
-  if (!item || !invoke) return;
-  if (state.varDetails.scanning) return;
-  if (mode !== "database" && mode !== "local") return;
-
-  const useDbSource = state.varDetails.itemSource === "db";
-  if (!useDbSource && !item.file_path) {
-    state.varDetails.resourcesError = "No file path available for this package.";
-    renderVarDetails();
-    return;
-  }
-
-  let inputDir = null;
-  if (mode === "local") {
-    const dirRaw = state.varDetails.inputDir || $("var-details-folder-input")?.value || "";
-    inputDir = String(dirRaw).trim();
-    if (!inputDir) {
-      const message = "Set your VaM directory in Settings before running Scan Local.";
-      addLog(`VAR Details: ${message}`);
-      state.varDetails.resourcesError = message;
-      state.varDetails.dbFindResult = null;
-      state.varDetails.overlap = null;
-      state.varDetails.assetSource = "none";
-      renderVarDetails();
-      return;
-    }
-    state.varDetails.inputDir = inputDir;
-    // Mirror to the global #input-dir so other pages and save_config pick it up.
-    const globalInput = $("input-dir");
-    if (globalInput && globalInput.value.trim() !== inputDir) {
-      globalInput.value = inputDir;
-    }
-    try {
-      await invoke("save_config", { config: buildCurrentConfig() });
-    } catch (_error) {}
-  }
-
-  const packageId = state.varDetails.packageId;
-  state.varDetails.scanning = true;
-  state.varDetails.scanKind = mode;
-  state.varDetails.progress = 0;
-  state.varDetails.progressMessage = mode === "database" ? "Querying database…" : "Scanning folder…";
-  state.varDetails.resourcesError = null;
-  state.varDetails.dbFindResult = null;
-  state.varDetails.overlap = null;
-  state.varDetails.resources = [];
-  state.varDetails.assetSource = "none";
-  state.varDetails.assetPage = 0;
-  state.varDetails.search = "";
-  state.varDetails.expandedPackages = new Set();
-  const searchInput = $("var-details-search");
-  if (searchInput) searchInput.value = "";
-  renderVarDetails();
-
-  let taskId = null;
-  try {
-    // DB-sourced items: harvest source CRCs from the indexed resource list
-    // (no disk read of the .var). Local-sourced items: harvest from the file.
-    // include_unshared lets the response carry every harvested resource, so
-    // the Resources table can switch between All / Shared without a reharvest.
-    const requestPayload = useDbSource
-      ? {
-          mode,
-          source_package_id: state.varDetails.packageId,
-          input_dir: inputDir,
-          additional_input_dirs: getAdditionalDirs("varDetails"),
-          include_vap: false,
-          include_unshared: true,
-        }
-      : {
-          mode,
-          target_var_path: item.file_path,
-          input_dir: inputDir,
-          additional_input_dirs: getAdditionalDirs("varDetails"),
-          include_vap: false,
-          include_unshared: true,
-        };
-    const handle = await invoke("start_db_find_task", { request: requestPayload });
-    taskId = handle?.id ?? null;
-    state.varDetails.scanTaskId = taskId;
-  } catch (error) {
-    const message = String(error);
-    addLog(`VAR Details: scan failed to start — ${message}`);
-    state.varDetails.scanning = false;
-    state.varDetails.scanKind = null;
-    state.varDetails.progressMessage = "";
-    state.varDetails.resourcesError = message;
-    renderVarDetails();
-    return;
-  }
-
-  if (!taskId) {
-    state.varDetails.scanning = false;
-    state.varDetails.scanKind = null;
-    renderVarDetails();
-    return;
-  }
-
-  let result = null;
-  let pollError = null;
-  try {
-    while (true) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      let payload;
-      try {
-        payload = await invoke("get_task_progress", { taskId });
-      } catch (error) {
-        pollError = String(error);
-        break;
-      }
-      if (!payload) break;
-      const fraction = Number(payload.progress ?? 0);
-      const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
-      state.varDetails.progress = pct;
-      state.varDetails.progressMessage = String(payload.message ?? "Working…");
-      renderVarDetailsPipeline();
-      renderVarDetailsOverlap();
-      if (payload.error) {
-        pollError = String(payload.error);
-        break;
-      }
-      if (payload.done) {
-        result = payload.db_find_result ?? null;
-        break;
-      }
-    }
-  } finally {
-    if (taskId) {
-      try {
-        await invoke("clear_task", { taskId });
-      } catch (_error) {}
-    }
-  }
-
-  // Bail if the user has switched to a different package mid-flight.
-  if (state.varDetails.packageId !== packageId) {
-    state.varDetails.scanning = false;
-    state.varDetails.scanKind = null;
-    state.varDetails.scanTaskId = null;
-    return;
-  }
-
-  if (pollError) {
-    addLog(`VAR Details: scan failed — ${pollError}`);
-    state.varDetails.resourcesError = pollError;
-  } else if (result) {
-    state.varDetails.dbFindResult = result;
-    state.varDetails.overlap = computeVarOverlap(result);
-    state.varDetails.resources = buildVarDetailsResources(result);
-    state.varDetails.assetSource = mode;
-    // A successful Scan Local proves the file is on disk regardless of how
-    // the item was originally loaded (e.g. a DB row that turned out to also
-    // exist locally), so flip the flag so Path / Send-as-Target appear.
-    if (mode === "local") {
-      state.varDetails.itemIsLocal = true;
-    }
-  }
-  state.varDetails.scanning = false;
-  state.varDetails.scanKind = null;
-  state.varDetails.scanTaskId = null;
-  renderVarDetails();
-}
-
-// ---- VAR Details "download this VAR" availability banner -------------------
-// Shown only when the opened VAR isn't present locally. Resolves a Hub/mirror
-// source, then downloads it (reusing start_download_one_task) with progress +
-// cancel, and reloads the now-present file on success.
-
-// VAR Details prefers to re-download a missing var into the folder the DB
-// expected it in (re-download in place). Returns "" when there's no such path,
-// and the caller falls back to the central downloads folder (ensureDownloadsDir).
-function varDetailsDownloadsDir() {
-  const item = state.varDetails.item;
-  if (item && item.file_path) {
-    const p = String(item.file_path);
-    const idx = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
-    if (idx > 0) return p.slice(0, idx);
-  }
-  return "";
-}
-
-async function resolveVarSource(packageId) {
-  const av = state.varDetails.availability;
-  if (!invoke || !packageId) return;
-  av.state = "resolving";
-  av.resolvedFor = packageId;
-  av.error = null;
-  renderVarDetailsAvailability();
-  let taskId = null;
-  let result = null;
-  try {
-    const handle = await invoke("start_resolve_var_source_task", { packageId });
-    taskId = handle && handle.id != null ? handle.id : null;
-    if (taskId == null) throw new Error("failed to start source check");
-    while (true) {
-      await new Promise((r) => setTimeout(r, 250));
-      if (state.varDetails.packageId !== packageId) return; // user navigated away
-      const payload = await invoke("get_task_progress", { taskId });
-      if (!payload) break;
-      if (payload.error) throw new Error(String(payload.error));
-      if (payload.done) { result = payload.var_source_result ?? null; break; }
-    }
-    try { await invoke("clear_task", { taskId }); } catch (_e) {}
-  } catch (e) {
-    if (state.varDetails.packageId === packageId) {
-      av.state = "unavailable";
-      av.error = String(e);
-      renderVarDetailsAvailability();
-    }
-    return;
-  }
-  if (state.varDetails.packageId !== packageId) return;
-  if (result && result.download_url) {
-    av.state = "available";
-    av.url = result.download_url;
-    av.filename = result.filename || `${packageId}.var`;
-    av.size = result.file_size != null ? Number(result.file_size) : null;
-    av.host = result.host || "";
-    av.error = null;
-  } else {
-    av.state = "unavailable";
-    av.error = result && result.error ? String(result.error) : null;
-  }
-  renderVarDetailsAvailability();
-}
-
-// Hands the download to the central Downloads manager; the banner shows a
-// "downloading (see Downloads)" note and reloads the VAR on completion. Live
-// progress + cancel live in the top-bar Downloads popover.
-async function downloadVarItself() {
-  const av = state.varDetails.availability;
-  const packageId = state.varDetails.packageId;
-  if (!av.url || !packageId) return;
-  // Prefer re-downloading in place; otherwise use the central downloads folder
-  // (Settings → library → prompt-and-save).
-  const destDir = varDetailsDownloadsDir() || (await ensureDownloadsDir());
-  if (!destDir) {
-    av.error = "No downloads folder selected.";
-    renderVarDetailsAvailability();
-    addLog("VAR Details: no downloads folder selected.");
-    return;
-  }
-  const filename = av.filename || `${packageId}.var`;
-  av.state = "downloading";
-  av.error = null;
-  renderVarDetailsAvailability();
-  queueDownload({
-    packageId,
-    url: av.url,
-    filename,
-    host: av.host,
-    destDir,
-    label: filename,
-    autoDeps: true,
-    onDone: (status, info) => {
-      if (state.varDetails.packageId !== packageId) return; // navigated away
-      if (status === "done" || status === "exists") {
-        av.state = "done";
-        renderVarDetailsAvailability();
-        const finalPath = (info && info.localPath) || "";
-        if (finalPath) {
-          varPackageThumbCache.delete(finalPath);
-          loadVarDetailsFromPath(finalPath).catch(() => {});
-        }
-      } else if (status === "cancelled") {
-        av.state = "available";
-        renderVarDetailsAvailability();
-      } else {
-        av.state = "failed";
-        av.error = "Download failed — see the Downloads panel.";
-        renderVarDetailsAvailability();
-      }
-    },
-  });
-}
-
-function renderVarDetailsAvailability() {
-  const container = $("var-details-availability");
-  if (!container) return;
-  const item = state.varDetails.item;
-  const av = state.varDetails.availability;
-  // Show only when the file isn't actually on disk (filePresent), and presence
-  // was checked. Driven by filePresent — NOT itemIsLocal — so a Scan Local
-  // (which flips itemIsLocal for its own UI) doesn't hide a not-downloaded VAR.
-  if (!item || av.filePresent || !av.presenceChecked) {
-    container.classList.add("hidden");
-    container.innerHTML = "";
-    return;
-  }
-  container.classList.remove("hidden");
-  // Resolve the source once per package; resolveVarSource flips state + re-renders.
-  if (av.resolvedFor !== state.varDetails.packageId && av.state === "idle") {
-    resolveVarSource(state.varDetails.packageId);
-    return;
-  }
-
-  const sizeStr = av.size && av.size > 0 ? formatBytesLocal(av.size) : "";
-  const hostLabel =
-    av.host === "hub" ? "Hub"
-    : av.host === "pixeldrain" ? "Pixeldrain"
-    : av.host === "mediafire" ? "MediaFire"
-    : av.host === "mega" ? "MEGA"
-    : (av.host || "");
-
-  let icon = "cloud_download";
-  let title = "Not in your library";
-  let sub = "";
-  let actions = "";
-  let progress = "";
-  let cls = "";
-
-  switch (av.state) {
-    case "resolving":
-      sub = "Checking the Hub…";
-      cls = "is-resolving";
-      break;
-    case "available": {
-      sub = [hostLabel, sizeStr].filter(Boolean).join(" · ") || "Available to download";
-      if (av.error) sub = `${sub} — ${escapeHtml(av.error)}`;
-      actions = `<button class="primary-button" type="button" data-vda="download"><span class="material-symbols-outlined">download</span><span>Download</span></button>`;
-      break;
-    }
-    case "downloading":
-    case "cancelling":
-      icon = "downloading";
-      sub = hostLabel ? `Downloading from ${hostLabel} — see Downloads` : "Downloading — see Downloads";
-      cls = "is-resolving";
-      actions = `<button class="ghost-button" type="button" data-vda="open-downloads"><span class="material-symbols-outlined">download</span><span>View Downloads</span></button>`;
-      break;
-    case "done":
-      icon = "check_circle";
-      title = "Downloaded";
-      sub = "Now in your library";
-      cls = "is-done";
-      break;
-    case "failed":
-      icon = "error";
-      title = "Download failed";
-      sub = av.error ? escapeHtml(av.error) : "Try again.";
-      cls = "is-failed";
-      actions = `<button class="primary-button" type="button" data-vda="download"><span class="material-symbols-outlined">refresh</span><span>Retry</span></button>`;
-      break;
-    case "unavailable":
-      icon = "cloud_off";
-      title = "Not available to download";
-      sub = av.error
-        ? `Couldn't reach the Hub — ${escapeHtml(av.error)}`
-        : "Not on the Hub or in your imported links.";
-      cls = "is-unavailable";
-      break;
-    default:
-      sub = "Not in your library";
-  }
-
-  container.className = `var-details-availability ${cls}`.trim();
-  container.innerHTML =
-    `<div class="var-details-availability-main">` +
-    `<span class="material-symbols-outlined var-details-availability-icon">${icon}</span>` +
-    `<div class="var-details-availability-text">` +
-    `<span class="var-details-availability-title">${escapeHtml(title)}</span>` +
-    `<span class="var-details-availability-sub">${sub}</span>` +
-    `</div>` +
-    `<div class="var-details-availability-actions">${actions}</div>` +
-    `</div>` +
-    progress;
-}
-
-function renderVarDetails() {
-  const item = state.varDetails.item;
-
-  const set = (id, value) => {
-    const el = $(id);
-    if (el) el.textContent = value;
-  };
-
-  const titleEl = $("var-details-title");
-  if (titleEl) {
-    titleEl.textContent = item
-      ? `VAR Details: ${item.file_name ?? item.package_id ?? ""}`
-      : "VAR Details";
-  }
-
-  // "Download this VAR" banner (only when the file isn't present locally).
-  renderVarDetailsAvailability();
-
-  if (!item) {
-    set("var-details-meta-filename", "—");
-    set("var-details-meta-creator", "—");
-    set("var-details-meta-size", "—");
-    set("var-details-meta-modified", "—");
-    set("var-details-meta-status", "No package selected");
-    const statusTile = $("var-details-meta-status-tile");
-    if (statusTile) {
-      statusTile.classList.remove("is-indexed");
-      statusTile.classList.remove("is-unindexed");
-    }
-    const statusDot = $("var-details-status-dot");
-    if (statusDot) {
-      statusDot.classList.remove("is-indexed");
-      statusDot.classList.remove("is-unindexed");
-    }
-    const pathTile = $("var-details-meta-path-tile");
-    if (pathTile) pathTile.hidden = true;
-    const sendToTile = $("var-details-meta-sendto-tile");
-    if (sendToTile) sendToTile.hidden = true;
-    renderCreatorFlagButtons(null);
-    renderVarDetailsFavoriteButton();
-    renderVarDetailsPreview(null);
-    const scanDb = $("var-details-scan-db-button");
-    const scanLocal = $("var-details-scan-local-button");
-    if (scanDb) scanDb.disabled = true;
-    if (scanLocal) scanLocal.disabled = true;
-    renderVarDetailsPipeline();
-    renderVarDetailsAssetTable();
-    return;
-  }
-
-  set("var-details-meta-filename", item.file_name ?? item.package_id ?? "—");
-  set("var-details-meta-creator", item.creator ?? "—");
-  renderCreatorFlagButtons(item);
-  renderVarDetailsFavoriteButton();
-  set("var-details-meta-size", formatBytesLocal(item.size_bytes));
-  set("var-details-meta-modified", formatVarModifiedMs(item.modified_ms));
-
-  const indexed = Boolean(item.indexed);
-  const statusEl = $("var-details-meta-status");
-  const statusTile = $("var-details-meta-status-tile");
-  const statusDot = $("var-details-status-dot");
-  if (statusEl) {
-    statusEl.textContent = indexed ? "Indexed / Active" : "Not Indexed";
-  }
-  if (statusTile) {
-    statusTile.classList.toggle("is-indexed", indexed);
-    statusTile.classList.toggle("is-unindexed", !indexed);
-  }
-  if (statusDot) {
-    statusDot.classList.toggle("is-indexed", indexed);
-    statusDot.classList.toggle("is-unindexed", !indexed);
-  }
-
-  renderVarDetailsPreview(item.scene_image_data ?? null);
-
-  const pathTile = $("var-details-meta-path-tile");
-  const pathValue = $("var-details-meta-path");
-  const pathAction = $("var-details-meta-path-action");
-  const filePath = item.file_path ?? "";
-  // Path + Send tiles share the same gate: only meaningful when the file is
-  // actually on local disk (loaded from a path/folder, or a local scan ran).
-  // A DB-only row's file_path is just an index hint and may be stale.
-  const showLocalActions = filePath && state.varDetails.itemIsLocal;
-  if (pathTile) pathTile.hidden = !showLocalActions;
-  if (pathValue) {
-    pathValue.textContent = filePath || "—";
-    pathValue.title = filePath;
-  }
-  if (pathAction) {
-    pathAction.hidden = !showLocalActions;
-    pathAction.dataset.filePath = filePath;
-  }
-
-  const sendToTile = $("var-details-meta-sendto-tile");
-  if (sendToTile) sendToTile.hidden = !showLocalActions;
-
-  const packageInput = $("var-details-package-input");
-  if (packageInput && packageInput.value !== (item.file_path ?? "")) {
-    packageInput.value = item.file_path ?? "";
-  }
-
-  const scanDbLabel = $("var-details-scan-db-label");
-  if (scanDbLabel) {
-    scanDbLabel.textContent = indexed ? "Re-Scan to Database" : "Scan to Database";
-  }
-  const scanDb = $("var-details-scan-db-button");
-  const scanLocal = $("var-details-scan-local-button");
-  const noPath = !item.file_path;
-  const isDbSource = state.varDetails.itemSource === "db";
-  // For DB-sourced items, both scans harvest source CRCs from the index
-  // (`source_package_id`) so neither needs the .var to exist on disk. For
-  // local items, both modes need a real path.
-  const ready = isDbSource || !noPath;
-  if (scanDb) scanDb.disabled = state.varDetails.scanning || !ready;
-  if (scanLocal) scanLocal.disabled = state.varDetails.scanning || !ready;
-  // Send-to-Missing-Resources only makes sense when there's a real .var on
-  // disk — DB-only synthetic items have no file path the other page can
-  // open. Mirror Scan Local's gating logic.
-  const sendMissing = $("var-details-send-missing-button");
-  if (sendMissing) sendMissing.disabled = state.varDetails.scanning || noPath;
-
-  // Reading dependencies means opening the .var to parse meta.json, so it needs
-  // a real file on disk — same gate as Send-to-Missing-Resources.
-  const scanDeps = $("var-details-scan-deps-button");
-  if (scanDeps) scanDeps.disabled = state.varDetails.scanning || noPath;
-
-  renderVarDetailsPipeline();
-  renderVarDetailsAssetTable();
-}
-
-// Show/hide the favorite/block button row and reflect the active flag.
-//   flag 1 = favorite, 2 = blocked, anything else = none.
-// The row is hidden entirely when there's no creator to act on.
-function renderCreatorFlagButtons(item) {
-  const wrap = $("var-details-creator-flags");
-  if (!wrap) return;
-  const creator = item?.creator;
-  if (!creator) {
-    wrap.hidden = true;
-    return;
-  }
-  wrap.hidden = false;
-  const flag = Number(item.creatorFlag) || 0;
-  const favBtn = $("var-details-creator-flag-favorite");
-  const blockBtn = $("var-details-creator-flag-blocked");
-  if (favBtn) favBtn.classList.toggle("is-active", flag === 1);
-  if (blockBtn) blockBtn.classList.toggle("is-active", flag === 2);
-}
-
-// Header star for the currently open package. State comes from the bulk
-// _favoritePackages set, so no per-item DB fetch is needed (unlike
-// refreshCreatorFlagForItem for the creator flag).
-function renderVarDetailsFavoriteButton() {
-  const btn = $("var-details-fav-button");
-  if (!btn) return;
-  const pid = state.varDetails?.item?.package_id ?? null;
-  btn.hidden = !pid;
-  if (!pid) return;
-  const fav = _favoritePackages.has(pid);
-  btn.classList.toggle("is-active", fav);
-  btn.setAttribute("aria-pressed", fav ? "true" : "false");
-  btn.title = fav ? t("varFavRemove") : t("varFavAdd");
-  const label = $("var-details-fav-label");
-  if (label) label.textContent = fav ? t("varFavLabelOn") : t("varFavLabelOff");
-}
-
-function renderVarDetailsPreview(sceneImageData) {
-  const preview = $("var-details-preview");
-  if (!preview) return;
-  const caption = preview.querySelector(".var-details-preview-caption");
-  preview.querySelectorAll("img, .material-symbols-outlined").forEach((el) => el.remove());
-
-  if (sceneImageData) {
-    const img = document.createElement("img");
-    const src = String(sceneImageData);
-    img.src = src.startsWith("data:") ? src : `data:image/jpeg;base64,${src}`;
-    img.alt = "Scene preview";
-    preview.insertBefore(img, caption ?? null);
-    // The image is clickable to open the full-size zoom lightbox.
-    preview.classList.add("is-zoomable");
-  } else {
-    const icon = document.createElement("span");
-    icon.className = "material-symbols-outlined";
-    icon.textContent = "image_not_supported";
-    preview.insertBefore(icon, caption ?? null);
-    preview.classList.remove("is-zoomable");
-  }
-}
-
 // Image zoom lightbox: opens the given image source full-size with a zoom
-// slider. Reusable for any preview image; currently driven by the VAR Details
-// scene preview. Closes on backdrop click, the X button, or ESC.
+// slider. Reusable for any preview image. Closes on backdrop click, the X
+// button, or ESC.
 function openImageZoom(src, alt) {
   const backdrop = $("image-zoom-backdrop");
   const img = $("image-zoom-img");
@@ -15806,137 +14832,6 @@ function setupImageZoom() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeImageZoom();
   });
-  // Open from the VAR Details scene preview image.
-  const preview = $("var-details-preview");
-  if (preview) {
-    preview.addEventListener("click", () => {
-      const img = preview.querySelector("img");
-      if (img && img.src) openImageZoom(img.src, img.alt);
-    });
-  }
-}
-
-function renderVarDetailsPipeline() {
-  const pct = Math.max(0, Math.min(100, Math.round(state.varDetails.progress || 0)));
-  const card = $("var-details-progress-card");
-  const fill = $("var-details-pipeline-fill");
-  const percent = $("var-details-pipeline-percent");
-  const text = $("var-details-pipeline-text");
-  const dot = $("var-details-pipeline-dot");
-  if (card) card.hidden = !state.varDetails.scanning;
-  if (!state.varDetails.scanning) return;
-  if (fill) fill.style.width = `${pct}%`;
-  if (percent) percent.textContent = `${pct}%`;
-  if (text) {
-    text.textContent = state.varDetails.progressMessage || "Indexing package…";
-  }
-  if (dot) {
-    dot.classList.toggle("is-active", true);
-  }
-}
-
-const VAR_DETAILS_CATEGORY_ICONS = {
-  geometry: "view_in_ar",
-  textures: "image",
-  scenes: "movie",
-  scripts: "code",
-  clothing: "checkroom",
-  morphs: "face",
-  hair: "cut",
-  audio: "graphic_eq",
-  documentation: "description",
-  custom: "folder",
-};
-
-const VAR_DETAILS_EXT_ICONS = {
-  png: "image",
-  jpg: "image",
-  jpeg: "image",
-  tga: "image",
-  webp: "image",
-  bmp: "image",
-  gif: "image",
-  cs: "code",
-  cslist: "code",
-  js: "javascript",
-  json: "data_object",
-  vmi: "category",
-  vam: "deployed_code",
-  vmb: "deployed_code",
-  vap: "deployed_code",
-  vaj: "deployed_code",
-  obj: "view_in_ar",
-  fbx: "view_in_ar",
-  glb: "view_in_ar",
-  txt: "description",
-  md: "description",
-  pdf: "description",
-  wav: "graphic_eq",
-  mp3: "graphic_eq",
-  ogg: "graphic_eq",
-};
-
-function pickVarDetailsAssetIcon(internalPath) {
-  if (!internalPath) return "draft";
-  const lower = String(internalPath).toLowerCase();
-  const firstSegment = lower.split(/[\\/]/, 1)[0] ?? "";
-  if (firstSegment in VAR_DETAILS_CATEGORY_ICONS) {
-    return VAR_DETAILS_CATEGORY_ICONS[firstSegment];
-  }
-  const dot = lower.lastIndexOf(".");
-  if (dot >= 0) {
-    const ext = lower.slice(dot + 1);
-    if (ext in VAR_DETAILS_EXT_ICONS) return VAR_DETAILS_EXT_ICONS[ext];
-  }
-  return "draft";
-}
-
-// Mirror of Rust naming::category_name_for_path — keep in sync. Path-based
-// prefixes win over extension fallbacks so e.g. a .json under Saves/scene/ is
-// classified Scene rather than Other.
-function deriveVarDetailsCategory(internalPath) {
-  const lower = String(internalPath ?? "").toLowerCase();
-  if (!lower) return "—";
-  if (lower.startsWith("saves/scene/") || lower.includes("/saves/scene/")) return "Scene";
-  if (lower.startsWith("custom/subscene/") || lower.includes("/subscene/")) return "SubScene";
-  if (lower.includes("/morphs/") || lower.startsWith("custom/atom/person/morphs/")) return "Morph";
-  if (lower.includes("/clothing/") || lower.startsWith("custom/clothing/")) return "Clothing";
-  if (lower.includes("/hair/") || lower.startsWith("custom/hair/")) return "Hair";
-  if (lower.includes("/textures/") || lower.startsWith("custom/atom/person/textures/")) return "Texture";
-  if (lower.includes("/scripts/") || lower.startsWith("custom/scripts/")) return "Scripts";
-  if (lower.includes("/sounds/") || lower.startsWith("custom/sounds/")) return "Audio";
-  if (lower.includes("/assets/") || lower.startsWith("custom/assets/")) return "Asset";
-  if (lower.includes("/presets/")) return "Preset";
-  const dot = lower.lastIndexOf(".");
-  const ext = dot >= 0 ? lower.slice(dot + 1) : "";
-  switch (ext) {
-    case "vmi":
-    case "vmb":
-      return "Morph";
-    case "vam":
-    case "vaj":
-    case "vab":
-      return "Asset";
-    case "vap":
-      return "Preset";
-    case "jpg":
-    case "jpeg":
-    case "png":
-    case "tif":
-    case "tiff":
-    case "tga":
-      return "Texture";
-    case "wav":
-    case "mp3":
-    case "ogg":
-      return "Audio";
-    case "cs":
-    case "cslist":
-    case "dll":
-      return "Scripts";
-    default:
-      return "Other";
-  }
 }
 
 function formatCrc32Hex(crc) {
@@ -15945,470 +14840,6 @@ function formatCrc32Hex(crc) {
   const num = Number(crc);
   if (!Number.isFinite(num)) return "—";
   return (num >>> 0).toString(16).padStart(8, "0").toUpperCase();
-}
-
-function renderVarDetailsOverlap() {
-  const overlap = state.varDetails.overlap;
-  const card = $("var-details-overlap-card");
-  const sourceTag = $("var-details-overlap-source");
-  const hint = $("var-details-overlap-hint");
-  const verdict = $("var-details-verdict");
-  const set = (id, value) => {
-    const el = $(id);
-    if (el) el.textContent = value;
-  };
-
-  const sourceLabel = state.varDetails.assetSource === "database"
-    ? "Database"
-    : state.varDetails.assetSource === "local"
-    ? "Local Folder"
-    : "Not Scanned";
-  if (sourceTag) sourceTag.textContent = sourceLabel;
-
-  // Surface scan errors prominently — the user is most likely to be looking
-  // at this card, so an error in start_db_find_task (e.g., the file isn't a
-  // valid zip, or the folder is missing) needs to be visible here, not just
-  // in the hidden console log.
-  if (state.varDetails.resourcesError && !state.varDetails.scanning) {
-    set("var-details-stat-total", "—");
-    set("var-details-stat-shared", "—");
-    set("var-details-stat-shared-sub", "");
-    set("var-details-stat-unique", "—");
-    set("var-details-stat-unique-sub", "");
-    set("var-details-stat-reclaim", "—");
-    if (hint) hint.textContent = "The last scan failed.";
-    if (verdict) {
-      verdict.hidden = false;
-      verdict.dataset.kind = "warn";
-      verdict.textContent = `Scan failed: ${state.varDetails.resourcesError}`;
-    }
-    if (card) card.classList.remove("has-data");
-    return;
-  }
-
-  if (!overlap) {
-    set("var-details-stat-total", "—");
-    set("var-details-stat-shared", "—");
-    set("var-details-stat-shared-sub", "");
-    set("var-details-stat-unique", "—");
-    set("var-details-stat-unique-sub", "");
-    set("var-details-stat-reclaim", "—");
-    if (hint) {
-      hint.textContent = state.varDetails.scanning
-        ? state.varDetails.progressMessage || "Working…"
-        : "Run a scan to compare this package against your collection.";
-    }
-    if (verdict) verdict.hidden = true;
-    if (card) card.classList.remove("has-data");
-    return;
-  }
-
-  set("var-details-stat-total", String(overlap.totalResources));
-  set("var-details-stat-shared", String(overlap.sharedResources));
-  set("var-details-stat-shared-sub", `${overlap.overlapPercent.toFixed(1)}% of resources`);
-  set("var-details-stat-unique", String(overlap.unique));
-  set("var-details-stat-unique-sub", `${overlap.uniquePercent.toFixed(1)}% unique`);
-  set("var-details-stat-reclaim", formatBytesLocal(overlap.reclaimable));
-  if (card) card.classList.add("has-data");
-
-  if (hint) {
-    hint.textContent = state.varDetails.assetSource === "database"
-      ? "Compared against every package indexed in the local database."
-      : "Compared against every .var in the picked folder.";
-  }
-
-  // Verdict — show whichever is more striking. Threshold logic: a strong
-  // base candidate has ≥60% overlap; a low-download-value VAR has ≤20% unique.
-  if (verdict) {
-    let kind = null;
-    let message = "";
-    if (overlap.totalResources === 0) {
-      kind = "neutral";
-      message = "No resources to compare.";
-    } else if (overlap.overlapPercent >= 60) {
-      kind = "good";
-      message = `Strong base candidate — ${overlap.sharedResources} of ${overlap.totalResources} resources (${overlap.overlapPercent.toFixed(0)}%) live in ${overlap.distinctPackages} other package${overlap.distinctPackages === 1 ? "" : "s"}, ${formatBytesLocal(overlap.reclaimable)} potentially reclaimable.`;
-    } else if (overlap.uniquePercent <= 20) {
-      kind = "warn";
-      message = `Low download value — only ${overlap.unique} of ${overlap.totalResources} resources (${overlap.uniquePercent.toFixed(0)}%) are not already in your collection.`;
-    } else if (overlap.sharedResources > 0) {
-      kind = "neutral";
-      message = `${overlap.sharedResources} of ${overlap.totalResources} resources (${overlap.overlapPercent.toFixed(0)}%) overlap with ${overlap.distinctPackages} other package${overlap.distinctPackages === 1 ? "" : "s"}.`;
-    } else {
-      kind = "good";
-      message = `Fully unique — none of this package's resources appear in your collection.`;
-    }
-    verdict.hidden = false;
-    verdict.dataset.kind = kind;
-    verdict.textContent = message;
-  }
-}
-
-function renderVarDetailsTopPackages() {
-  const list = $("var-details-top-packages-list");
-  if (!list) return;
-  const overlap = state.varDetails.overlap;
-  const all = overlap?.topPackages ?? [];
-
-  // Toggle is only meaningful when the target VAR lives on local disk — its
-  // own resource sizes are what feed `sharedBytes`, so DB-only items can't
-  // produce a meaningful "by size" ranking. Either scan kind (local or
-  // database) is fine as long as itemIsLocal is true.
-  const sortBy = state.varDetails.topPackagesSortBy === "size" ? "size" : "count";
-  const sortToggle = $("var-details-top-packages-sort");
-  const showToggle = state.varDetails.itemIsLocal
-    && state.varDetails.assetSource !== "none"
-    && all.length > 0;
-  if (sortToggle) sortToggle.hidden = !showToggle;
-  document.querySelectorAll("[data-top-sort]").forEach((btn) => {
-    const isActive = btn.getAttribute("data-top-sort") === sortBy;
-    btn.classList.toggle("is-active", isActive);
-    btn.setAttribute("aria-selected", isActive ? "true" : "false");
-  });
-  const hint = $("var-details-top-packages-hint");
-  if (hint) {
-    hint.textContent = showToggle && sortBy === "size"
-      ? "Other VARs that share the most data with this package."
-      : "Other VARs that contain the most resources from this package.";
-  }
-
-  if (!overlap || all.length === 0) {
-    const message = !state.varDetails.item
-      ? "Pick a package to begin."
-      : state.varDetails.assetSource === "none"
-      ? "Run a scan to see overlapping packages."
-      : "No other packages share resources with this one.";
-    list.innerHTML = `<li class="var-details-top-packages-empty">${escapeHtml(message)}</li>`;
-    return;
-  }
-  const top = [...all]
-    .sort((a, b) => sortBy === "size"
-      ? b.sharedBytes - a.sharedBytes
-      : b.sharedCount - a.sharedCount)
-    .slice(0, VAR_DETAILS_TOP_PACKAGES);
-  // Bar-fill denominator follows the active sort metric so the longest bar
-  // always represents the leader of whichever ranking is active.
-  const denom = sortBy === "size"
-    ? Math.max(1, top[0]?.sharedBytes ?? 1)
-    : Math.max(1, overlap.sharedResources);
-  const expanded = state.varDetails.expandedPackages ?? new Set();
-  list.innerHTML = top.map((p) => {
-    const metric = sortBy === "size" ? p.sharedBytes : p.sharedCount;
-    const pct = Math.max(0, Math.min(100, Math.round((metric / denom) * 100)));
-    const isExpanded = expanded.has(p.packageId);
-    const sharedRows = (p.resources ?? []).map((r) => {
-      const path = r.internal_path || r.other_path || "(unknown path)";
-      const icon = pickVarDetailsAssetIcon(path);
-      return `
-        <li class="var-details-shared-resource">
-          <span class="var-details-shared-resource-icon">
-            <span class="material-symbols-outlined">${escapeHtml(icon)}</span>
-          </span>
-          <span class="var-details-shared-resource-path" title="${escapeAttribute(path)}">${escapeHtml(path)}</span>
-          <span class="var-details-shared-resource-size">${escapeHtml(formatBytesLocal(Number(r.size ?? 0)))}</span>
-        </li>
-      `;
-    }).join("");
-    return `
-      <li class="var-details-top-package${isExpanded ? " is-expanded" : ""}" data-package-id="${escapeAttribute(p.packageId)}" data-file-path="${escapeAttribute(p.filePath ?? "")}">
-        <button class="var-details-top-package-toggle" type="button" data-vd-toggle="1" aria-expanded="${isExpanded ? "true" : "false"}">
-          <span class="var-details-top-package-main">
-            <span class="var-details-top-package-name">${escapeHtml(p.packageId)}</span>
-            <span class="var-details-top-package-meta">${p.sharedCount} resource${p.sharedCount === 1 ? "" : "s"} · ${escapeHtml(formatBytesLocal(p.sharedBytes))}</span>
-          </span>
-          <span class="var-details-share-bar"><span class="var-details-share-bar-fill" style="width: ${pct}%"></span></span>
-          <span class="var-details-top-package-chevron material-symbols-outlined">${isExpanded ? "expand_less" : "expand_more"}</span>
-        </button>
-        <button class="var-details-top-package-open" type="button" data-vd-open="1" aria-label="Open package details" title="Open package details">
-          <span class="material-symbols-outlined">arrow_forward</span>
-        </button>
-        <ul class="var-details-shared-resources" ${isExpanded ? "" : "hidden"}>
-          ${sharedRows || '<li class="var-details-shared-resource is-empty">No resource details available.</li>'}
-        </ul>
-      </li>
-    `;
-  }).join("");
-}
-
-function renderVarDetailsResourceTable() {
-  const tbody = $("var-details-tbody");
-  const countEl = $("var-details-asset-count");
-  const summaryEl = $("var-details-browser-summary");
-  const pagination = $("var-details-pagination");
-  if (!tbody) return;
-
-  const resources = state.varDetails.resources ?? [];
-  const search = String(state.varDetails.search ?? "").trim().toLowerCase();
-  const filterMode = state.varDetails.resourceFilter === "shared" ? "shared" : "all";
-  const matchesFilter = (r) =>
-    filterMode === "shared" ? Number(r.shared_with ?? 0) > 0 : true;
-  const matchesSearch = (r) =>
-    !search || String(r.internal_path ?? "").toLowerCase().includes(search);
-  const filtered = resources.filter((r) => matchesFilter(r) && matchesSearch(r));
-
-  // Reflect the filter selection on the toggle buttons each render.
-  document.querySelectorAll("[data-resource-filter]").forEach((btn) => {
-    const isActive = btn.getAttribute("data-resource-filter") === filterMode;
-    btn.classList.toggle("is-active", isActive);
-    btn.setAttribute("aria-selected", isActive ? "true" : "false");
-  });
-
-  if (countEl) {
-    if (state.varDetails.assetSource === "none") {
-      countEl.textContent = "Not Scanned";
-    } else {
-      const sourceLabel = state.varDetails.assetSource === "local" ? "Local" : "Database";
-      countEl.textContent = `${resources.length} Resource${resources.length === 1 ? "" : "s"} · ${sourceLabel}`;
-    }
-  }
-
-  const hidePagination = () => {
-    if (pagination) pagination.hidden = true;
-  };
-
-  if (!state.varDetails.item) {
-    tbody.innerHTML = `<tr class="var-details-empty-row"><td colspan="6">Pick a .var package to view its details.</td></tr>`;
-    if (summaryEl) summaryEl.textContent = "";
-    hidePagination();
-    return;
-  }
-  if (state.varDetails.assetSource === "none" && !state.varDetails.scanning) {
-    tbody.innerHTML = `<tr class="var-details-empty-row"><td colspan="6">Choose <b>Scan to Database</b> or <b>Scan Local</b> in Source Configuration to populate the resource list.</td></tr>`;
-    if (summaryEl) summaryEl.textContent = "";
-    hidePagination();
-    return;
-  }
-  if (state.varDetails.scanning) {
-    tbody.innerHTML = `<tr class="var-details-empty-row"><td colspan="6">${escapeHtml(state.varDetails.progressMessage || "Working…")}</td></tr>`;
-    if (summaryEl) summaryEl.textContent = "";
-    hidePagination();
-    return;
-  }
-  if (state.varDetails.resourcesError) {
-    tbody.innerHTML = `<tr class="var-details-empty-row"><td colspan="6">${escapeHtml(state.varDetails.resourcesError)}</td></tr>`;
-    if (summaryEl) summaryEl.textContent = "";
-    hidePagination();
-    return;
-  }
-  if (resources.length === 0) {
-    tbody.innerHTML = `<tr class="var-details-empty-row"><td colspan="6">No resources returned by the scan.</td></tr>`;
-    if (summaryEl) summaryEl.textContent = "0 of 0 items";
-    hidePagination();
-    return;
-  }
-  if (filtered.length === 0) {
-    let message;
-    if (search && filterMode === "shared") {
-      message = `No shared resources match "${escapeHtml(search)}"`;
-    } else if (search) {
-      message = `No resources match "${escapeHtml(search)}"`;
-    } else if (filterMode === "shared") {
-      message = `This package has no shared resources — switch to <b>All</b> to see the full list.`;
-    } else {
-      message = `No resources to display.`;
-    }
-    tbody.innerHTML = `<tr class="var-details-empty-row"><td colspan="6">${message}</td></tr>`;
-    if (summaryEl) summaryEl.textContent = `0 of ${resources.length} items`;
-    hidePagination();
-    return;
-  }
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / VAR_DETAILS_PAGE_SIZE));
-  if (state.varDetails.assetPage >= totalPages) state.varDetails.assetPage = totalPages - 1;
-  if (state.varDetails.assetPage < 0) state.varDetails.assetPage = 0;
-  const page = state.varDetails.assetPage;
-  const start = page * VAR_DETAILS_PAGE_SIZE;
-  const slice = filtered.slice(start, start + VAR_DETAILS_PAGE_SIZE);
-
-  const activePath = state.varDetails.selectedResourceKey;
-  const previewable = state.varDetails.itemIsLocal && Boolean(state.varDetails.item?.file_path);
-  const rows = slice.map((r) => {
-    const internalPath = r.internal_path ?? "";
-    const icon = pickVarDetailsAssetIcon(internalPath);
-    const sizeText = formatBytesLocal(Number(r.size ?? 0));
-    const sharedWith = Number(r.shared_with ?? 0);
-    const truncated = Number(r.shared_with_truncated ?? 0);
-    const category = deriveVarDetailsCategory(internalPath);
-    const crcHex = r.crc32_hex ? String(r.crc32_hex).toUpperCase() : formatCrc32Hex(r.crc32);
-    let chip;
-    if (sharedWith === 0) {
-      chip = `<span class="var-details-share-chip is-unique">Unique</span>`;
-    } else {
-      const label = truncated > 0
-        ? `Shared · ${sharedWith}+`
-        : `Shared · ${sharedWith}`;
-      chip = `<span class="var-details-share-chip is-shared">${escapeHtml(label)}</span>`;
-    }
-    const isPreviewable = previewable && isPreviewablePath(internalPath);
-    const isActive = activePath && activePath === internalPath;
-    const rowClass = [
-      isPreviewable ? "is-previewable" : "",
-      isActive ? "is-active" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    return `
-      <tr class="${rowClass}" data-resource-path="${escapeAttribute(internalPath)}">
-        <td class="vd-col-preview">
-          <div class="var-details-asset-icon">
-            <span class="material-symbols-outlined">${escapeHtml(icon)}</span>
-          </div>
-        </td>
-        <td class="vd-col-name"><span class="var-details-asset-name">${escapeHtml(internalPath)}</span></td>
-        <td class="vd-col-cat"><span class="var-details-cat-chip">${escapeHtml(category)}</span></td>
-        <td class="vd-col-crc"><code class="var-details-crc">${escapeHtml(crcHex)}</code></td>
-        <td class="vd-col-category">${chip}</td>
-        <td class="vd-col-size">${escapeHtml(sizeText)}</td>
-      </tr>
-    `;
-  });
-  tbody.innerHTML = rows.join("");
-
-  if (summaryEl) {
-    summaryEl.textContent = `Showing ${start + 1}–${start + slice.length} of ${filtered.length}${filtered.length !== resources.length ? ` (filtered from ${resources.length})` : ""}`;
-  }
-
-  if (pagination) {
-    pagination.hidden = totalPages <= 1;
-    const indicator = $("var-details-page-indicator");
-    if (indicator) indicator.textContent = `${page + 1} / ${totalPages}`;
-    const prev = $("var-details-page-prev");
-    const next = $("var-details-page-next");
-    if (prev) prev.disabled = page <= 0;
-    if (next) next.disabled = page >= totalPages - 1;
-  }
-}
-
-// Backward-compat alias used by older render call-sites — both paths render
-// every overlap section so keeping a single function name avoids drift.
-function renderVarDetailsAssetTable() {
-  renderVarDetailsOverlap();
-  renderVarDetailsTopPackages();
-  renderVarDetailsResourceTable();
-  renderVarDetailsResourcePreview();
-}
-
-// Mirrors the Overview/Find Duplicates source-panel preview: when a row in the
-// VAR Details Resources table is selected and the package is on local disk,
-// fetch (and cache) the preview images via get_vam_preview and render them in
-// the inline panel under the table. Hidden when no row is selected, the row
-// isn't previewable (.vam/.png/.jpg only), or the VAR is DB-only.
-function renderVarDetailsResourcePreview() {
-  const slot = $("var-details-resource-preview");
-  const overlay = $("var-details-resource-preview-overlay");
-  if (!slot) return;
-
-  const item = state.varDetails.item;
-  const internalPath = state.varDetails.selectedResourceKey;
-  const packageFile = item?.file_path ?? "";
-
-  const shouldShow =
-    item
-    && internalPath
-    && state.varDetails.itemIsLocal
-    && packageFile
-    && isPreviewablePath(internalPath);
-
-  if (!shouldShow) {
-    slot.classList.add("hidden");
-    slot.classList.remove("is-open");
-    slot.innerHTML = "";
-    if (overlay) {
-      overlay.classList.add("hidden");
-      overlay.classList.remove("is-open");
-    }
-    return;
-  }
-
-  const ref = { package_id: item.package_id, internal_path: internalPath };
-  const fileName = internalPath.split(/[\\/]/).pop() || internalPath;
-  slot.innerHTML = `
-    <header class="var-details-sheet-head">
-      <div class="var-details-sheet-title-row">
-        <h3 id="var-details-resource-preview-title">Preview</h3>
-        <button
-          type="button"
-          class="icon-button var-details-sheet-close"
-          data-vd-preview-close="1"
-          aria-label="Close"
-          title="Close"
-        >
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>
-      <p class="var-details-sheet-path" title="${escapeAttribute(internalPath)}">${escapeHtml(fileName)}</p>
-    </header>
-    <div class="var-details-sheet-body vam-preview">
-      ${buildPreviewMarkup(ref, packageFile)}
-    </div>
-  `;
-  const body = slot.querySelector(".var-details-sheet-body");
-  if (body) {
-    bindPreviewResolution(body);
-    bindPreviewActions(body);
-  }
-
-  // Two-step reveal so the CSS transition runs: drop .hidden first, then add
-  // .is-open on the next frame to slide the panel in from the right.
-  if (overlay) overlay.classList.remove("hidden");
-  slot.classList.remove("hidden");
-  requestAnimationFrame(() => {
-    if (overlay) overlay.classList.add("is-open");
-    slot.classList.add("is-open");
-  });
-
-  const cacheKey = getPreviewCacheKey(item.package_id, internalPath);
-  if (!state.previewCache[cacheKey]) {
-    void ensureVarDetailsResourcePreviewLoaded(ref, packageFile);
-  }
-}
-
-async function ensureVarDetailsResourcePreviewLoaded(ref, packageFile) {
-  if (!invoke || !packageFile || !isPreviewablePath(ref.internal_path)) return;
-
-  const key = getPreviewCacheKey(ref.package_id, ref.internal_path);
-  const current = state.previewCache[key];
-  if (current?.status === "loading" || current?.status === "ready") return;
-
-  state.previewCache[key] = { status: "loading", startedAt: Date.now() };
-  renderVarDetailsResourcePreview();
-
-  // Tick once a second so the "Loading (Ns)" counter advances while the
-  // preview is in-flight. Stops as soon as the cache transitions out of
-  // loading or the user navigates to another row.
-  const loadingTicker = setInterval(() => {
-    const latest = state.previewCache[key];
-    if (!latest || latest.status !== "loading") {
-      clearInterval(loadingTicker);
-      return;
-    }
-    if (state.varDetails.selectedResourceKey !== ref.internal_path) {
-      clearInterval(loadingTicker);
-      return;
-    }
-    renderVarDetailsResourcePreview();
-  }, 1000);
-
-  try {
-    const data = await Promise.race([
-      invoke("get_vam_preview", {
-        packageId: ref.package_id,
-        packagePath: packageFile,
-        vamPath: ref.internal_path,
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Preview request timed out")), 10000)
-      ),
-    ]);
-    state.previewCache[key] = { status: "ready", data, finishedAt: Date.now() };
-  } catch (error) {
-    state.previewCache[key] = { status: "error", error: String(error), finishedAt: Date.now() };
-    addLog(`Preview failed: ${String(error)}`);
-  }
-  clearInterval(loadingTicker);
-  if (state.varDetails.selectedResourceKey === ref.internal_path) {
-    renderVarDetailsResourcePreview();
-  }
 }
 
 // Maps the frontend filter shape to the backend's VarPackageFilters (camelCase
@@ -18036,58 +16467,15 @@ function searchResourceListByCrc(crc) {
   hideContextMenu();
 }
 
-async function openSourceRowInVarDetails(packageId, packageFile, sourceType) {
+// A source row's package (Clean VARs, Resource List, Unique Resources...):
+// the library's copy when listed, else the row's file, else by id.
+async function openSourceRowDetails(packageId, packageFile, _sourceType) {
   if (!packageId) return;
-  if (typeof openVarDetailsView !== "function") return;
   hideContextMenu();
-
   const cached = (state.varPackagesItems ?? []).find(
-    (it) => it.package_id === packageId || (packageFile && it.file_path === packageFile)
+    (it) => it.package_id === packageId || (packageFile && it.file_path === packageFile),
   );
-
-  // If we have a file path, try to read it from disk. A successful stats call
-  // means the file really is local — load with full scene image / size /
-  // modified-time metadata and flag the item as local so the path + send-to
-  // tiles light up. Fall through to the synthetic flow on any failure (file
-  // moved, db row pointing at stale path, etc.).
-  if (packageFile && invoke) {
-    try {
-      const stats = await invoke("get_var_file_stats", { packagePath: packageFile });
-      if (stats) {
-        const fileName = packageFile.split(/[\\/]/).pop() || `${packageId}.var`;
-        const item = {
-          package_id: packageId,
-          file_path: packageFile,
-          file_name: fileName,
-          creator: cached?.creator ?? deriveCreatorFromPackageId(packageId),
-          size_bytes: stats.size_bytes ?? cached?.size_bytes ?? 0,
-          modified_ms: stats.modified_ms ?? cached?.modified_ms ?? null,
-          indexed: cached ? Boolean(cached.indexed) : true,
-          scene_image_data: stats.scene_image_data ?? null,
-        };
-        showVarDetailsView();
-        selectVarDetailsItem(item, "local");
-        return;
-      }
-    } catch (_error) {
-      // File isn't readable on disk — fall back to the synthetic flow below.
-    }
-  }
-
-  const source = cached
-    ? "folder"
-    : (sourceType === "db" ? "db" : (packageFile ? "local" : "db"));
-  const item = cached ?? {
-    package_id: packageId,
-    file_path: packageFile || "",
-    file_name: packageFile ? (packageFile.split(/[\\/]/).pop() || `${packageId}.var`) : `${packageId}.var`,
-    creator: deriveCreatorFromPackageId(packageId),
-    size_bytes: 0,
-    modified_ms: null,
-    indexed: Boolean(packageFile),
-    scene_image_data: null,
-  };
-  openPackageDetails(item, source);
+  openPackageDetails(cached ?? { package_id: packageId, file_path: packageFile || "" });
 }
 
 function groupMenuItems() {
@@ -18400,7 +16788,7 @@ function renderDetail() {
       if (packageId) {
         items.push({
           label: t("resourceListContextOpenPackage"),
-          action: () => openSourceRowInVarDetails(packageId, packageFile, sourceType),
+          action: () => openSourceRowDetails(packageId, packageFile, sourceType),
         });
       }
       if (packageFile) {
@@ -18705,20 +17093,9 @@ function bindPreviewActions(slot) {
       const image = entry?.data?.images?.[index];
       const activeGroup = getSelectedGroup();
       const previewRef = activeGroup ? getPreviewRefForGroup(activeGroup.refs, getKeepValue(activeGroup)) : null;
-      // Resolution order: Find Duplicates / Overview state first (the
-      // original use case). When the preview lives inside the VAR Details
-      // sheet there is no active group — fall back to the VAR Details
-      // item's own file_path, which is guaranteed on-disk because the
-      // sheet only renders when `state.varDetails.itemIsLocal` is true.
-      let packagePath = previewRef
+      const packagePath = previewRef
         ? state.scan?.package_files?.[previewRef.package_id]
         : null;
-      if (!packagePath) {
-        const vdItem = state.varDetails?.item;
-        if (vdItem && state.varDetails?.itemIsLocal && vdItem.file_path) {
-          packagePath = vdItem.file_path;
-        }
-      }
       if (!image || !packagePath || !invoke) {
         return;
       }
@@ -18923,7 +17300,7 @@ function appendDbMatchRow(group, dbRef) {
     if (dbRef.package_id) {
       items.push({
         label: t("resourceListContextOpenPackage"),
-        action: () => openSourceRowInVarDetails(dbRef.package_id, filePath, "db"),
+        action: () => openSourceRowDetails(dbRef.package_id, filePath, "db"),
       });
     }
     if (filePath) {
@@ -19922,7 +18299,6 @@ const VAM_FOLDER_FIELDS = [
   "build-db-input-dir",
   "build-db-backfill-input",
   "var-packages-input-dir",
-  "var-details-folder-input",
   "reclaim-folder-input",
   "ur-folder-input",
   "missing-input-dir",
@@ -20008,7 +18384,6 @@ function applyVamDir() {
   }
   if (state.internalize) state.internalize.inputDir = addon;
   if (state.missingResources) state.missingResources.inputDir = addon;
-  if (state.varDetails) state.varDetails.inputDir = addon;
   renderVamSources();
   renderSettingsVamDir();
   renderSettingsOffload();
@@ -22810,447 +21185,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDatabasePackages();
   setupHubView();
 
-  const vdBack = $("var-details-back");
-  if (vdBack) {
-    vdBack.addEventListener("click", () => closeVarDetailsView());
-  }
-
-  const vdFav = $("var-details-fav-button");
-  if (vdFav) {
-    vdFav.addEventListener("click", () => {
-      const pid = state.varDetails?.item?.package_id;
-      if (pid) togglePackageFavorite(pid);
-    });
-  }
-
-  // "Download this VAR" availability banner — delegated (innerHTML is rebuilt).
-  const vdAvail = $("var-details-availability");
-  if (vdAvail) {
-    vdAvail.addEventListener("click", (event) => {
-      const btn = event.target.closest("[data-vda]");
-      if (!btn) return;
-      const action = btn.getAttribute("data-vda");
-      if (action === "download") {
-        downloadVarItself().catch((e) => addLog(`VAR Details: ${String(e)}`));
-      } else if (action === "open-downloads") {
-        if (window.__toggleDownloads) window.__toggleDownloads();
-      }
-    });
-  }
-
-  const vdSearch = $("var-details-search");
-  if (vdSearch) {
-    let vdSearchTimer = null;
-    vdSearch.addEventListener("input", () => {
-      const next = vdSearch.value;
-      if (vdSearchTimer) clearTimeout(vdSearchTimer);
-      vdSearchTimer = setTimeout(() => {
-        if (state.varDetails.search === next) return;
-        state.varDetails.search = next;
-        state.varDetails.assetPage = 0;
-        renderVarDetailsAssetTable();
-      }, 120);
-    });
-  }
-
-  const vdScanDb = $("var-details-scan-db-button");
-  if (vdScanDb) {
-    vdScanDb.addEventListener("click", () => {
-      runVarDetailsAnalysis("database").catch((error) => {
-        addLog(`VAR Details: scan error — ${String(error)}`);
-        state.varDetails.scanning = false;
-        state.varDetails.scanKind = null;
-        renderVarDetails();
-      });
-    });
-  }
-
-  // Resource table row click → toggle the inline preview panel for the row's
-  // internal path. Only previewable rows (.vam/.png/.jp(e)g) on a local VAR
-  // produce a payload; the renderer hides itself in every other case.
-  const vdTbody = $("var-details-tbody");
-  if (vdTbody) {
-    vdTbody.addEventListener("click", (event) => {
-      const tr = event.target.closest("tr[data-resource-path]");
-      if (!tr || !tr.classList.contains("is-previewable")) return;
-      const path = tr.getAttribute("data-resource-path") || "";
-      if (!path) return;
-      state.varDetails.selectedResourceKey =
-        state.varDetails.selectedResourceKey === path ? null : path;
-      renderVarDetailsResourceTable();
-      renderVarDetailsResourcePreview();
-    });
-  }
-
-  const closeVdResourcePreview = () => {
-    if (state.varDetails.selectedResourceKey == null) return;
-    state.varDetails.selectedResourceKey = null;
-    renderVarDetailsResourceTable();
-    renderVarDetailsResourcePreview();
-  };
-
-  // Close handlers: X button (delegated inside the sheet), backdrop click, and
-  // ESC. Backdrop also has `data-vd-preview-close` so the same selector hits.
-  document.addEventListener("click", (event) => {
-    if (!event.target.closest("[data-vd-preview-close]")) return;
-    closeVdResourcePreview();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
-    if (state.varDetails.selectedResourceKey == null) return;
-    closeVdResourcePreview();
-  });
-
   setupImageZoom();
-
-  const vdScanLocal = $("var-details-scan-local-button");
-  if (vdScanLocal) {
-    vdScanLocal.addEventListener("click", () => {
-      runVarDetailsAnalysis("local").catch((error) => {
-        addLog(`VAR Details: scan error — ${String(error)}`);
-        state.varDetails.scanning = false;
-        state.varDetails.scanKind = null;
-        renderVarDetails();
-      });
-    });
-  }
-
-  const vdFolderInput = $("var-details-folder-input");
-  if (vdFolderInput) {
-    // Pre-fill from the global config's input_dir (already loaded into
-    // #input-dir at startup).
-    const seed = $("input-dir")?.value?.trim() ?? "";
-    if (seed && !vdFolderInput.value) {
-      vdFolderInput.value = seed;
-      state.varDetails.inputDir = seed;
-    }
-    vdFolderInput.addEventListener("input", () => {
-      state.varDetails.inputDir = vdFolderInput.value;
-    });
-    vdFolderInput.addEventListener("change", async () => {
-      const trimmed = vdFolderInput.value.trim();
-      state.varDetails.inputDir = trimmed;
-      const globalInput = $("input-dir");
-      if (globalInput && globalInput.value.trim() !== trimmed) {
-        globalInput.value = trimmed;
-      }
-      try {
-        if (invoke) await invoke("save_config", { config: buildCurrentConfig() });
-      } catch (_error) {}
-    });
-  }
-
-  const vdPathAction = $("var-details-meta-path-action");
-  if (vdPathAction) {
-    vdPathAction.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      const path = vdPathAction.dataset.filePath || state.varDetails.item?.file_path || "";
-      if (!path) return;
-      try {
-        await showPackageInExplorer(path);
-      } catch (error) {
-        addLog(`VAR Details: ${String(error)}`);
-      }
-    });
-  }
-
-  const sendVarDetailsToTargetVar = (page) => {
-    sendVarToTargetPage(page, state.varDetails.item?.file_path || "");
-  };
-
-  const vdSendDbFind = $("var-details-send-dbfind");
-  if (vdSendDbFind) {
-    vdSendDbFind.addEventListener("click", (event) => {
-      event.stopPropagation();
-      sendVarDetailsToTargetVar("db-find");
-    });
-  }
-  const vdSendMissing = $("var-details-send-missing-button");
-  if (vdSendMissing) {
-    vdSendMissing.addEventListener("click", (event) => {
-      event.stopPropagation();
-      sendVarDetailsToTargetVar("missing-resources");
-    });
-  }
-  const vdSendInternalize = $("var-details-send-internalize-button");
-  if (vdSendInternalize) {
-    vdSendInternalize.addEventListener("click", (event) => {
-      event.stopPropagation();
-      sendVarDetailsToTargetVar("internalize-resources");
-    });
-  }
-
-  const vdFolderPick = $("var-details-folder-pick");
-  if (vdFolderPick) {
-    vdFolderPick.addEventListener("click", async () => {
-      if (!invoke) return;
-      try {
-        const selected = await invoke("pick_folder");
-        if (!selected) return;
-        const input = $("var-details-folder-input");
-        if (input) input.value = selected;
-        state.varDetails.inputDir = selected;
-        const globalInput = $("input-dir");
-        if (globalInput) globalInput.value = selected;
-        try {
-          await invoke("save_config", { config: buildCurrentConfig() });
-        } catch (_error) {}
-      } catch (error) {
-        addLog(`VAR Details: folder picker failed — ${String(error)}`);
-      }
-    });
-  }
-
-  // Top Sharing Packages: clicking the row body toggles its expansion to
-  // show shared resources, while a separate arrow button navigates into
-  // the package's own VAR Details view.
-  const vdTopList = $("var-details-top-packages-list");
-  if (vdTopList) {
-    vdTopList.addEventListener("click", async (event) => {
-      const li = event.target.closest("[data-package-id]");
-      if (!li) return;
-      const packageId = li.getAttribute("data-package-id");
-      const filePath = li.getAttribute("data-file-path");
-      if (!packageId) return;
-
-      const openBtn = event.target.closest("[data-vd-open]");
-      const toggleBtn = event.target.closest("[data-vd-toggle]");
-
-      if (openBtn) {
-        event.stopPropagation();
-        if (state.varDetails.assetSource === "local" && filePath) {
-          showVarDetailsView();
-          await loadVarDetailsFromPath(filePath);
-          return;
-        }
-        const cached = (state.varPackagesItems ?? []).find((it) => it.package_id === packageId);
-        if (cached) {
-          openPackageDetails(cached, "folder");
-          return;
-        }
-        const fileName = filePath ? filePath.split(/[\\/]/).pop() : `${packageId}.var`;
-        const synthetic = {
-          package_id: packageId,
-          file_name: fileName,
-          file_path: filePath ?? "",
-          creator: deriveCreatorFromPackageId(packageId),
-          size_bytes: 0,
-          modified_ms: null,
-          indexed: true,
-          scene_image_data: null,
-        };
-        openVarDetailsView(synthetic, "db");
-        return;
-      }
-
-      if (toggleBtn || event.target.closest(".var-details-top-package")) {
-        const set = state.varDetails.expandedPackages ?? new Set();
-        if (set.has(packageId)) set.delete(packageId);
-        else set.add(packageId);
-        state.varDetails.expandedPackages = set;
-        renderVarDetailsTopPackages();
-      }
-    });
-
-    vdTopList.addEventListener("contextmenu", (event) => {
-      if (state.varDetails.assetSource !== "local") return;
-      const li = event.target.closest("[data-package-id]");
-      if (!li) return;
-      const filePath = li.getAttribute("data-file-path");
-      if (!filePath) return;
-      event.preventDefault();
-      hideContextMenu();
-      showContextMenu(event.clientX, event.clientY, [
-        {
-          label: t("menuShowInExplorer"),
-          action: () => showPackageInExplorer(filePath),
-        },
-      ]);
-    });
-  }
-
-  const vdPagePrev = $("var-details-page-prev");
-  if (vdPagePrev) {
-    vdPagePrev.addEventListener("click", () => {
-      if (state.varDetails.assetPage <= 0) return;
-      state.varDetails.assetPage -= 1;
-      renderVarDetailsAssetTable();
-    });
-  }
-  const vdPageNext = $("var-details-page-next");
-  if (vdPageNext) {
-    vdPageNext.addEventListener("click", () => {
-      state.varDetails.assetPage += 1;
-      renderVarDetailsAssetTable();
-    });
-  }
-
-  // Resource filter toggle (All / Shared). Resets pagination on switch since
-  // the filtered row count usually changes substantially.
-  document.querySelectorAll("[data-resource-filter]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const next = btn.getAttribute("data-resource-filter");
-      if (!next || state.varDetails.resourceFilter === next) return;
-      state.varDetails.resourceFilter = next;
-      state.varDetails.assetPage = 0;
-      renderVarDetailsResourceTable();
-    });
-  });
-
-  // Top Sharing Packages sort toggle (By Count / By Size). Only re-renders
-  // the top-packages list — the resource table is unaffected.
-  document.querySelectorAll("[data-top-sort]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const next = btn.getAttribute("data-top-sort");
-      if (!next || state.varDetails.topPackagesSortBy === next) return;
-      state.varDetails.topPackagesSortBy = next;
-      renderVarDetailsTopPackages();
-    });
-  });
-
-  // Creator flag toggles (favorite / blocked). Clicking the active button
-  // again clears the flag back to 0 (none). Persisted on the creator row so
-  // it applies the next time the reclaim scan runs.
-  document.querySelectorAll("[data-creator-flag]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const item = state.varDetails.item;
-      if (!item?.creator || !invoke) return;
-      const targetFlag = btn.getAttribute("data-creator-flag") === "favorite" ? 1 : 2;
-      const current = Number(item.creatorFlag) || 0;
-      const next = current === targetFlag ? 0 : targetFlag;
-      try {
-        await invoke("set_creator_flag", {
-          creatorName: item.creator,
-          flag: next,
-        });
-        item.creatorFlag = next;
-        // Keep the module-level mirrors honest without a restart. Flag values
-        // are mutually exclusive, so a flip to any value clears the other set.
-        // (_blockedCreators was previously only updated by the context-menu
-        // "Disable creator" path — render-time blocked filtering lagged when
-        // the flag was toggled from here.)
-        if (next === 1) _favoriteCreators.add(item.creator);
-        else _favoriteCreators.delete(item.creator);
-        if (next === 2) _blockedCreators.add(item.creator);
-        else _blockedCreators.delete(item.creator);
-        renderCreatorFlagButtons(item);
-      } catch (error) {
-        addLog(`Creator flag update failed — ${String(error)}`);
-      }
-    });
-  });
-
-  const pickVarFromDialog = async () => {
-    if (!invoke) return;
-    try {
-      const selected = await invoke("pick_var_file");
-      if (selected) await loadVarDetailsFromPath(selected);
-    } catch (error) {
-      addLog(`VAR Details: file picker failed — ${String(error)}`);
-    }
-  };
-
-  const vdSelectFiles = $("var-details-select-files");
-  if (vdSelectFiles) {
-    vdSelectFiles.addEventListener("click", (event) => {
-      event.stopPropagation();
-      pickVarFromDialog();
-    });
-  }
-
-  // Text input for typing/pasting a .var path directly. Loads on change/blur
-  // (not on every keystroke, since path entry may be partial mid-typing) and
-  // also on Enter so power users can paste-and-go.
-  const vdPackageInput = $("var-details-package-input");
-  const vdPackagePick = $("var-details-package-pick");
-  const tryLoadFromPackageInput = async () => {
-    const value = vdPackageInput?.value?.trim();
-    if (!value) return;
-    if (state.varDetails.item?.file_path === value) return;
-    await loadVarDetailsFromPath(value);
-  };
-  if (vdPackageInput) {
-    vdPackageInput.addEventListener("change", () => {
-      tryLoadFromPackageInput();
-    });
-    vdPackageInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        tryLoadFromPackageInput();
-      }
-    });
-  }
-  if (vdPackagePick) {
-    vdPackagePick.addEventListener("click", () => {
-      pickVarFromDialog();
-    });
-  }
-
-  const vdBrowseDir = $("var-details-browse-dir");
-  if (vdBrowseDir) {
-    vdBrowseDir.addEventListener("click", (event) => {
-      event.stopPropagation();
-      // "Browse Directory" jumps to VAR Packages so the user can pick from a
-      // full folder/database listing — that's the canonical browser, no need
-      // to duplicate it here.
-      const target = document.querySelector('[data-sidebar-link="var-packages"]');
-      if (target) target.click();
-    });
-  }
-
-  const vdDropzone = $("var-details-dropzone");
-  if (vdDropzone) {
-    vdDropzone.addEventListener("click", () => pickVarFromDialog());
-    // OS-level drag-over feedback. The actual file path arrives via the
-    // Tauri window event below — HTML5 drop on the webview can't read paths
-    // reliably, so we just paint the visual hover state here.
-    ["dragenter", "dragover"].forEach((evt) => {
-      vdDropzone.addEventListener(evt, (e) => {
-        e.preventDefault();
-        vdDropzone.classList.add("is-dragover");
-      });
-    });
-    ["dragleave", "drop"].forEach((evt) => {
-      vdDropzone.addEventListener(evt, (e) => {
-        e.preventDefault();
-        vdDropzone.classList.remove("is-dragover");
-      });
-    });
-  }
-
-  // Tauri 2 emits `tauri://drag-drop` on the window with `{ paths, position }`.
-  // We accept the first .var path when the VAR Details view is visible.
-  const tauriEvent = window.__TAURI__?.event;
-  if (tauriEvent && typeof tauriEvent.listen === "function") {
-    const handleDrop = (event) => {
-      const detailsView = $("var-details-view");
-      if (!detailsView || detailsView.classList.contains("hidden")) return;
-      const paths = event?.payload?.paths ?? [];
-      const varPath = paths.find((p) => /\.var$/i.test(String(p)));
-      if (!varPath) {
-        if (paths.length > 0) {
-          const message = "Only .var files are supported here.";
-          addLog(`VAR Details: ${message}`);
-          state.varDetails.resourcesError = message;
-          renderVarDetails();
-        }
-        return;
-      }
-      loadVarDetailsFromPath(varPath);
-    };
-    const dragoverPaint = (active) => {
-      const dz = $("var-details-dropzone");
-      if (!dz) return;
-      dz.classList.toggle("is-dragover", active);
-    };
-    tauriEvent.listen("tauri://drag-drop", (event) => {
-      dragoverPaint(false);
-      handleDrop(event);
-    }).catch(() => {});
-    tauriEvent.listen("tauri://drag-enter", () => dragoverPaint(true)).catch(() => {});
-    tauriEvent.listen("tauri://drag-over", () => dragoverPaint(true)).catch(() => {});
-    tauriEvent.listen("tauri://drag-leave", () => dragoverPaint(false)).catch(() => {});
-  }
 
   const bulkDropzone = $("build-db-bulk-dropzone");
   if (bulkDropzone) {
@@ -23508,7 +21443,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVarPackagesSelection();
   setupVarPackagesDeleteModal();
   setupVarPackagesImagesModal();
-  setupVarDetailsDeps();
+  setupDepScanDialog();
 
   $("dialog-cancel").addEventListener("click", () => {
     closeAppConfirm(false);
@@ -24412,15 +22347,9 @@ window.addEventListener("DOMContentLoaded", async () => {
       .join("");
   }
 
-  function rlJumpToVarDetails(ref) {
+  function rlJumpToDetails(ref) {
     if (!ref || !ref.package_id) return;
-    // Defer to the shared opener — when `package_file` resolves on disk it
-    // pulls scene image / size / modified via get_var_file_stats and flags the
-    // item as local so the VAR Details page renders the scene preview. Falls
-    // back to a synthetic db-only item when the path is stale.
-    if (typeof openSourceRowInVarDetails === "function") {
-      openSourceRowInVarDetails(ref.package_id, ref.package_file || "", "db");
-    }
+    openSourceRowDetails(ref.package_id, ref.package_file || "", "db");
   }
 
   // ----- Right-click context menu -----
@@ -24460,7 +22389,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (item.package_id) {
       items.push({
         label: t("resourceListContextOpenPackage"),
-        action: () => rlJumpToVarDetails({
+        action: () => rlJumpToDetails({
           package_id: item.package_id,
           package_file: item.package_file,
           internal_path: item.internal_path,
@@ -24635,7 +22564,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (!button) return;
       const idx = Number(button.getAttribute("data-rl-side-jump"));
       const ref = (rl().sidePanelItems ?? [])[idx];
-      if (ref) rlJumpToVarDetails(ref);
+      if (ref) rlJumpToDetails(ref);
     });
   }
 
@@ -24981,7 +22910,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (rs().page < totalPages - 1) { rs().page += 1; renderRsTable(); }
     });
 
-    // Delegated row-click on the reclaim candidates table → open VAR Details
+    // Delegated row-click on the reclaim candidates table → open its details
     // for the clicked package. Candidates are *DB matches* from the catalog
     // (packages that could replace local content), not the files in the
     // scanned folder — their file_path is just an indexed hint and may be
@@ -25815,7 +23744,7 @@ window.addEventListener("DOMContentLoaded", async () => {
           });
         } else if (action === "var-details") {
           if (!source.package_id) return;
-          openSourceRowInVarDetails(source.package_id, source.file_path || "", "local");
+          openSourceRowDetails(source.package_id, source.file_path || "", "local");
         }
       });
       sideList.addEventListener("contextmenu", (event) => {
@@ -25830,7 +23759,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (source.package_id) {
           menu.push({
             label: t("resourceListContextOpenPackage"),
-            action: () => openSourceRowInVarDetails(source.package_id, source.file_path || "", "local"),
+            action: () => openSourceRowDetails(source.package_id, source.file_path || "", "local"),
           });
         }
         if (source.file_path) {
@@ -26549,9 +24478,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (applyGlobal) applyGlobal.disabled = !hasPick || mr().applying;
     }
 
-    // openCandidatePackageInVarDetails is hoisted to file scope so the
-    // Internalize Resources page (sibling IIFE) can call it too. See the
-    // definition near openVarDetailsView / loadVarDetailsFromPath.
+    // openCandidatePackage is hoisted to file scope so the
+    // Internalize Resources page (sibling IIFE) can call it too.
 
     // Looks up the best candidate ResourceRef inside `ref.local_candidates`
     // (and, if loaded, the per-ref DB-candidate cache) whose package_id
@@ -27326,7 +25254,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (dbContainer) dbContainer.addEventListener("change", onCandidateChange);
       if (localContainer) localContainer.addEventListener("change", onCandidateChange);
 
-      // Action buttons inside each candidate row (VAR Details / Copy id).
+      // Action buttons inside each candidate row (details / Copy id).
       // Buttons live inside the `<label>`, so a click would normally activate
       // the radio — preventDefault on the label-bound click stops that, and
       // stopPropagation keeps it from reaching the row-select handler.
@@ -27347,7 +25275,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (action === "open-var-details") {
           const row = btn.closest(".missing-candidate");
           const packageFile = row?.getAttribute("data-package-file") || "";
-          openCandidatePackageInVarDetails(packageId, packageFile);
+          openCandidatePackage(packageId, packageFile);
         }
       };
       if (dbContainer) dbContainer.addEventListener("click", onCandidateClick);
@@ -27368,7 +25296,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         if (packageId) {
           items.push({
             label: t("resourceListContextOpenPackage"),
-            action: () => openCandidatePackageInVarDetails(packageId, packageFile),
+            action: () => openCandidatePackage(packageId, packageFile),
           });
           items.push({
             label: `Copy package id (${packageId})`,
@@ -28431,7 +26359,7 @@ window.addEventListener("DOMContentLoaded", async () => {
               const ok = await copyTextToClipboard(full);
               if (ok) addLog(`Copied ${full}`);
             } else if (action === "open-var-details" && pkg) {
-              openCandidatePackageInVarDetails(pkg, sourceVar);
+              openCandidatePackage(pkg, sourceVar);
             } else if (action === "show-in-explorer" && sourceVar) {
               await showPackageInExplorer(sourceVar);
             }
@@ -28458,7 +26386,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       }
 
       // Right-click on a group row in the left panel — bulk actions that
-      // apply at the source-pkg level (Copy id, open VAR Details, show .var
+      // apply at the source-pkg level (Copy id, open details, show .var
       // in Explorer, select-all-in-pkg).
       const listElForMenu = $("internalize-list");
       if (listElForMenu) {
@@ -28534,7 +26462,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         items.push({ separator: true });
         items.push({
           label: "Open source package details",
-          action: () => openCandidatePackageInVarDetails(pkg, sourceVar),
+          action: () => openCandidatePackage(pkg, sourceVar),
         });
       }
       if (sourceVar) {
@@ -28587,7 +26515,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       });
       items.push({
         label: "Open source package details",
-        action: () => openCandidatePackageInVarDetails(group.source_pkg_id, group.source_var_path),
+        action: () => openCandidatePackage(group.source_pkg_id, group.source_var_path),
       });
       if (group.source_var_path) {
         items.push({
@@ -29275,7 +27203,7 @@ function dbfRenderDetail() {
         const items = [];
         const packageId = element.dataset.packageId || "";
         const packageFile = element.dataset.packageFile || "";
-        if (packageId) items.push({ label: t("resourceListContextOpenPackage"), action: () => openSourceRowInVarDetails(packageId, packageFile, "local") });
+        if (packageId) items.push({ label: t("resourceListContextOpenPackage"), action: () => openSourceRowDetails(packageId, packageFile, "local") });
         if (packageId) items.push({
           label: `Copy package id (${packageId})`,
           action: async () => {
@@ -29348,7 +27276,7 @@ function dbfRenderDetail() {
         const packageId = element.dataset.packageId || "";
         const packageFile = element.dataset.packageFile || "";
         const sourceType = element.dataset.sourceType || "local";
-        if (packageId) items.push({ label: t("resourceListContextOpenPackage"), action: () => openSourceRowInVarDetails(packageId, packageFile, sourceType) });
+        if (packageId) items.push({ label: t("resourceListContextOpenPackage"), action: () => openSourceRowDetails(packageId, packageFile, sourceType) });
         if (packageId) items.push({
           label: `Copy package id (${packageId})`,
           action: async () => {
@@ -29551,7 +27479,7 @@ function dbfAppendDbMatchRow(group, dbRef) {
   label.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     const items = [];
-    if (dbRef.package_id) items.push({ label: t("resourceListContextOpenPackage"), action: () => openSourceRowInVarDetails(dbRef.package_id, filePath, "db") });
+    if (dbRef.package_id) items.push({ label: t("resourceListContextOpenPackage"), action: () => openSourceRowDetails(dbRef.package_id, filePath, "db") });
     if (dbRef.package_id) items.push({
       label: `Copy package id (${dbRef.package_id})`,
       action: async () => {
@@ -29795,9 +27723,9 @@ function bindDbFindEvents() {
     if (!invoke) return;
     invoke("save_config", { config: buildCurrentConfig() }).catch(() => {});
   };
-  // Enable the "Open in VAR Details" link only when the target is a .var —
-  // mirrors VAR Details' "Clean VARs" hand-off in the other direction.
-  const syncOpenVarDetailsButton = () => {
+  // Enable the "Details" link only when the target is a .var — mirrors
+  // Package Explorer's "Clean against it" hand-off in the other direction.
+  const syncOpenDetailsButton = () => {
     const btn = $("dbf-open-var-details-button");
     if (!btn) return;
     const v = (state.targetVarPath || $("dbf-target-var-path")?.value || "").trim();
@@ -29813,7 +27741,7 @@ function bindDbFindEvents() {
     dbfRenderGroups();
     dbfRenderDetail();
     dbfUpdateVarInfo();
-    syncOpenVarDetailsButton();
+    syncOpenDetailsButton();
     persistDbfConfig();
   });
   const tvp = $("dbf-pick-target-var-button");
@@ -29828,7 +27756,7 @@ function bindDbFindEvents() {
     if (!/\.var$/i.test(v)) { addLog(t("targetVarRequired")); return; }
     openPackageDetails(v);
   });
-  syncOpenVarDetailsButton();
+  syncOpenDetailsButton();
   const inp = $("dbf-input-dir");
   if (inp) inp.addEventListener("input", persistDbfConfig);
   const inpPick = $("dbf-pick-input-button");
