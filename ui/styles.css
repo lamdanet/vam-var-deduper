@@ -15422,7 +15422,7 @@ button.lib-dep-ref:hover {
 
 .pkg-cover-col {
   flex: 0 0 auto;
-  width: 300px;
+  width: 280px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -15430,8 +15430,8 @@ button.lib-dep-ref:hover {
 
 .pkg-cover {
   position: relative;
-  width: 300px;
-  height: 300px;
+  width: 280px;
+  height: 280px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--lib-border-bright) 70%, transparent);
   border-radius: 14px;
@@ -15515,15 +15515,6 @@ button.lib-dep-ref:hover {
   gap: 10px;
 }
 
-.pkg-eyebrow {
-  font-family: var(--lib-mono);
-  font-size: 11px;
-  color: var(--lib-text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .pkg-title {
   margin: 0;
   font-size: 30px;
@@ -15582,16 +15573,6 @@ button.lib-dep-ref:hover {
   font-size: 13px;
 }
 
-.pkg-chip-good {
-  background: color-mix(in srgb, var(--lib-success) 20%, transparent);
-  color: var(--lib-success);
-}
-
-.pkg-chip-update {
-  background: color-mix(in srgb, var(--lib-accent) 22%, transparent);
-  color: var(--lib-accent);
-}
-
 .pkg-desc {
   margin: 0;
   max-width: 820px;
@@ -15600,7 +15581,7 @@ button.lib-dep-ref:hover {
   line-height: 1.55;
   white-space: pre-wrap;
   display: -webkit-box;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -15739,16 +15720,18 @@ button.pkg-stat:hover {
 }
 
 .pkg-stat-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--lib-text-3);
+  color: var(--lib-text-2);
+  white-space: nowrap;
 }
 
 .pkg-stat-sub {
   font-size: 11px;
-  color: var(--lib-text-2);
+  color: var(--lib-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pkg-stat-skel {
@@ -17038,4 +17021,131 @@ button.pkg-bar-row:not(:disabled):hover {
 .pkg-ol-size {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- Package Explorer: identity chips, health line, toolbar ---- */
+
+.pkg-chip-id {
+  background: color-mix(in srgb, var(--lib-text) 8%, transparent);
+  color: var(--lib-text-2);
+}
+
+.pkg-health {
+  display: flex;
+  flex-direction: column;
+  max-width: 820px;
+  border: 1px solid var(--lib-border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--lib-surface) 70%, transparent);
+  overflow: hidden;
+}
+
+.pkg-health .lib-skeleton {
+  height: 30px;
+  border-radius: 9px;
+}
+
+.pkg-health-row {
+  --h: var(--lib-text-3);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px 7px 11px;
+  border-left: 3px solid var(--h);
+  background: color-mix(in srgb, var(--h) 8%, transparent);
+  color: var(--lib-text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.pkg-health-row > .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 18px;
+  color: var(--h);
+}
+
+.pkg-health-row.is-ok {
+  --h: var(--lib-success);
+}
+
+.pkg-health-row.is-err {
+  --h: var(--lib-error);
+}
+
+.pkg-health-row.is-warn {
+  --h: var(--lib-warning);
+}
+
+.pkg-health-row.is-info {
+  --h: #60a5fa;
+}
+
+.pkg-health-row + .pkg-health-row {
+  border-top: 1px solid var(--lib-border);
+}
+
+.pkg-health-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pkg-health-fix {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--h) 55%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--lib-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pkg-health-fix:hover {
+  background: color-mix(in srgb, var(--h) 22%, transparent);
+}
+
+.pkg-actions {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.pkg-act.is-primary {
+  padding: 9px 16px;
+  font-size: 13px;
+}
+
+.pkg-tools {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--lib-border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--lib-elevated) 75%, transparent);
+}
+
+.pkg-icon-act {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--lib-text-2);
+  cursor: pointer;
+}
+
+.pkg-icon-act .material-symbols-outlined {
+  font-size: 20px;
+}
+
+.pkg-icon-act:hover {
+  background: var(--lib-hover);
+  color: var(--lib-text);
+}
+
+.pkg-icon-act.is-on .material-symbols-outlined {
+  color: var(--lib-warning);
+  font-variation-settings: "FILL" 1;
 }
