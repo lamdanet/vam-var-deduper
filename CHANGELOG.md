@@ -48,12 +48,14 @@ release time, it fills it with the commit messages since the last release.
   After a check, a summary says what's easy and what needs a look: for
   example, 32 of 33 missing files are already inside the package (no
   download, no new dependency), with one button to choose every exact copy.
-  The settings fold to one line so the results are in view. Every missing
-  file in the list has a Use button for its best replacement; Enter does the
-  same and moves to the next one. Packages with several missing files get a
-  header with how many are chosen, and the list filters by To choose, Chosen,
-  Not installed or File missing. Replacement Sources stays beside the list
-  with Run Fixes at its top. It puts the best replacement first, lists one
+  The settings fold into one line with the package, so the results are in
+  view. Every missing file in the list says where its best replacement comes
+  from and whether it adds a dependency, with Use on hover and on the
+  selected row; Enter uses it and moves to the next one. Red is kept for
+  files nothing can bring back. Packages with several missing files get a
+  header with how many are ready, and the list filters by To do, Ready, Not
+  installed or File missing. Replacement Sources stays beside the list with
+  Run Fixes at its top, the one place for it. It puts the best replacement first, lists one
   row per package (its other copies behind "N more copies"), marks how many
   other missing files each package covers (Use for all), and only offers
   Apply to the same package / shown / all where that does something. The
