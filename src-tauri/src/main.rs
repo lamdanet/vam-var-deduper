@@ -4,6 +4,7 @@ mod archives;
 mod config;
 mod db;
 mod execute;
+mod extract;
 mod fix_var;
 mod hub;
 mod import;
@@ -24,6 +25,7 @@ mod utils;
 use tauri::Manager;
 
 use crate::{
+    extract::{extract_probe, extract_run},
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
@@ -75,6 +77,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            extract_probe,
+            extract_run,
             load_config,
             path_exists,
             pick_folder,
