@@ -9138,6 +9138,13 @@ const FM = {
   fixedKeys: new Set(),
   // ref_pkg -> availability, as Package Explorer's
   avail: new Map(),
+  // "key|pkg" of candidate packages showing all their copies
+  candOpen: new Set(),
+  // Replacement Sources shows the missing file's details
+  refDetails: false,
+  // A short note in the panel's Run Fixes strip
+  flash: "",
+  flashTimer: null,
 };
 // target path -> number of broken references the last check found.
 const FM_RESULTS = new Map();
@@ -9219,6 +9226,9 @@ function fmOpen(target, { scan = false } = {}) {
       avail: new Map(),
       selected: null,
       configOpen: null,
+      candOpen: new Set(),
+      refDetails: false,
+      flash: "",
     });
   }
   fmShowView();
@@ -9318,7 +9328,7 @@ function fmPickFrom(c) {
     replacement_pkg: c.isSelf ? "SELF" : c.package_id,
     replacement_path: c.internal_path,
     source: c.isSelf ? "self" : c.match ?? "db",
-    label: c.isSelf ? "this package" : c.package_id,
+    label: c.isSelf ? `already inside ${fmSelfName()}` : c.package_id,
   };
 }
 
@@ -9334,7 +9344,7 @@ function fmAutoPick() {
       n += 1;
     }
   }
-  showToast(n ? `Picked ${pkgCount(n, "exact copy", "exact copies")}.` : "No more exact copies to pick.", n ? "success" : "info", 4000);
+  fmFlash(n ? `Chose ${pkgCount(n, "exact copy", "exact copies")}.` : "No more exact copies to choose.");
   fmRefresh();
 }
 
@@ -9445,8 +9455,9 @@ async function fmApply() {
   const inPlace = fmInPlace();
   const outputDir = fmOutputDir();
   if (!inPlace && !outputDir) {
-    showToast("Pick a folder for the fixed copy first.", "error");
-    $("fm-output-dir")?.focus();
+    fmFlash("Choose a folder for the fixed copy first.");
+    fmRenderStrip();
+    $("fm-details")?.querySelector('[data-fm-act="pick-output"]')?.focus();
     return;
   }
   const refsByKey = new Map((FM.refs ?? []).map((r) => [fmKey(r), r]));
@@ -9465,8 +9476,8 @@ async function fmApply() {
   const name = libTitle(FM.item);
   const ok = await showAppConfirm(
     inPlace
-      ? `Fix ${pkgCount(fixes.length, "reference", "references")} in ${name} itself?${fmBackup() ? " A backup of the original is kept." : " No backup is kept."}`
-      : `Fix ${pkgCount(fixes.length, "reference", "references")} in a copy of ${name}? The copy goes to ${outputDir}\\changed; the original isn't touched.`,
+      ? `Fix ${pkgCount(fixes.length, "missing file", "missing files")} in ${name} itself?${fmBackup() ? " A backup of the original is kept." : " No backup is kept."}`
+      : `Fix ${pkgCount(fixes.length, "missing file", "missing files")} in a copy of ${name}? The copy goes to ${outputDir}\\changed; the original isn't touched.`,
   );
   if (!ok) return;
   FM.applying = true;
@@ -9504,17 +9515,21 @@ async function fmApply() {
 
 // ---- Render ----------------------------------------------------------------------------
 // Missing Resources' own layout (Source Configuration and VAR Details on top,
-// the list and Replacement Sources below), improved: the settings fold away
-// after a check so the results are in view, the package card shows the
-// package and what was found, rows say in words what's wrong and what's
-// picked, the best replacement is one click, and Replacement Sources stays
-// beside the list while it scrolls.
+// the list and Replacement Sources below), made to say what's easy and what
+// needs a choice, and to finish where you work: a summary after the check
+// (most fixes are often copies already inside the package), one-click Use on
+// every row, the replacement first in the panel, and Run Fixes at the top of
+// the panel, which stays beside the list.
 
 const FM_KIND_WORDS = {
   text_ref: ["Not installed", "missing-kind-text-ref", "The package it points at isn't in your folders"],
   transitive: ["File missing", "missing-kind-transitive", "The package is installed, but this file isn't in it"],
   meta_dependency: ["Dependency", "missing-kind-meta-dependency", "Only listed in meta.json"],
 };
+
+function fmSelfName() {
+  return FM.item ? libTitle(FM.item) : "this package";
+}
 
 // The references the list shows, by FM.filter and FM.query.
 function fmFiltered() {
@@ -9535,11 +9550,39 @@ function fmDbMode() {
   return fmStoreGet("fm.dbMode", "0") === "1";
 }
 
+// What the check found, sorted by how easy each is to fix.
+function fmSummary() {
+  const s = { selfExact: 0, otherExact: 0, guess: 0, none: 0, chosen: 0, open: 0, total: (FM.refs ?? []).length };
+  for (const r of FM.refs ?? []) {
+    if (FM.picks.has(fmKey(r))) {
+      s.chosen += 1;
+      continue;
+    }
+    s.open += 1;
+    const b = r.ref_path ? fmBest(r) : null;
+    if (!b) s.none += 1;
+    else if (b.match === "crc") b.isSelf ? (s.selfExact += 1) : (s.otherExact += 1);
+    else s.guess += 1;
+  }
+  return s;
+}
+
+// A short note in the panel instead of a toast over it.
+function fmFlash(text) {
+  FM.flash = text;
+  const token = FM.token;
+  clearTimeout(FM.flashTimer);
+  FM.flashTimer = setTimeout(() => {
+    if (token !== FM.token) return;
+    FM.flash = "";
+    fmRenderStrip();
+  }, 4000);
+}
+
 function fmRender() {
   const view = fmView();
   if (!view) return;
   const checked = Array.isArray(FM.refs);
-  // After a check the settings fold into one line, until opened again.
   if (FM.configOpen == null || !FM.target) FM.configOpen = !checked;
   view.innerHTML = `
     <section class="dashboard-grid fm-top">
@@ -9552,11 +9595,11 @@ function fmRender() {
       <p class="panel-subtitle" id="fm-progress-msg"></p>
     </section>
     <section class="content-grid fm-grid">
-      <article class="panel card">
+      <article class="panel card fm-list-card">
         <div class="panel-head panel-head-groups">
           <div class="panel-head-main">
             <div class="groups-header-row">
-              <h2>Missing Resources</h2>
+              <h2>Missing files</h2>
               <div class="group-filter-stack">
                 <div class="input-with-icon">
                   <span class="material-symbols-outlined input-leading-icon">search</span>
@@ -9565,6 +9608,7 @@ function fmRender() {
               </div>
             </div>
             <p class="panel-subtitle" id="fm-list-subtitle"></p>
+            <div id="fm-summary"></div>
             <div class="fm-list-tools" id="fm-list-tools"></div>
           </div>
         </div>
@@ -9586,7 +9630,6 @@ function fmRefresh() {
   fmRenderRefs();
 }
 
-// Kept for the shared callers: the top cards.
 function fmRenderHero() {
   fmRenderSource();
   fmRenderDetails();
@@ -9594,6 +9637,7 @@ function fmRenderHero() {
 
 function fmRenderBar() {
   fmRenderDetails();
+  fmRenderStrip();
 }
 
 function fmRenderStats() {}
@@ -9613,23 +9657,19 @@ function fmRenderSource() {
         .join("")}
       <button type="button" class="ghost-button fm-small" data-fm-act="add-folder"><span class="material-symbols-outlined">create_new_folder</span>Add folder</button>
     </div>`;
-  const mode = `<div class="profile-row">
-      <span class="profile-row-label" title="Database also offers packages from the database index for the selected resource, besides the ones in your folders">Candidates from</span>
-      <div class="radio-group" role="radiogroup">
-        <label class="radio-pill"><input type="radio" name="fm-mode" value="local" ${fmDbMode() ? "" : "checked"} /><span>Your folders</span></label>
-        <label class="radio-pill"><input type="radio" name="fm-mode" value="db" ${fmDbMode() ? "checked" : ""} /><span>Folders + database</span></label>
-      </div>
-    </div>`;
+  const dbBox = `<label class="check-row fm-db-check" title="The database is searched by itself whenever your folders have no copy of a file">
+      <input type="checkbox" id="fm-dbmode" ${fmDbMode() ? "checked" : ""} />
+      <span>Always search the database too</span>
+    </label>`;
   const scanLabel = FM.scanning ? "Checking…" : Array.isArray(FM.refs) ? "Check again" : "Scan Target VAR";
   if (FM.target && !FM.configOpen) {
-    // Folded: one line, the results stay in view.
     host.innerHTML = `
       <header class="card-eyebrow fm-eyebrow">Source Configuration
         <button type="button" class="fm-link" data-fm-act="config">Change</button></header>
       <div class="fm-source-line">
         <span class="material-symbols-outlined">description</span>
         <div class="fm-source-text"><b title="${escapeAttribute(FM.target)}">${escapeHtml(FM.target.split(/[\\/]/).pop())}</b>
-          <small>AddonPackages${extra.length ? ` + ${pkgCount(extra.length, "folder", "folders")}` : ""} · candidates from ${fmDbMode() ? "folders and the database" : "your folders"}</small></div>
+          <small>AddonPackages${extra.length ? ` + ${pkgCount(extra.length, "folder", "folders")}` : ""} · the database ${fmDbMode() ? "always" : "when your folders have no copy"}</small></div>
         <button type="button" class="primary-button" data-fm-act="scan" ${FM.scanning ? "disabled" : ""}>${scanLabel}</button>
       </div>
       <div class="var-info-panel fm-folded-info">${fmInfoHtml()}</div>`;
@@ -9655,11 +9695,10 @@ function fmRenderSource() {
             <input id="fm-target" type="text" placeholder="No file selected" spellcheck="false" value="${escapeAttribute(FM.target)}" />
           </div></div>
         </div>
-        <div class="path-row"><span class="path-label">Where to look</span>${folders}</div>
+        <div class="path-row"><span class="path-label">Where to look</span>${folders}${dbBox}</div>
       </div>
-      ${mode}
       <div class="action-row">
-        <button type="button" class="primary-button action-button" data-fm-act="scan" ${FM.target && !FM.scanning ? "" : "disabled"}>${scanLabel}</button>
+        <button type="button" class="primary-button action-button fm-scan-btn" data-fm-act="scan" ${FM.target && !FM.scanning ? "" : "disabled"}>${scanLabel}</button>
       </div>
     </div>`;
 }
@@ -9667,43 +9706,54 @@ function fmRenderSource() {
 function fmInfoHtml() {
   const it = FM.item;
   const refs = FM.refs ?? [];
-  let info = `<p class="var-info-empty">No target VAR selected.</p>`;
-  if (it) {
-    const absent = new Set(refs.filter((r) => r.kind !== "transitive").map((r) => r.ref_pkg)).size;
-    const inside = refs.filter((r) => r.kind === "transitive").length;
-    const summary = FM.scanning
-      ? `<span class="chip">Checking…</span>`
-      : FM.error
-        ? `<span class="chip missing-kind-text-ref" title="${escapeAttribute(FM.error)}">Check failed</span>`
-        : FM.report
-          ? `<span class="chip chip-accent">Fixed ${Number(FM.report.fixes_applied ?? FM.report.count)}</span>`
-          : !Array.isArray(FM.refs)
-            ? `<span class="chip">Not checked yet</span>`
-            : refs.length
-              ? `<span class="chip missing-kind-text-ref">${refs.length} broken</span>${absent ? `<span class="chip">${pkgCount(absent, "package not installed", "packages not installed")}</span>` : ""}${
-                  inside ? `<span class="chip missing-kind-transitive">${pkgCount(inside, "file", "files")} missing in installed packages</span>` : ""
-                }`
-              : `<span class="chip chip-accent">Nothing missing</span>`;
-    info = `<div class="fm-info">
-        ${libThumbHtml(FM.target, libGradient(it.file_name || it.package_id), "fm-info-thumb")}</div>
-        <div class="fm-info-text">
-          <h2 class="var-info-title" title="${escapeAttribute(it.package_id)}">${escapeHtml(libTitle(it))}${libVersion(it) ? ` <small>v${escapeHtml(libVersion(it))}</small>` : ""}</h2>
-          <div class="fm-info-by">by ${escapeHtml(libCreator(it))}${it.size_bytes ? ` · ${escapeHtml(formatBytesLocal(it.size_bytes))}` : ""}</div>
-          <div class="fm-info-chips">${summary}</div>
-          <div class="fm-info-acts">
-            <button type="button" class="ghost-button fm-small" data-fm-act="explore"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
-            <button type="button" class="ghost-button fm-small" data-fm-act="show-file"><span class="material-symbols-outlined">folder_open</span>Show file</button>
-          </div>
+  if (!it) return `<p class="var-info-empty">No target VAR selected.</p>`;
+  const absent = new Set(refs.filter((r) => r.kind !== "transitive").map((r) => r.ref_pkg)).size;
+  const inside = refs.filter((r) => r.kind === "transitive").length;
+  const summary = FM.scanning
+    ? `<span class="chip">Checking…</span>`
+    : FM.error
+      ? `<span class="chip missing-kind-text-ref" title="${escapeAttribute(FM.error)}">Check failed</span>`
+      : FM.report
+        ? `<span class="chip chip-accent">Fixed ${Number(FM.report.fixes_applied ?? FM.report.count)}</span>`
+        : !Array.isArray(FM.refs)
+          ? `<span class="chip">Not checked yet</span>`
+          : refs.length
+            ? `<span class="chip missing-kind-text-ref">${pkgCount(refs.length, "missing file", "missing files")}</span>${
+                absent ? `<span class="chip">${pkgCount(absent, "package not installed", "packages not installed")}</span>` : ""
+              }${inside ? `<span class="chip missing-kind-transitive">${pkgCount(inside, "file", "files")} missing in installed packages</span>` : ""}`
+            : `<span class="chip chip-accent">Nothing missing</span>`;
+  return `<div class="fm-info">
+      ${libThumbHtml(FM.target, libGradient(it.file_name || it.package_id), "fm-info-thumb")}</div>
+      <div class="fm-info-text">
+        <h2 class="var-info-title" title="${escapeAttribute(it.package_id)}">${escapeHtml(libTitle(it))}${libVersion(it) ? ` <small>v${escapeHtml(libVersion(it))}</small>` : ""}</h2>
+        <div class="fm-info-by">by ${escapeHtml(libCreator(it))}${it.size_bytes ? ` · ${escapeHtml(formatBytesLocal(it.size_bytes))}` : ""}</div>
+        <div class="fm-info-chips">${summary}</div>
+        <div class="fm-info-acts">
+          <button type="button" class="ghost-button fm-small" data-fm-act="explore"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
+          <button type="button" class="ghost-button fm-small" data-fm-act="show-file"><span class="material-symbols-outlined">folder_open</span>Show file</button>
         </div>
-      </div>`;
+      </div>
+    </div>`;
+}
+
+// The folder as its name, with the full path on hover.
+function fmFolderButton() {
+  const dir = fmOutputDir();
+  if (!dir) {
+    return `<button type="button" class="fm-folder-btn is-empty" data-fm-act="pick-output"><span class="material-symbols-outlined">create_new_folder</span>
+        <span class="fm-folder-btn-text"><b>Choose a folder for the fixed copy</b></span></button>`;
   }
-  return info;
+  const parts = dir.split(/[\\/]/).filter(Boolean);
+  return `<button type="button" class="fm-folder-btn" data-fm-act="pick-output" title="${escapeAttribute(`${dir}\nThe copy goes to its "changed" folder. Click to choose another.`)}">
+      <span class="material-symbols-outlined">folder_open</span>
+      <span class="fm-folder-btn-text"><b>${escapeHtml(parts[parts.length - 1] ?? dir)}</b><small>${escapeHtml(parts.length > 1 ? `…\\${parts.slice(-3, -1).join("\\")}` : "")}</small></span>
+      <span class="fm-link">Change</span>
+    </button>`;
 }
 
 function fmRenderDetails() {
   const host = $("fm-details");
   if (!host) return;
-  const it = FM.item;
   const refs = FM.refs ?? [];
   const ready = refs.filter((r) => FM.picks.has(fmKey(r))).length;
   const inPlace = fmInPlace();
@@ -9711,56 +9761,54 @@ function fmRenderDetails() {
   const report = FM.report
     ? `<div class="fm-report">
         <span class="material-symbols-outlined">check_circle</span>
-        <div><b>Fixed ${pkgCount(Number(FM.report.fixes_applied ?? FM.report.count), "reference", "references")} in ${pkgCount(Number(FM.report.files_rewritten ?? 0), "file", "files")}${
+        <div><b>Fixed ${pkgCount(Number(FM.report.fixes_applied ?? FM.report.count), "missing file", "missing files")} in ${pkgCount(Number(FM.report.files_rewritten ?? 0), "file", "files")}${
           FM.report.inPlace ? " of the original" : ""
         }.</b>
           ${(FM.report.dependencies_added ?? []).length ? `<small>Now depends on ${escapeHtml(FM.report.dependencies_added.join(", "))}.</small>` : ""}
           ${(FM.report.dependencies_removed ?? []).length ? `<small>No longer depends on ${escapeHtml(FM.report.dependencies_removed.join(", "))}.</small>` : ""}
           ${(FM.report.errors ?? []).map((e) => `<small class="fm-report-err">${escapeHtml(e)}</small>`).join("")}
-          ${FM.report.output_path ? `<small title="${escapeAttribute(FM.report.output_path)}">The fixed copy: ${escapeHtml(FM.report.output_path)}</small>` : ""}
-          <div class="fm-info-acts">
-            ${
-              FM.report.output_path
-                ? `<button type="button" class="ghost-button fm-small" data-fm-act="check-copy"><span class="material-symbols-outlined">fact_check</span>Check the fixed copy</button>
-                   <button type="button" class="ghost-button fm-small" data-fm-act="show-copy"><span class="material-symbols-outlined">inventory_2</span>Show it</button>`
-                : `<button type="button" class="ghost-button fm-small" data-fm-act="scan"><span class="material-symbols-outlined">fact_check</span>Check again</button>`
-            }
-          </div>
+          ${FM.report.output_path ? `<small title="${escapeAttribute(FM.report.output_path)}">The fixed copy: ${escapeHtml(FM.report.output_path.split(/[\\/]/).slice(-3).join("\\"))}</small>` : ""}
         </div>
       </div>`
     : "";
-  // Folded settings carry the package; this card is then the fix itself.
+  // Settings for the fix only once there's something to fix.
+  const settings = refs.length && !FM.report
+    ? `<div class="missing-run-settings">
+        <div class="radio-group fm-out-mode" role="radiogroup" aria-label="Where the fix goes">
+          <label class="radio-pill" title="The fixed package goes to <folder>\\changed; the original stays as it is">
+            <input type="radio" name="fm-out" value="copy" ${inPlace ? "" : "checked"} /><span>Write a fixed copy</span></label>
+          <label class="radio-pill" title="Rewrite the package itself">
+            <input type="radio" name="fm-out" value="inplace" ${inPlace ? "checked" : ""} /><span>Fix the original</span></label>
+        </div>
+        ${inPlace ? `<label class="check-row"><input id="fm-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>Keep a backup of the original</span></label>` : fmFolderButton()}
+      </div>`
+    : "";
+  let cta = "";
+  if (FM.report) {
+    cta = `<div class="run-cta">
+        <div class="run-cta-text"><span class="run-cta-eyebrow">Done</span><span class="run-cta-sub">${
+          FM.report.output_path ? "Check the fixed copy to make sure nothing is missing" : "Check it again to make sure nothing is missing"
+        }</span></div>
+        <button type="button" class="accent-button action-button" data-fm-act="${FM.report.output_path ? "check-copy" : "scan"}">${FM.report.output_path ? "Check the fixed copy" : "Check again"}</button>
+      </div>
+      ${FM.report.output_path ? `<div class="fm-done-acts"><button type="button" class="ghost-button fm-small" data-fm-act="show-copy"><span class="material-symbols-outlined">inventory_2</span>Show the copy</button></div>` : ""}`;
+  } else if (refs.length) {
+    cta = `<div class="run-cta">
+        <div class="run-cta-text"><span class="run-cta-eyebrow">Final step</span>
+          <span class="run-cta-sub">${FM.applying ? escapeHtml(FM.message || "Fixing…") : `${ready} of ${pkgCount(refs.length, "missing file", "missing files")} chosen`}</span></div>
+        <button type="button" class="accent-button action-button" data-fm-act="apply" ${ready && !FM.applying ? "" : "disabled"}>${FM.applying ? "Fixing…" : ready ? `Run Fixes (${ready})` : "Run Fixes"}</button>
+      </div>`;
+  } else if (!FM.target) {
+    cta = `<p class="fm-details-hint">After the check, what can fix it and where the fixed copy goes show up here.</p>`;
+  } else if (Array.isArray(FM.refs) && !FM.error) {
+    cta = `<p class="fm-details-hint fm-details-clean"><span class="material-symbols-outlined">check_circle</span>Nothing to fix: every file it uses is where it should be.</p>`;
+  } else if (!FM.scanning) {
+    cta = `<p class="fm-details-hint">Check the package to see what's missing and how to fix it.</p>`;
+  }
   host.innerHTML = `
     <header class="card-eyebrow">${folded ? "Fix" : "VAR Details"}</header>
     ${folded ? "" : `<div class="var-info-panel">${fmInfoHtml()}</div>`}
-    ${report}
-    <div class="missing-run-settings">
-      <div class="radio-group fm-out-mode" role="radiogroup" aria-label="Where the fix goes">
-        <label class="radio-pill" title="The fixed package goes to <folder>\\changed; the original stays as it is">
-          <input type="radio" name="fm-out" value="copy" ${inPlace ? "" : "checked"} /><span>Write a fixed copy</span></label>
-        <label class="radio-pill" title="Rewrite the package itself">
-          <input type="radio" name="fm-out" value="inplace" ${inPlace ? "checked" : ""} /><span>Fix the original</span></label>
-      </div>
-      ${
-        inPlace
-          ? `<label class="check-row"><input id="fm-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>Keep a backup of the original</span></label>`
-          : `<div class="input-with-button">
-               <div class="input-with-icon"><span class="material-symbols-outlined input-leading-icon">folder_open</span>
-                 <input id="fm-output-dir" type="text" placeholder="Folder for the fixed copy" spellcheck="false" value="${escapeAttribute(fmOutputDir())}" /></div>
-               <button type="button" class="ghost-button" data-fm-act="pick-output">Browse</button>
-             </div>`
-      }
-    </div>
-    <div class="run-cta">
-      <div class="run-cta-text">
-        <span class="run-cta-eyebrow">Final step</span>
-        <span class="run-cta-sub">${
-          FM.applying ? escapeHtml(FM.message || "Fixing…") : refs.length ? `${ready} of ${refs.length} replacements chosen` : "Check the package, then choose replacements"
-        }</span>
-      </div>
-      <button type="button" class="accent-button action-button" data-fm-act="apply" ${ready && !FM.applying ? "" : "disabled"}>${FM.applying ? "Fixing…" : ready ? `Run Fixes (${ready})` : "Run Fixes"}</button>
-    </div>`;
-  $("fm-output-dir")?.addEventListener("change", (e) => fmStoreSet(FM_STORE.outputDir, e.target.value.trim()));
+    ${report}${settings}${cta}`;
   $("fm-backup")?.addEventListener("change", (e) => fmStoreSet(FM_STORE.backup, e.target.checked ? "1" : "0"));
   libThumbWatch(host);
 }
@@ -9779,11 +9827,45 @@ function fmRenderProgress() {
 }
 
 function fmRenderRefs() {
+  fmRenderSummary();
   fmRenderList();
   fmRenderDetail();
 }
 
-// Rows grouped under the package they point at.
+// After a check: what's easy, what needs a look.
+function fmRenderSummary() {
+  const host = $("fm-summary");
+  if (!host) return;
+  const refs = FM.refs ?? [];
+  if (!refs.length || FM.report) {
+    host.innerHTML = "";
+    return;
+  }
+  const s = fmSummary();
+  if (!s.open) {
+    host.innerHTML = `<div class="fm-summary is-done"><span class="material-symbols-outlined">task_alt</span>
+        <div>All ${s.total} have a replacement. Run Fixes when you're ready.</div></div>`;
+    return;
+  }
+  const exact = s.selfExact + s.otherExact;
+  const look = s.guess + s.none;
+  const lines = [
+    s.selfExact ? `<li><b>${s.selfExact}</b> ${s.selfExact === 1 ? "is" : "are"} already inside ${escapeHtml(fmSelfName())} — no download, no new dependency.</li>` : "",
+    s.otherExact ? `<li><b>${s.otherExact}</b> ${s.otherExact === 1 ? "has" : "have"} an exact copy in another package (it becomes a dependency).</li>` : "",
+    s.guess ? `<li><b>${s.guess}</b> ${s.guess === 1 ? "has" : "have"} a file with the same path, contents not compared — worth a look.</li>` : "",
+    s.none ? `<li><b>${s.none}</b> ${s.none === 1 ? "has" : "have"} no copy in your folders — search the database or download the package.</li>` : "",
+  ].join("");
+  host.innerHTML = `<div class="fm-summary">
+      <span class="material-symbols-outlined">lightbulb</span>
+      <div><ul>${lines}</ul>
+        <div class="fm-summary-acts">
+          ${exact ? `<button type="button" class="accent-button fm-small" data-fm-act="autopick"><span class="material-symbols-outlined">auto_fix_high</span>Choose the ${pkgCount(exact, "exact copy", "exact copies")}</button>` : ""}
+          ${look ? `<button type="button" class="ghost-button fm-small" data-fm-act="show-todo">Show the ${look} that need a choice</button>` : ""}
+        </div>
+      </div>
+    </div>`;
+}
+
 function fmRenderList() {
   const host = $("fm-list");
   const subtitle = $("fm-list-subtitle");
@@ -9792,24 +9874,21 @@ function fmRenderList() {
   const refs = FM.refs;
   if (!Array.isArray(refs)) {
     host.className = "group-list empty";
-    host.innerHTML = FM.scanning ? "Checking…" : FM.error ? escapeHtml(FM.error) : "Scan a target VAR to populate this list.";
-    if (subtitle) subtitle.textContent = FM.target ? "Not checked yet." : "Pick a .var above.";
+    host.innerHTML = FM.scanning ? "Checking…" : FM.error ? escapeHtml(FM.error) : FM.target ? "Check the package to list its missing files." : "Pick a .var above.";
+    if (subtitle) subtitle.textContent = FM.target ? "Not checked yet." : "";
     if (tools) tools.innerHTML = "";
     return;
   }
   if (!refs.length) {
     host.className = "group-list empty";
-    host.innerHTML = `<span class="fm-clean"><span class="material-symbols-outlined">check_circle</span>No broken references: every file it uses is where it should be.</span>`;
-    if (subtitle) subtitle.textContent = "Nothing to fix.";
+    host.innerHTML = `<span class="fm-clean"><span class="material-symbols-outlined">check_circle</span>Nothing missing: every file it uses is where it should be.</span>`;
+    if (subtitle) subtitle.textContent = "";
     if (tools) tools.innerHTML = "";
     return;
   }
   host.className = "group-list";
   const ready = refs.filter((r) => FM.picks.has(fmKey(r))).length;
-  const exactLeft = refs.filter((r) => !FM.picks.has(fmKey(r)) && fmBest(r)?.match === "crc").length;
-  if (subtitle) {
-    subtitle.innerHTML = `${pkgCount(refs.length, "broken reference", "broken references")} · <b>${ready} chosen</b>`;
-  }
+  if (subtitle) subtitle.innerHTML = `${pkgCount(refs.length, "missing file", "missing files")} · <b>${ready} chosen</b>`;
   if (tools) {
     const count = (k) => {
       const save = FM.filter;
@@ -9820,24 +9899,19 @@ function fmRenderList() {
     };
     tools.innerHTML = `
       <div class="fm-progress-line" title="${ready} of ${refs.length} chosen"><span style="width:${(ready / refs.length) * 100}%"></span></div>
-      <div class="fm-filter-row">
-        ${[
-          ["all", "All"],
-          ["todo", "To choose"],
-          ["ready", "Chosen"],
-          ["absent", "Not installed"],
-          ["inside", "File missing"],
-        ]
-          .map(([k, label]) => `<button type="button" class="fm-filter${FM.filter === k ? " is-active" : ""}" data-fm-filter="${k}">${label} <small>${count(k)}</small></button>`)
-          .join("")}
-        <button type="button" class="ghost-button fm-small fm-autopick" data-fm-act="autopick" ${exactLeft ? "" : "disabled"}
-          title="${exactLeft ? `Choose the exact copy for ${pkgCount(exactLeft, "reference", "references")}` : "Every exact copy is chosen"}">
-          <span class="material-symbols-outlined">auto_fix_high</span>Auto-pick${exactLeft ? ` ${exactLeft}` : ""}</button>
-      </div>`;
+      <div class="fm-filter-row">${[
+        ["all", "All"],
+        ["todo", "To choose"],
+        ["ready", "Chosen"],
+        ["absent", "Not installed"],
+        ["inside", "File missing"],
+      ]
+        .map(([k, label]) => `<button type="button" class="fm-filter${FM.filter === k ? " is-active" : ""}" data-fm-filter="${k}">${label} <small>${count(k)}</small></button>`)
+        .join("")}</div>`;
   }
   const rows = fmFiltered();
   if (!rows.length) {
-    host.innerHTML = `<p class="fm-none">No references match.</p>`;
+    host.innerHTML = `<p class="fm-none">No missing files match.</p>`;
     return;
   }
   const groups = new Map();
@@ -9845,45 +9919,51 @@ function fmRenderList() {
     if (!groups.has(r.ref_pkg)) groups.set(r.ref_pkg, []);
     groups.get(r.ref_pkg).push(r);
   }
+  const rowHtml = (ref, single) => {
+    const key = fmKey(ref);
+    const pick = FM.picks.get(key);
+    const fixed = FM.fixedKeys.has(key);
+    const path = ref.ref_path ?? "(listed in meta.json only)";
+    const slash = path.lastIndexOf("/");
+    const best = !pick && !fixed && ref.ref_path ? fmBest(ref) : null;
+    const p = pkgIdParts(ref.ref_pkg);
+    const absent = ref.kind !== "transitive";
+    const right = fixed
+      ? `<span class="chip chip-accent">Fixed</span>`
+      : pick
+        ? `<span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(`${pick.replacement_pkg}:/${pick.replacement_path ?? ""}`)}">→ ${escapeHtml(pick.label)}</span>`
+        : best
+          ? `<button type="button" class="ghost-button fm-row-use" data-fm-use="${escapeAttribute(key)}" title="Use ${escapeAttribute(best.isSelf ? `the copy already inside ${fmSelfName()}` : `the copy in ${best.package_id}`)} (Enter)">
+               <span class="material-symbols-outlined">${best.match === "crc" ? "check" : "help"}</span>Use ${best.match === "crc" ? "exact copy" : "same path"}</button>`
+          : `<span class="fm-dim">no copy in your folders</span>`;
+    return `<div class="group-row missing-row fm-row${key === FM.selected ? " active focused" : ""}${pick || fixed ? " is-chosen" : ""}" data-fm-row="${escapeAttribute(key)}" role="button" tabindex="0">
+        <span class="material-symbols-outlined fm-row-state">${fixed || pick ? "check_circle" : "radio_button_unchecked"}</span>
+        <span class="fm-row-text"><span class="fm-row-name">${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</span>
+          <span class="fm-row-dir">${
+            single
+              ? `<span class="fm-row-pkg ${absent ? "is-absent" : "is-inside"}" title="${escapeAttribute(`${ref.ref_pkg}: ${absent ? "not installed" : "installed, but this file isn't in it"}`)}">${escapeHtml(p.name)}</span> · `
+              : ""
+          }${escapeHtml(slash >= 0 ? path.slice(0, slash) : "")}</span></span>
+        ${right}
+      </div>`;
+  };
   host.innerHTML = [...groups.entries()]
     .map(([pkgId, list]) => {
+      // A header only where a package has several missing files.
+      if (list.length < 2) return rowHtml(list[0], true);
       const p = pkgIdParts(pkgId);
       const absent = list.some((r) => r.kind !== "transitive");
       const done = list.filter((r) => FM.picks.has(fmKey(r))).length;
       return `<div class="fm-group-label" title="${escapeAttribute(pkgId)}">
           <span class="chip ${absent ? "missing-kind-text-ref" : "missing-kind-transitive"}">${absent ? "Not installed" : "File missing"}</span>
           <b>${escapeHtml(p.name)}</b><small>${escapeHtml([p.creator, p.ver].filter(Boolean).join(" · "))}</small>
-          <span class="fm-group-done${done === list.length ? " is-done" : ""}" title="${done} of ${list.length} chosen">${done}/${list.length} chosen</span>
-        </div>
-        ${list
-          .map((ref) => {
-            const key = fmKey(ref);
-            const pick = FM.picks.get(key);
-            const fixed = FM.fixedKeys.has(key);
-            const path = ref.ref_path ?? "(listed in meta.json only)";
-            const slash = path.lastIndexOf("/");
-            const best = !pick && ref.ref_path ? fmBest(ref) : null;
-            const right = fixed
-              ? `<span class="chip chip-accent">Fixed</span>`
-              : pick
-                ? `<span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(`${pick.replacement_pkg}:/${pick.replacement_path ?? ""}`)}">→ ${escapeHtml(pick.label)}</span>`
-                : best?.match === "crc"
-                  ? `<span class="fm-dim">exact copy found</span>`
-                  : `<span class="fm-dim">${pkgCount(fmCandidates(ref).length, "option", "options")}</span>`;
-            return `<button type="button" class="group-row missing-row fm-row${key === FM.selected ? " active focused" : ""}${pick ? " is-chosen" : ""}" data-fm-row="${escapeAttribute(key)}">
-                <span class="material-symbols-outlined fm-row-state">${fixed || pick ? "check_circle" : "radio_button_unchecked"}</span>
-                <span class="fm-row-text"><span class="fm-row-name">${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</span>
-                  <span class="fm-row-dir">${escapeHtml(slash >= 0 ? path.slice(0, slash) : "")}</span></span>
-                ${right}
-              </button>`;
-          })
-          .join("")}`;
+          <span class="fm-group-done${done === list.length ? " is-done" : ""}">${done}/${list.length} chosen</span>
+        </div>${list.map((r) => rowHtml(r, false)).join("")}`;
     })
     .join("");
 }
 
-// How many of the missing files each replacement package can stand in for
-// (from the copies in your folders and the database pages loaded so far):
+// How many of the missing files each replacement package can stand in for:
 // package id ("SELF" for this package) -> Set of reference keys.
 function fmCoverage() {
   const map = new Map();
@@ -9901,31 +9981,40 @@ function fmCoverage() {
   return map;
 }
 
-// The package a reference points at: what it is, why it's missing, and how
-// to get it.
-function fmMissingPkgHtml(ref) {
+// The package a reference points at, and how to get it — only pushed when
+// there's no copy to use instead.
+function fmMissingPkgHtml(ref, { hasExact, fixed }) {
   const pkgId = ref.ref_pkg;
   const p = pkgIdParts(pkgId);
   const absent = ref.kind !== "transitive";
   const local = (state.varPackagesItems ?? []).find((it) => it.package_id === pkgId);
   const count = (FM.refs ?? []).filter((r) => r.ref_pkg === pkgId).length;
   const a = FM.avail.get(pkgId);
+  const quiet = hasExact || fixed;
+  const btn = quiet ? "fm-link" : "ghost-button fm-small";
   const get = !absent
     ? ""
     : !a
-      ? `<button type="button" class="ghost-button fm-small" data-fm-find="${escapeAttribute(pkgId)}" title="Look for it on the Hub and in your saved links"><span class="material-symbols-outlined">travel_explore</span>Find it</button>`
+      ? `<button type="button" class="${btn}" data-fm-find="${escapeAttribute(pkgId)}" title="Look for it on the Hub and in your saved links">${quiet ? "" : `<span class="material-symbols-outlined">travel_explore</span>`}Find it</button>`
       : a.state === "resolving"
         ? `<span class="fm-dim">Looking on the Hub…</span>`
         : a.state === "available"
-          ? `<button type="button" class="accent-button fm-small" data-fm-download="${escapeAttribute(pkgId)}"><span class="material-symbols-outlined">download</span>Download${
+          ? `<button type="button" class="${quiet ? "fm-link" : "accent-button fm-small"}" data-fm-download="${escapeAttribute(pkgId)}">${quiet ? "" : `<span class="material-symbols-outlined">download</span>`}Download${
               a.size ? ` · ${escapeHtml(formatBytesLocal(Number(a.size)))}` : ""
             }</button>`
           : a.state === "downloading"
             ? `<span class="fm-dim">Downloading — see Downloads</span>`
             : a.state === "done"
               ? `<span class="fm-dim">Downloaded — check again</span>`
-              : `<span class="fm-dim">No download found.</span><button type="button" class="ghost-button fm-small" data-fm-source="${escapeAttribute(pkgId)}"><span class="material-symbols-outlined">add_link</span>Add link</button>`;
-  return `<div class="fm-missing-pkg">
+              : `<span class="fm-dim">No download found.</span><button type="button" class="${btn}" data-fm-source="${escapeAttribute(pkgId)}">Add link</button>`;
+  const why = fixed
+    ? "Fixed in the last run: nothing to download."
+    : hasExact
+      ? `Not needed: ${hasExact} has this file, so there's nothing to download.`
+      : absent
+        ? "This package isn't in your folders. Download it, or use a copy of the file from another package below."
+        : "This package is installed, but the file isn't in it (another version, or it was removed). Use a copy from another package below.";
+  return `<div class="fm-missing-pkg${quiet ? " is-quiet" : ""}">
       <div class="fm-missing-pkg-head">
         <span class="material-symbols-outlined fm-missing-pkg-icon${absent ? " is-absent" : ""}">${absent ? "deployed_code" : "folder_off"}</span>
         <div class="fm-missing-pkg-text">
@@ -9934,63 +10023,105 @@ function fmMissingPkgHtml(ref) {
         </div>
         <span class="chip ${absent ? "missing-kind-text-ref" : "missing-kind-transitive"}">${absent ? "Not installed" : "File missing"}</span>
       </div>
-      <p class="fm-why">${
-        absent
-          ? "This package isn't in your folders. Download it, or use a copy of the file from another package below."
-          : "This package is installed, but the file isn't in it (another version, or it was removed). Use a copy from another package below."
-      }</p>
+      <p class="fm-why">${escapeHtml(why)}</p>
       <div class="fm-info-acts">
         ${get}
-        <button type="button" class="ghost-button fm-small" data-fm-explore-pkg="${escapeAttribute(pkgId)}" data-fm-explore-file="${escapeAttribute(local?.file_path ?? "")}"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
+        <button type="button" class="${btn}" data-fm-explore-pkg="${escapeAttribute(pkgId)}" data-fm-explore-file="${escapeAttribute(local?.file_path ?? "")}">${quiet ? "" : `<span class="material-symbols-outlined">space_dashboard</span>`}Explore</button>
       </div>
     </div>`;
 }
 
-function fmCandHtml(ref, c, coverage) {
+// One row per replacement package; its other copies of the file behind
+// "N more copies".
+function fmCandGroupsHtml(ref, list, coverage) {
   const key = fmKey(ref);
   const pick = FM.picks.get(key);
-  const replacementPkg = c.isSelf ? "SELF" : c.package_id;
-  const checked = pick && pick.replacement_pkg === replacementPkg && pick.replacement_path === c.internal_path;
-  const tags = [
-    c.isSelf ? `<span class="chip chip-accent">This package</span>` : "",
-    c.match === "crc" ? `<span class="chip fm-chip-good" title="Same contents (checksum)">Exact copy</span>` : "",
-    c.match === "path" ? `<span class="chip" title="Same path; contents not compared">Same path</span>` : "",
-    c.match === "db" && !c.isSelf ? `<span class="chip${c.installed ? " fm-chip-good" : ""}" title="${c.installed ? "In your folders" : "Only in the database: download it to use it"}">${c.installed ? "Installed" : "Not installed"}</span>` : "",
-  ].join("");
-  // The same package covers other missing files too: say so, and offer it
-  // for all of them in one go.
-  const others = (coverage?.get(replacementPkg)?.size ?? 1) - 1;
-  const a = !c.installed && c.match === "db" && !c.isSelf ? FM.avail.get(c.package_id) : null;
-  const get =
-    c.match === "db" && !c.installed && !c.isSelf
-      ? !a
-        ? `<button type="button" class="missing-candidate-action" data-fm-find="${escapeAttribute(c.package_id)}"><span class="material-symbols-outlined">travel_explore</span><span>Find it</span></button>`
-        : a.state === "available"
-          ? `<button type="button" class="missing-candidate-action" data-fm-download="${escapeAttribute(c.package_id)}"><span class="material-symbols-outlined">download</span><span>Download${a.size ? ` · ${escapeHtml(formatBytesLocal(Number(a.size)))}` : ""}</span></button>`
-          : `<span class="fm-dim">${a.state === "resolving" ? "looking…" : a.state === "downloading" ? "downloading…" : a.state === "done" ? "downloaded" : "no download found"}</span>`
-      : "";
-  return `<label class="keep-option missing-candidate fm-cand${checked ? " is-selected" : ""}" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}${c.package_file ? `\n${c.package_file}` : ""}`)}">
-      <input type="radio" name="fm-candidate" data-fm-cand="${escapeAttribute(key)}" data-fm-cand-pkg="${escapeAttribute(replacementPkg)}"
-        data-fm-cand-path="${escapeAttribute(c.internal_path)}" data-fm-cand-src="${c.isSelf ? "self" : c.match ?? "db"}" ${checked ? "checked" : ""} />
-      <div class="missing-candidate-body">
-        <div class="missing-candidate-head"><strong>${escapeHtml(c.isSelf ? `${libTitle(FM.item)} (this package)` : c.package_id)}</strong>${tags}</div>
-        <div class="missing-candidate-path">${c.internal_path === ref.ref_path ? `<span class="fm-dim">same path as the reference</span>` : escapeHtml(c.internal_path)}</div>
-        <div class="missing-candidate-meta">
-          ${c.size ? `<span>${escapeHtml(formatBytesLocal(Number(c.size)))}</span>` : ""}
-          ${others > 0 ? `<span class="fm-covers" title="It has a copy for ${pkgCount(others, "other missing file", "other missing files")} too">also fixes ${others} more</span>` : ""}
-        </div>
-        <div class="missing-candidate-actions">
-          ${
-            others > 0
-              ? `<button type="button" class="missing-candidate-action fm-use-all" data-fm-useall-pkg="${escapeAttribute(replacementPkg)}" title="Use it for every missing file it has a copy for"><span class="material-symbols-outlined">done_all</span><span>Use for all ${others + 1}</span></button>`
-              : ""
-          }
-          ${get}
-          ${c.isSelf ? "" : `<button type="button" class="missing-candidate-action" data-fm-explore-pkg="${escapeAttribute(c.package_id)}" data-fm-explore-file="${escapeAttribute(c.installed === false ? "" : c.package_file || "")}"><span class="material-symbols-outlined">space_dashboard</span><span>Explore</span></button>`}
-          <button type="button" class="missing-candidate-action" data-fm-copy="${escapeAttribute(c.isSelf ? fmTargetId() : c.package_id)}" title="Copy the package id"><span class="material-symbols-outlined">content_copy</span><span>Copy id</span></button>
-        </div>
-      </div>
-    </label>`;
+  const groups = new Map();
+  for (const c of list) {
+    const pkg = c.isSelf ? "SELF" : c.package_id;
+    if (!groups.has(pkg)) groups.set(pkg, []);
+    groups.get(pkg).push(c);
+  }
+  return [...groups.entries()]
+    .map(([pkg, copies]) => {
+      // The copy that best matches: same contents, then the same path.
+      copies.sort((a, b) => Number(b.match === "crc") - Number(a.match === "crc") || Number(b.internal_path === ref.ref_path) - Number(a.internal_path === ref.ref_path));
+      const c = copies[0];
+      const chosenCopy = pick && pick.replacement_pkg === pkg ? copies.find((x) => x.internal_path === pick.replacement_path) : null;
+      const shown = chosenCopy ?? c;
+      const isChosen = Boolean(chosenCopy);
+      const others = (coverage.get(pkg)?.size ?? 1) - 1;
+      const openKey = `${key}|${pkg}`;
+      const open = FM.candOpen.has(openKey);
+      const tags = [
+        c.isSelf ? `<span class="chip chip-accent" title="The file is inside the package you're fixing">Already inside</span>` : "",
+        shown.match === "crc" ? `<span class="chip fm-chip-good" title="Same contents (checksum)">Exact copy</span>` : "",
+        shown.match === "path" ? `<span class="chip" title="Same path; contents not compared">Same path</span>` : "",
+        shown.match === "db" && !c.isSelf ? `<span class="chip${c.installed ? " fm-chip-good" : ""}" title="${c.installed ? "In your folders" : "Only in the database: download it to use it"}">${c.installed ? "Installed" : "Not installed"}</span>` : "",
+      ].join("");
+      const a = shown.match === "db" && !c.installed && !c.isSelf ? FM.avail.get(c.package_id) : null;
+      const get =
+        shown.match === "db" && !c.installed && !c.isSelf
+          ? !a
+            ? `<button type="button" class="fm-icon-btn" data-fm-find="${escapeAttribute(c.package_id)}" title="Find a download"><span class="material-symbols-outlined">travel_explore</span></button>`
+            : a.state === "available"
+              ? `<button type="button" class="fm-icon-btn is-accent" data-fm-download="${escapeAttribute(c.package_id)}" title="Download${a.size ? ` · ${escapeAttribute(formatBytesLocal(Number(a.size)))}` : ""}"><span class="material-symbols-outlined">download</span></button>`
+              : `<span class="fm-dim">${a.state === "resolving" ? "looking…" : a.state === "downloading" ? "downloading…" : a.state === "done" ? "downloaded" : "no download"}</span>`
+          : "";
+      const radio = (x, alt) => {
+        const checked = pick && pick.replacement_pkg === pkg && pick.replacement_path === x.internal_path;
+        return `<label class="fm-cand-pick${alt ? " is-alt" : ""}">
+            <input class="sr-only" type="radio" name="fm-candidate" data-fm-cand="${escapeAttribute(key)}" data-fm-cand-pkg="${escapeAttribute(pkg)}"
+              data-fm-cand-path="${escapeAttribute(x.internal_path)}" data-fm-cand-src="${x.isSelf ? "self" : x.match ?? "db"}" ${checked ? "checked" : ""} />
+            <span class="material-symbols-outlined fm-cand-radio">${checked ? "radio_button_checked" : "radio_button_unchecked"}</span>
+            ${
+              alt
+                ? `<span class="fm-cand-path" title="${escapeAttribute(x.internal_path)}">${escapeHtml(x.internal_path)}</span>`
+                : `<span class="fm-cand-name" title="${escapeAttribute(`${x.package_id}:/${x.internal_path}${x.package_file ? `\n${x.package_file}` : ""}`)}">${escapeHtml(c.isSelf ? fmSelfName() : x.package_id)}</span>`
+            }
+          </label>`;
+      };
+      return `<div class="fm-cand-row${isChosen ? " is-selected" : ""}">
+          <div class="fm-cand-top">
+            ${radio(shown, false)}
+            <span class="fm-cand-tags">${tags}</span>
+            <span class="fm-cand-acts">
+              ${others > 0 ? `<button type="button" class="ghost-button fm-tiny fm-use-all" data-fm-useall-pkg="${escapeAttribute(pkg)}" title="Use it for every missing file it has a copy of">Use for all ${others + 1}</button>` : ""}
+              ${get}
+              ${c.isSelf ? "" : `<button type="button" class="fm-icon-btn" data-fm-explore-pkg="${escapeAttribute(c.package_id)}" data-fm-explore-file="${escapeAttribute(c.installed === false ? "" : c.package_file || "")}" title="Explore ${escapeAttribute(c.package_id)}"><span class="material-symbols-outlined">space_dashboard</span></button>`}
+              <button type="button" class="fm-icon-btn" data-fm-copy="${escapeAttribute(c.isSelf ? fmTargetId() : c.package_id)}" title="Copy the package id"><span class="material-symbols-outlined">content_copy</span></button>
+            </span>
+          </div>
+          <div class="fm-cand-sub">
+            <span class="fm-cand-path" title="${escapeAttribute(shown.internal_path)}">${shown.internal_path === ref.ref_path ? `<span class="fm-dim">same path as the missing file</span>` : escapeHtml(shown.internal_path)}</span>
+            ${shown.size ? `<span class="fm-dim">${escapeHtml(formatBytesLocal(Number(shown.size)))}</span>` : ""}
+            ${others > 0 ? `<span class="fm-covers" title="It has a copy of ${pkgCount(others, "other missing file", "other missing files")} too">also fixes ${others} more</span>` : ""}
+            ${copies.length > 1 ? `<button type="button" class="fm-link" data-fm-copies="${escapeAttribute(openKey)}">${open ? "Hide" : pkgCount(copies.length - 1, "more copy", "more copies")}</button>` : ""}
+          </div>
+          ${open ? `<div class="fm-cand-alts">${copies.filter((x) => x !== shown).map((x) => radio(x, true)).join("")}</div>` : ""}
+        </div>`;
+    })
+    .join("");
+}
+
+function fmRenderStrip() {
+  const host = $("fm-strip");
+  if (!host) return;
+  const refs = FM.refs ?? [];
+  if (!refs.length) {
+    host.innerHTML = "";
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+  const ready = refs.filter((r) => FM.picks.has(fmKey(r))).length;
+  host.innerHTML = FM.report
+    ? `<span class="material-symbols-outlined fm-strip-ok">check_circle</span>
+       <span class="fm-strip-text"><b>Fixed ${Number(FM.report.fixes_applied ?? FM.report.count)}</b><small>${FM.flash ? escapeHtml(FM.flash) : "check it to be sure"}</small></span>
+       <button type="button" class="accent-button fm-small" data-fm-act="${FM.report.output_path ? "check-copy" : "scan"}">${FM.report.output_path ? "Check the copy" : "Check again"}</button>`
+    : `${pkgRing(ready / refs.length, ready === refs.length ? "var(--accent-success)" : "var(--primary)", { size: 30, track: "var(--line)" })}
+       <span class="fm-strip-text"><b>${ready} of ${refs.length} chosen</b><small>${FM.flash ? escapeHtml(FM.flash) : ready ? "Run Fixes writes them" : "choose a replacement for each"}</small></span>
+       <button type="button" class="accent-button fm-small" data-fm-act="apply" ${ready && !FM.applying ? "" : "disabled"}>${FM.applying ? "Fixing…" : ready ? `Run Fixes (${ready})` : "Run Fixes"}</button>`;
 }
 
 function fmRenderDetail() {
@@ -9998,20 +10129,21 @@ function fmRenderDetail() {
   if (!host) return;
   const ref = (FM.refs ?? []).find((r) => fmKey(r) === FM.selected);
   if (!ref) {
-    host.innerHTML = `
+    host.innerHTML = `<div class="fm-strip hidden" id="fm-strip"></div>
       <div class="panel-head"><div><h2>Replacement Sources</h2>
-        <p class="panel-subtitle">${Array.isArray(FM.refs) && FM.refs.length ? "Select a missing resource to see what can replace it." : "Choose a replacement for each missing resource here."}</p></div></div>
-      <div class="detail-empty">No missing resource selected.</div>`;
+        <p class="panel-subtitle">${Array.isArray(FM.refs) && FM.refs.length ? "Select a missing file to see what can replace it." : "The replacement for each missing file is chosen here."}</p></div></div>
+      <div class="detail-empty">No missing file selected.</div>`;
+    fmRenderStrip();
     return;
   }
   const key = fmKey(ref);
   const pick = FM.picks.get(key);
+  const fixed = FM.fixedKeys.has(key);
   const cands = fmCandidates(ref);
   const best = fmBest(ref);
   const db = FM.db.get(key);
   const nested = FM.nested.get(key);
-  // The database too when nothing in your folders matches (or when asked).
-  if (ref.ref_path && !db && (fmDbMode() || !cands.length)) {
+  if (ref.ref_path && !db && !fixed && (fmDbMode() || !cands.length)) {
     fmLoadDb(ref);
     return;
   }
@@ -10023,60 +10155,79 @@ function fmRenderDetail() {
       const installed = isSelf || localPkgs.has(x.package_id) || (state.varPackagesItems ?? []).some((it) => it.package_id === x.package_id);
       return { ...x, match: "db", isSelf, installed };
     })
-    // The package that covers the most of your missing files first, then
-    // the ones you already have.
     .sort((a, b) => (coverage.get(b.isSelf ? "SELF" : b.package_id)?.size ?? 0) - (coverage.get(a.isSelf ? "SELF" : a.package_id)?.size ?? 0) || Number(b.installed) - Number(a.installed));
+  const exactHolder = cands.find((c) => c.match === "crc");
+  const hasExact = exactHolder ? (exactHolder.isSelf ? `${fmSelfName()} itself` : exactHolder.package_id) : "";
+  const words = FM_KIND_WORDS[ref.kind] ?? FM_KIND_WORDS.text_ref;
+  const path = ref.ref_path ?? "(listed in meta.json only)";
+  const slash = path.lastIndexOf("/");
+  // Details open by themselves when there's no copy to use instead.
+  const showDetails = FM.refDetails || (!cands.length && !fixed);
   const bestOthers = best ? (coverage.get(best.isSelf ? "SELF" : best.package_id)?.size ?? 1) - 1 : 0;
   const bestCard =
-    best && !(pick && pick.replacement_path === best.internal_path && pick.replacement_pkg === (best.isSelf ? "SELF" : best.package_id))
+    !fixed && best && !pick
       ? `<div class="fm-best">
-          <div><b>${best.match === "crc" ? "Exact copy found" : "Same path found"}</b>
-            <small>in ${escapeHtml(best.isSelf ? "this package itself" : best.package_id)}${bestOthers ? ` · it has ${pkgCount(bestOthers, "more missing file", "more missing files")} too` : ""}</small></div>
+          <div><b>${best.match === "crc" ? (best.isSelf ? `Already inside ${escapeHtml(fmSelfName())}` : "Exact copy found") : "Same path found"}</b>
+            <small>${
+              best.isSelf
+                ? "The package has this file; the reference just points at the original package."
+                : `in ${escapeHtml(best.package_id)}${bestOthers ? ` · it has ${pkgCount(bestOthers, "more missing file", "more missing files")} too` : ""}`
+            }</small></div>
           <button type="button" class="accent-button" data-fm-use="${escapeAttribute(key)}">Use it</button>
         </div>`
       : "";
   const sameAll = (FM.refs ?? []).filter((r) => r.ref_pkg === ref.ref_pkg && r.ref_path).length;
   const filtered = fmFiltered().filter((r) => r.ref_path).length;
   const all = (FM.refs ?? []).filter((r) => r.ref_path).length;
-  const chosen = pick ? (pick.replacement_pkg === "SELF" ? "this package" : pick.replacement_pkg) : "";
+  const chosen = pick?.label ?? "";
+  // Only the scopes that would do something.
+  const applyBtns = [
+    sameAll > 1 ? `<button type="button" class="ghost-button" data-fm-act="use-same" title="Every missing file from ${escapeAttribute(ref.ref_pkg)} the chosen package has a copy of">Same package (${sameAll})</button>` : "",
+    filtered > 1 && filtered !== all ? `<button type="button" class="ghost-button" data-fm-act="use-filtered" title="Every missing file the list shows now that the chosen package has a copy of">Shown (${filtered})</button>` : "",
+    all > 1 ? `<button type="button" class="ghost-button" data-fm-act="use-all" title="Every missing file the chosen package has a copy of">All (${all})</button>` : "",
+  ].join("");
   host.innerHTML = `
+    <div class="fm-strip" id="fm-strip"></div>
     <div class="panel-head"><div>
       <h2>Replacement Sources</h2>
-      <p class="panel-subtitle">${pick ? `Chosen: <b>${escapeHtml(chosen)}</b>` : "Nothing chosen yet."}</p>
+      <p class="panel-subtitle">${fixed ? `Fixed: now points at <b>${escapeHtml(chosen || "its replacement")}</b>` : pick ? `Chosen: <b>${escapeHtml(chosen)}</b>` : "Nothing chosen yet."}</p>
     </div></div>
     <div class="detail-panel fm-detail-body">
-      ${fmMissingPkgHtml(ref)}
-      <div class="detail-meta">
-        <div class="detail-block"><span>Broken reference</span><code>${escapeHtml(`${ref.ref_pkg}:/${ref.ref_path ?? ""}`)}</code></div>
+      <div class="fm-ref-head">
+        <span class="chip ${words[1]}" title="${escapeAttribute(words[2])}">${words[0]}</span>
+        <div class="fm-ref-head-text">
+          <b title="${escapeAttribute(`${ref.ref_pkg}:/${path}`)}">${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</b>
+          <small>from ${escapeHtml(pkgIdParts(ref.ref_pkg).name)} · used by ${escapeHtml((ref.source_files_in_target ?? []).map((f) => f.split("/").pop()).join(", ") || "meta.json")}</small>
+        </div>
+        <button type="button" class="fm-link" data-fm-act="details">${showDetails ? "Less" : "Details"}</button>
       </div>
-      <section class="missing-source-files-section"><h3>Used by</h3>
-        <ul class="missing-source-files">${(ref.source_files_in_target ?? []).map((f) => `<li>${escapeHtml(f)}</li>`).join("") || "<li>meta.json</li>"}</ul></section>
-      ${bestCard}
-      <section class="quick-actions fm-quick">
-        <span class="fm-quick-label">${pick ? `Apply <b>${escapeHtml(chosen)}</b> to` : "Choose one below, then apply it to"}</span>
-        <button type="button" class="ghost-button" data-fm-act="use-same" ${pick && sameAll > 1 ? "" : "disabled"}
-          title="Every missing file from ${escapeAttribute(ref.ref_pkg)} the chosen package has a copy of">Same broken package (${sameAll})</button>
-        <button type="button" class="ghost-button" data-fm-act="use-filtered" ${pick && filtered > 1 ? "" : "disabled"}
-          title="Every missing file the list shows now (its filter and search) that the chosen package has a copy of">Filtered refs (${filtered})</button>
-        <button type="button" class="ghost-button" data-fm-act="use-all" ${pick && all > 1 ? "" : "disabled"}
-          title="Every missing file the chosen package has a copy of">All refs (${all})</button>
-        <button type="button" class="ghost-button" data-fm-unpick="${escapeAttribute(key)}" ${pick ? "" : "disabled"}>Clear this choice</button>
-        <button type="button" class="ghost-button" data-fm-act="clear-picks" ${FM.picks.size ? "" : "disabled"}>Clear all choices</button>
-      </section>
-      <section class="keep-actions">
+      ${
+        showDetails
+          ? `<div class="fm-ref-details">
+              ${fmMissingPkgHtml(ref, { hasExact, fixed })}
+              <div class="detail-block"><span>Missing file</span><code>${escapeHtml(`${ref.ref_pkg}:/${ref.ref_path ?? ""}`)}</code></div>
+              <p class="fm-why">${escapeHtml(words[2])}. Used by ${escapeHtml((ref.source_files_in_target ?? []).join(", ") || "meta.json")}.</p>
+            </div>`
+          : ""
+      }
+      ${fixed ? `<p class="fm-fixed-note"><span class="material-symbols-outlined">check_circle</span>Fixed in the last run. Check the fixed copy to be sure.</p>` : bestCard}
+      ${
+        fixed
+          ? ""
+          : `<section class="keep-actions">
         <h3>In your folders <small>${cands.length}</small></h3>
-        <div class="keep-options fm-options">${cands.length ? cands.map((c) => fmCandHtml(ref, c, coverage)).join("") : `<p class="keep-option-empty">No copy in your folders.</p>`}</div>
+        <div class="fm-cands">${cands.length ? fmCandGroupsHtml(ref, cands, coverage) : `<p class="keep-option-empty">No copy in your folders.</p>`}</div>
         ${
           ref.ref_path
             ? `<div class="missing-db-header"><h3>In the database <small>${db ? `${dbItems.length}${db.hasMore ? "+" : ""}` : ""}</small></h3>
                  <input type="search" class="missing-db-search" data-fm-dbq="${escapeAttribute(key)}" placeholder="Filter by package id or path…" value="${escapeAttribute(db?.query ?? "")}" spellcheck="false" /></div>
-               <p class="fm-hint-line">Packages from your database index that have this file — the ones that cover the most of your missing files first. One you don't have can be downloaded.</p>
-               <div class="keep-options fm-options">${
+               <p class="fm-hint-line">Packages from your database index with this file, the ones that cover the most of your missing files first. One you don't have can be downloaded.</p>
+               <div class="fm-cands">${
                  !db
                    ? `<button type="button" class="ghost-button fm-small" data-fm-db="${escapeAttribute(key)}"><span class="material-symbols-outlined">database</span>Search the database</button>`
                    : db.error
                      ? `<p class="keep-option-empty">Lookup failed: ${escapeHtml(db.error)}</p>`
-                     : `${dbItems.map((x) => fmCandHtml(ref, x, coverage)).join("")}${
+                     : `${fmCandGroupsHtml(ref, dbItems, coverage)}${
                          db.loading
                            ? `<p class="keep-option-empty">Loading…</p>`
                            : !dbItems.length
@@ -10088,16 +10239,30 @@ function fmRenderDetail() {
                }</div>
                ${
                  nested?.items?.length
-                   ? `<h3>Likely <small>its path names ${escapeHtml(nested.innerPkg ?? "a package")}</small></h3><div class="keep-options fm-options">${nested.items
-                       .slice(0, 20)
-                       .map((x) => fmCandHtml(ref, { ...x, match: "db", installed: (state.varPackagesItems ?? []).some((it) => it.package_id === x.package_id) }, coverage))
-                       .join("")}</div>`
+                   ? `<h3>Likely <small>its path names ${escapeHtml(nested.innerPkg ?? "a package")}</small></h3><div class="fm-cands">${fmCandGroupsHtml(
+                       ref,
+                       nested.items.slice(0, 20).map((x) => ({ ...x, match: "db", installed: (state.varPackagesItems ?? []).some((it) => it.package_id === x.package_id) })),
+                       coverage,
+                     )}</div>`
                    : ""
                }`
             : ""
         }
       </section>
+      <section class="quick-actions fm-quick">
+        ${
+          pick && applyBtns
+            ? `<span class="fm-quick-label">Use <b>${escapeHtml(chosen)}</b> for every missing file it has a copy of in:</span>${applyBtns}`
+            : pick
+              ? ""
+              : `<span class="fm-quick-label">Choose a replacement above; then it can be used for other missing files too.</span>`
+        }
+        ${pick ? `<button type="button" class="ghost-button" data-fm-unpick="${escapeAttribute(key)}">Clear this choice</button>` : ""}
+        ${FM.picks.size ? `<button type="button" class="ghost-button" data-fm-act="clear-picks">Clear all choices</button>` : ""}
+      </section>`
+      }
     </div>`;
+  fmRenderStrip();
 }
 
 // The chosen package for every reference in `refs` it has the file for.
@@ -10112,8 +10277,24 @@ function fmUseFor(refs, replacementPkg) {
     else continue;
     n += 1;
   }
-  showToast(`Chose it for ${pkgCount(n, "reference", "references")}.`, "success", 3000);
+  fmFlash(`Chosen for ${pkgCount(n, "missing file", "missing files")}.`);
   fmRefresh();
+}
+
+// Use the best copy for a row, then go on to the next one to choose.
+function fmUseBest(key, { advance = false } = {}) {
+  const ref = (FM.refs ?? []).find((r) => fmKey(r) === key);
+  const best = ref && ref.ref_path ? fmBest(ref) : null;
+  if (!best) return false;
+  FM.picks.set(key, fmPickFrom(best));
+  if (advance) {
+    const list = fmFiltered();
+    const i = list.findIndex((r) => fmKey(r) === key);
+    const next = list.slice(i + 1).find((r) => !FM.picks.has(fmKey(r)));
+    if (next) FM.selected = fmKey(next);
+  }
+  fmRefresh();
+  return true;
 }
 
 // ---- Events ---------------------------------------------------------------------------------
@@ -10129,6 +10310,10 @@ function fmExplore(pkgId, file) {
     const local = (state.varPackagesItems ?? []).find((it) => it.package_id === pkgId);
     pkgOpen(local ?? { package_id: pkgId, file_path: "" });
   }
+}
+
+function fmFocusRow(key) {
+  fmView()?.querySelector(`[data-fm-row="${CSS.escape(key)}"]`)?.focus();
 }
 
 function fmOnClick(e) {
@@ -10148,23 +10333,35 @@ function fmOnClick(e) {
   }
   if ((el = q("[data-fm-copy]"))) {
     e.preventDefault();
-    navigator.clipboard?.writeText(el.getAttribute("data-fm-copy")).then(() => showToast("Copied the package id.", "success", 2000)).catch(() => {});
+    navigator.clipboard?.writeText(el.getAttribute("data-fm-copy")).then(() => {
+      fmFlash("Copied the package id.");
+      fmRenderStrip();
+    }).catch(() => {});
+    return;
+  }
+  if ((el = q("[data-fm-copies]"))) {
+    e.preventDefault();
+    const k = el.getAttribute("data-fm-copies");
+    if (FM.candOpen.has(k)) FM.candOpen.delete(k);
+    else FM.candOpen.add(k);
+    fmRenderDetail();
     return;
   }
   if ((el = q("[data-fm-rmdir]"))) {
     removeAdditionalDir("missing", Number(el.getAttribute("data-fm-rmdir"))).then(fmRenderSource);
     return;
   }
+  if ((el = q("[data-fm-use]"))) {
+    e.stopPropagation();
+    const key = el.getAttribute("data-fm-use");
+    FM.selected = key;
+    fmUseBest(key);
+    return;
+  }
   if ((el = q("[data-fm-row]"))) {
     FM.selected = el.getAttribute("data-fm-row");
     fmRenderRefs();
-    return;
-  }
-  if ((el = q("[data-fm-use]"))) {
-    const ref = (FM.refs ?? []).find((r) => fmKey(r) === el.getAttribute("data-fm-use"));
-    const best = ref && fmBest(ref);
-    if (best) FM.picks.set(fmKey(ref), fmPickFrom(best));
-    fmRefresh();
+    fmFocusRow(FM.selected);
     return;
   }
   if ((el = q("[data-fm-unpick]"))) {
@@ -10200,6 +10397,10 @@ function fmOnClick(e) {
       FM.configOpen = !FM.configOpen;
       fmRenderHero();
       break;
+    case "details":
+      FM.refDetails = !FM.refDetails;
+      fmRenderDetail();
+      break;
     case "scan":
       fmScan();
       break;
@@ -10221,6 +10422,14 @@ function fmOnClick(e) {
     case "autopick":
       fmAutoPick();
       break;
+    case "show-todo": {
+      FM.filter = "todo";
+      const first = fmFiltered()[0];
+      if (first) FM.selected = fmKey(first);
+      fmRenderRefs();
+      if (first) fmFocusRow(FM.selected);
+      break;
+    }
     case "use-same":
       if (selected && FM.picks.get(FM.selected)) fmUseFor((FM.refs ?? []).filter((r) => r.ref_pkg === selected.ref_pkg), FM.picks.get(FM.selected).replacement_pkg);
       break;
@@ -10260,11 +10469,11 @@ function fmOnChange(e) {
       replacement_pkg: pkg,
       replacement_path: t.getAttribute("data-fm-cand-path"),
       source: t.getAttribute("data-fm-cand-src"),
-      label: pkg === "SELF" ? "this package" : pkg,
+      label: pkg === "SELF" ? `already inside ${fmSelfName()}` : pkg,
     });
     fmRefresh();
-  } else if (t.name === "fm-mode") {
-    fmStoreSet("fm.dbMode", t.value === "db" ? "1" : "0");
+  } else if (t.id === "fm-dbmode") {
+    fmStoreSet("fm.dbMode", t.checked ? "1" : "0");
     fmRenderSource();
     fmRenderDetail();
   } else if (t.name === "fm-out") {
@@ -10282,24 +10491,38 @@ function setupFixMissing() {
   view.addEventListener("click", fmOnClick);
   view.addEventListener("change", fmOnChange);
   view.addEventListener("keydown", (e) => {
-    // Up / down walks the list, like the old page's rows.
     const row = e.target.closest?.("[data-fm-row]");
-    if (row && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-      e.preventDefault();
-      const rows = [...view.querySelectorAll("[data-fm-row]")];
-      const next = rows[rows.indexOf(row) + (e.key === "ArrowDown" ? 1 : -1)];
-      if (next) {
-        FM.selected = next.getAttribute("data-fm-row");
+    if (row && e.target === row) {
+      const key = row.getAttribute("data-fm-row");
+      // Up / down walks the list; Enter uses the best copy and moves on;
+      // Space selects.
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const rows = [...view.querySelectorAll("[data-fm-row]")];
+        const next = rows[rows.indexOf(row) + (e.key === "ArrowDown" ? 1 : -1)];
+        if (next) {
+          FM.selected = next.getAttribute("data-fm-row");
+          fmRenderRefs();
+          fmFocusRow(FM.selected);
+        }
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        FM.selected = key;
+        if (!fmUseBest(key, { advance: true })) fmRenderRefs();
+        fmFocusRow(FM.selected);
+      } else if (e.key === " ") {
+        e.preventDefault();
+        FM.selected = key;
         fmRenderRefs();
-        view.querySelector(`[data-fm-row="${CSS.escape(FM.selected)}"]`)?.focus();
+        fmFocusRow(key);
       }
+      return;
     }
     if ((e.key === "Enter" || e.key === " ") && e.target.matches?.(".fm-dropzone")) {
       e.preventDefault();
       fmPickFile();
     }
   });
-  // The database filter of the selected reference (debounced).
   let timer = null;
   view.addEventListener("input", (e) => {
     const key = e.target.getAttribute?.("data-fm-dbq");
