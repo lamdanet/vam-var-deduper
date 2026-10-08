@@ -101,6 +101,20 @@ jobs:
           flags=()
           # Ticked on a manual run, or a version like 0.2.0-beta.1.
           if [ "$PRERELEASE" = "true" ] || [[ "$VERSION" == *-* ]]; then flags+=(--prerelease); fi
+
+          # Notes: this version's "## [X.Y.Z]" section of CHANGELOG.md, with
+          # GitHub's generated notes (compare link) appended. Without a
+          # section, GitHub's generated notes alone.
+          awk -v v="$VERSION" '
+            /^## \[/ { if (on) exit; on = index($0, "## [" v "]") == 1; next }
+            on
+          ' CHANGELOG.md 2>/dev/null | tr -d '\r' > dist/notes.md || true
+          if grep -q '[^[:space:]]' dist/notes.md; then
+            flags+=(--notes-file dist/notes.md)
+          else
+            echo "::warning::CHANGELOG.md has no section for $VERSION; using GitHub's generated notes."
+          fi
+
           gh release create "v$VERSION" dist/*.zip dist/*.exe dist/SHA256SUMS.txt \
             --target "$GITHUB_SHA" \
             --title "VAM VAR Deduper v$VERSION" \

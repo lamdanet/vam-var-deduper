@@ -12,6 +12,9 @@
 //   --remote    where to push (default: origin)
 //
 // The version lives only in src-tauri/Cargo.toml; Tauri reads it from there.
+// Release notes come from CHANGELOG.md's Unreleased section (or, if that's
+// empty, the commit messages since the last release). They become the
+// version's section there, which the app shows and the GitHub release uses.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -21,6 +24,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cargoTomlPath = path.join(root, "src-tauri", "Cargo.toml");
 const cargoLockPath = path.join(root, "src-tauri", "Cargo.lock");
+const changelogPath = path.join(root, "CHANGELOG.md");
 
 const fail = (msg) => {
   console.error(`\nrelease: ${msg}`);
@@ -97,7 +101,11 @@ const tag = `v${next}`;
 const branch = git("rev-parse", "--abbrev-ref", "HEAD");
 if (branch !== "main") fail(`release from main (you're on ${branch}): git switch main`);
 
-const dirty = git("status", "--porcelain", "--untracked-files=no");
+// Uncommitted notes in CHANGELOG.md are fine: they go into the release commit.
+const dirty = git("status", "--porcelain", "--untracked-files=no")
+  .split("\n")
+  .filter((l) => l && !/^.. CHANGELOG\.md$/.test(l))
+  .join("\n");
 if (dirty) fail(`commit or stash your changes first:\n${dirty}`);
 
 if (gitOk("rev-parse", "-q", "--verify", `refs/tags/${tag}`)) fail(`tag ${tag} already exists locally`);
@@ -116,11 +124,48 @@ if (!noPush) {
   if (remoteTag.trim()) fail(`tag ${tag} already exists on ${remote}`);
 }
 
+// --- release notes ---------------------------------------------------------
+
+const changelog = fs.existsSync(changelogPath) ? fs.readFileSync(changelogPath, "utf8") : "";
+const eol = changelog.includes("\r\n") ? "\r\n" : "\n";
+const unreleased = changelog.match(/^## \[Unreleased\][^\n]*\n([\s\S]*?)(?=^## \[|(?![\s\S]))/m);
+if (!unreleased) fail('CHANGELOG.md needs a "## [Unreleased]" heading (see docs/RELEASING.md)');
+
+let notes = unreleased[1].trim();
+let notesFrom = "CHANGELOG.md, Unreleased section";
+if (!notes) {
+  let lastTag = "";
+  try {
+    lastTag = execFileSync("git", ["describe", "--tags", "--abbrev=0", "--match", "v*"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {}
+  notes = git("log", "--no-merges", "--format=%s", lastTag ? `${lastTag}..HEAD` : "HEAD")
+    .split("\n")
+    .filter((s) => s && !/^Release v/.test(s))
+    .map((s) => `- ${s}`)
+    .join("\n");
+  notesFrom = `commit messages since ${lastTag || "the first commit"} (Unreleased was empty)`;
+  if (!notes) fail(`nothing to release: no commits since ${lastTag}`);
+}
+notes = notes.split(/\r?\n/).join(eol);
+
+const date = new Date().toLocaleDateString("sv"); // YYYY-MM-DD, local date
+const newChangelog =
+  changelog.slice(0, unreleased.index) +
+  `## [Unreleased]${eol}${eol}## [${next}] - ${date}${eol}${eol}${notes}${eol}${eol}` +
+  changelog.slice(unreleased.index + unreleased[0].length).replace(/^(\r?\n)+/, "");
+
 console.log(`\nRelease ${current} -> ${next}${parse(next).pre ? " (pre-release)" : ""}`);
 console.log(`  1. set version = "${next}" in src-tauri/Cargo.toml`);
-console.log(`  2. cargo check (updates Cargo.lock, makes sure it builds)`);
-console.log(`  3. commit "Release ${tag}" and tag ${tag}`);
-console.log(noPush ? `  4. (skipped: --no-push)` : `  4. push main and ${tag} to ${remote} -> GitHub builds and publishes the release`);
+console.log(`  2. move the release notes into "## [${next}] - ${date}" in CHANGELOG.md`);
+console.log(`  3. cargo check (updates Cargo.lock, makes sure it builds)`);
+console.log(`  4. commit "Release ${tag}" and tag ${tag}`);
+console.log(noPush ? `  5. (skipped: --no-push)` : `  5. push main and ${tag} to ${remote} -> GitHub builds and publishes the release`);
+console.log(`\nRelease notes (from ${notesFrom}):\n`);
+console.log(notes.split(/\r?\n/).map((l) => `  ${l}`).join("\n"));
 
 if (dryRun) {
   console.log("\nDry run: nothing changed.");
@@ -131,15 +176,17 @@ if (dryRun) {
 
 const originalLock = fs.readFileSync(cargoLockPath);
 fs.writeFileSync(cargoTomlPath, cargoToml.replace(versionLine, `version = "${next}"`));
+fs.writeFileSync(changelogPath, newChangelog);
 try {
   run("cargo", ["check", "--manifest-path", cargoTomlPath]);
 } catch {
   fs.writeFileSync(cargoTomlPath, cargoToml);
   fs.writeFileSync(cargoLockPath, originalLock);
-  fail("cargo check failed; the version change was undone. Fix the build and try again.");
+  fs.writeFileSync(changelogPath, changelog);
+  fail("cargo check failed; the version and CHANGELOG changes were undone. Fix the build and try again.");
 }
 
-run("git", ["add", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"]);
+run("git", ["add", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "CHANGELOG.md"]);
 run("git", ["commit", "--quiet", "-m", `Release ${tag}`]);
 run("git", ["tag", "-a", tag, "-m", `Release ${tag}`]);
 console.log(`\nCommitted and tagged ${tag}.`);
