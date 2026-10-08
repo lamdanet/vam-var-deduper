@@ -92,7 +92,9 @@ const newer = (a, b) => {
   if (!y.pre) return false;
   return x.pre.localeCompare(y.pre, "en", { numeric: true }) > 0;
 };
-if (!newer(next, current)) fail(`${next} isn't newer than the current version ${current}`);
+// The current version itself is allowed once: its first release (no bump,
+// e.g. v0.1.0). The tag checks below stop it if it was already released.
+if (next !== current && !newer(next, current)) fail(`${next} isn't newer than the current version ${current}`);
 
 const tag = `v${next}`;
 
@@ -159,7 +161,11 @@ const newChangelog =
   changelog.slice(unreleased.index + unreleased[0].length).replace(/^(\r?\n)+/, "");
 
 console.log(`\nRelease ${current} -> ${next}${parse(next).pre ? " (pre-release)" : ""}`);
-console.log(`  1. set version = "${next}" in src-tauri/Cargo.toml`);
+console.log(
+  next === current
+    ? `  1. keep version = "${next}" in src-tauri/Cargo.toml (first release of it)`
+    : `  1. set version = "${next}" in src-tauri/Cargo.toml`,
+);
 console.log(`  2. move the release notes into "## [${next}] - ${date}" in CHANGELOG.md`);
 console.log(`  3. cargo check (updates Cargo.lock, makes sure it builds)`);
 console.log(`  4. commit "Release ${tag}" and tag ${tag}`);

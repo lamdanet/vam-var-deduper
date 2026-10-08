@@ -19,7 +19,8 @@ From the repo root, on `main`, with your changes committed (except
 commit):
 
 ```sh
-npm run release -- 0.2.0     # release an exact version
+npm run release -- 0.2.0     # release an exact version (or the current one,
+                             # if it was never released, e.g. the first v0.1.0)
 npm run release -- patch     # 0.1.0 -> 0.1.1
 npm run release -- minor     # 0.1.0 -> 0.2.0
 npm run release -- major     # 0.1.0 -> 1.0.0
