@@ -491,7 +491,7 @@ pub(crate) fn show_in_explorer(path: String) -> Result<(), String> {
                 .status()
         };
         spawn_result.map_err(|err| err.to_string())?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1450,6 +1450,7 @@ pub(crate) fn list_var_resources(var_path: String) -> Result<Vec<VarResourceEntr
 
 // (async) so the folder walk and the scene-image id load run off the main
 // thread — a plain #[tauri::command] freezes the whole window while they run.
+#[allow(clippy::too_many_arguments)] // a Tauri command: one argument per field the UI sends
 #[tauri::command(async)]
 pub(crate) fn list_var_packages(
     input_dir: String,
@@ -1678,7 +1679,7 @@ pub(crate) fn list_var_packages(
 
     let total = filtered.len() as u64;
     let start = (offset as usize).min(filtered.len());
-    let end = start.saturating_add(limit.max(1).min(1000) as usize).min(filtered.len());
+    let end = start.saturating_add(limit.clamp(1, 1000) as usize).min(filtered.len());
     let page = filtered[start..end].iter().map(|i| (*i).clone()).collect();
 
     Ok(VarPackagePage {
@@ -1721,9 +1722,9 @@ fn matches_var_package_filters(
         const GB: u64 = 1024 * MB;
         let size = item.size_bytes;
         match bucket {
-            "sm" if !(size < 100 * MB) => return false,
-            "md" if !(size >= 100 * MB && size < GB) => return false,
-            "lg" if !(size >= GB) => return false,
+            "sm" if size >= 100 * MB => return false,
+            "md" if !(100 * MB..GB).contains(&size) => return false,
+            "lg" if size < GB => return false,
             _ => {}
         }
     }
@@ -1790,10 +1791,8 @@ pub(crate) fn load_known_package_ids(conn: &rusqlite::Connection) -> Result<Hash
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|err| err.to_string())?;
     let mut set = HashSet::new();
-    for row in rows {
-        if let Ok(id) = row {
-            set.insert(id);
-        }
+    for id in rows.flatten() {
+        set.insert(id);
     }
     Ok(set)
 }
@@ -2060,7 +2059,7 @@ pub(crate) fn list_var_packages_from_db(
         parse_sort_desc(sort_dir.as_deref()),
     );
 
-    let limit_i = limit.max(1).min(1000) as i64;
+    let limit_i = limit.clamp(1, 1000) as i64;
     let offset_i = offset.min(i64::MAX as u64) as i64;
 
     // When the status filter is engaged we must materialize all SQL-matching
@@ -2230,7 +2229,7 @@ pub(crate) fn list_var_package_filter_options(
             // Nothing scanned yet — an empty menu matches the empty grid.
             None => Vec::new(),
         };
-        creators.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        creators.sort_by_key(|a| a.to_lowercase());
         return Ok(VarPackageFilterOptions { creators });
     }
 
@@ -2253,7 +2252,7 @@ pub(crate) fn list_var_package_filter_options(
         }
         v
     };
-    creators.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    creators.sort_by_key(|a| a.to_lowercase());
 
     Ok(VarPackageFilterOptions { creators })
 }
@@ -2376,7 +2375,7 @@ pub(crate) fn list_resources_from_db(
 
     let (where_sql, where_params) = build_resource_list_where(&search, &filters);
 
-    let limit_i = limit.max(1).min(1000) as i64;
+    let limit_i = limit.clamp(1, 1000) as i64;
     let offset_i = offset.min(i64::MAX as u64) as i64;
 
     let total: u64 = if skip_total.unwrap_or(false) {
@@ -2499,7 +2498,7 @@ pub(crate) fn list_resource_filter_options(
         }
         v
     };
-    categories.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    categories.sort_by_key(|a| a.to_lowercase());
 
     Ok(ResourceListFilterOptions { categories })
 }
@@ -3278,10 +3277,8 @@ fn run_reclaim_scan_task(
                 let name: String = row.get(1)?;
                 Ok((pid, name))
             })?;
-        for row in rows {
-            if let Ok((pid, name)) = row {
-                map.insert(pid, name);
-            }
+        for (pid, name) in rows.flatten() {
+            map.insert(pid, name);
         }
         map
     };
@@ -3732,9 +3729,9 @@ fn inspect_var_for_dependency(
                 // longer creator name like "OtherMeshedVR" is rejected.
                 if hit > 0 {
                     let prev = lb[hit - 1];
-                    let is_word = (b'A'..=b'Z').contains(&prev)
-                        || (b'a'..=b'z').contains(&prev)
-                        || (b'0'..=b'9').contains(&prev)
+                    let is_word = prev.is_ascii_uppercase()
+                        || prev.is_ascii_lowercase()
+                        || prev.is_ascii_digit()
                         || prev == b'_'
                         || prev == b'-'
                         || prev == b'.';
@@ -3750,8 +3747,8 @@ fn inspect_var_for_dependency(
                 let mut version_end = after_base;
                 while version_end < lb.len() {
                     let c = lb[version_end];
-                    let is_token = (b'a'..=b'z').contains(&c)
-                        || (b'0'..=b'9').contains(&c)
+                    let is_token = c.is_ascii_lowercase()
+                        || c.is_ascii_digit()
                         || c == b'_'
                         || c == b'-'
                         || c == b'.';
@@ -5112,6 +5109,7 @@ pub(crate) fn start_analyze_text_dependencies_task(
 // downloads run independently and can be cancelled individually.
 // ----------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)] // worker entry point: the task's shared state plus its download
 pub(crate) fn run_download_one_task(
     tasks: &Arc<Mutex<HashMap<u64, ProgressPayload>>>,
     task_id: u64,
@@ -6163,6 +6161,7 @@ pub(crate) fn find_db_candidates_for_broken_ref(
 /// finishes. Spawns a worker thread and returns a `TaskHandle` immediately;
 /// the UI polls `get_task_progress(task_id)` and reads `fix_report` off the
 /// final payload.
+#[allow(clippy::too_many_arguments)] // a Tauri command: one argument per field the UI sends
 #[tauri::command]
 pub(crate) fn start_apply_missing_resources_fix_task(
     input_dir: String,
@@ -6334,6 +6333,7 @@ pub(crate) fn scan_internalize_candidates(
 /// pkg from `meta.json` dependencies when every ref to it was internalized.
 /// I/O-heavy work runs on a worker thread; the UI polls `get_task_progress`
 /// and reads `internalize_report` off the final payload.
+#[allow(clippy::too_many_arguments)] // a Tauri command: one argument per field the UI sends
 #[tauri::command]
 pub(crate) fn start_apply_internalize_task(
     input_dir: String,

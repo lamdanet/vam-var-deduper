@@ -227,7 +227,7 @@ impl CtrDecryptor {
 
     fn seek(&mut self, offset: u64) {
         self.offset = offset;
-        if offset % 16 != 0 {
+        if !offset.is_multiple_of(16) {
             self.keystream = self.block_keystream(offset / 16);
         }
     }
@@ -386,7 +386,7 @@ fn folder_files(
             })
         })
         .collect();
-    out.sort_by(|a, b| (a.path.to_lowercase(), a.name.to_lowercase()).cmp(&(b.path.to_lowercase(), b.name.to_lowercase())));
+    out.sort_by_key(|a| (a.path.to_lowercase(), a.name.to_lowercase()));
     Ok(out)
 }
 

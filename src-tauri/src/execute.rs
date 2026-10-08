@@ -575,9 +575,7 @@ pub(crate) fn rewrite_external_text_payload(
     raw: &[u8],
     replacements: &BTreeMap<String, String>,
 ) -> Option<Vec<u8>> {
-    let Some((text, encoding)) = decode_text(raw) else {
-        return None;
-    };
+    let (text, encoding) = decode_text(raw)?;
 
     let mut updated = text.clone();
     for (old_ref, new_ref) in replacements {

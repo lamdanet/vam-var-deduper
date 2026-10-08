@@ -71,7 +71,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let db = db::open(&app.handle())?;
+            let db = db::open(app.handle())?;
             app.manage(AppState::new());
             app.manage(db);
             Ok(())
