@@ -5,6 +5,9 @@
   "description": "Rust + Tauri desktop app for deduping VAM VAR packages",
   "scripts": {
     "tauri:dev": "cargo run --manifest-path src-tauri/Cargo.toml",
-    "tauri:build": "cargo build --release --manifest-path src-tauri/Cargo.toml"
+    "tauri:build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "posttauri:dev": "node scripts/prune-target.mjs",
+    "posttauri:build": "node scripts/prune-target.mjs",
+    "prune": "node scripts/prune-target.mjs"
   }
 }
