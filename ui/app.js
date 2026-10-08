@@ -663,7 +663,7 @@ Object.assign(I18N.en_US, {
     "Target VAR changed. Cleared the previous scan result. Please scan again.",
   targetVarLabel: "Target VAR",
   targetVarRequired: "Select a .var file before scanning.",
-  openVarDetails: "VAR Details",
+  openVarDetails: "Details",
   varInfoPanel: "VAR Info",
   varInfoSize: "Size",
   varInfoTime: "Modified",
@@ -872,7 +872,7 @@ Object.assign(I18N.en_US, {
   resourceListSidePanelEmpty: "Select a row to inspect duplicates.",
   resourceListSidePanelOnlyOne: "This resource appears in only one package.",
   resourceListSidePanelLoadFailed: (error) => `Failed to load duplicates: ${error}`,
-  resourceListSideJump: "Open in VAR Details",
+  resourceListSideJump: "Open details",
   resourceListPagePrev: "Previous",
   resourceListPageNext: "Next",
   // `total` can be a number (count known) or a string like "…" while the
@@ -882,7 +882,7 @@ Object.assign(I18N.en_US, {
       typeof total === "number" ? total.toLocaleString() : total
     }`,
   resourceListContextCopyCrc: "Copy CRC32",
-  resourceListContextOpenPackage: "Open package in VAR Details",
+  resourceListContextOpenPackage: "Open package details",
   resourceListContextFindDupes: "Find duplicates",
   resourceListContextShowExplorer: "Show in Explorer",
   resourceListCopyOk: "Copied to clipboard.",
@@ -1579,7 +1579,7 @@ function dlItemInner(job) {
   }
   const errLine = job.status === "failed" && job.error ? `<div class="dl-item-err">${escapeHtml(job.error)}</div>` : "";
   const openable = Boolean(job.packageId || job.localPath);
-  const openAttrs = openable ? ` data-dl-open="${job.id}" title="Open in VAR Details"` : "";
+  const openAttrs = openable ? ` data-dl-open="${job.id}" title="Open details"` : "";
   return (
     `<div class="dl-item${openable ? " dl-item-openable" : ""}" data-dl-id="${job.id}"${openAttrs}>` +
     `<div class="dl-item-head"><span class="dl-item-name" title="${label}">${label}</span>` +
@@ -4249,7 +4249,7 @@ function libContentSectionHtml(item, details) {
             ? `<button type="button" class="lib-small-link" data-lib-action="extract" title="Save the clothing, hair, morphs or appearance of the people in its scenes as VaM presets"><span class="material-symbols-outlined">person_add</span>Extract presets</button>`
             : ""
         }
-        <button type="button" class="lib-small-link is-quiet" data-lib-action="browse-files" title="Open in VAR Details"><span class="material-symbols-outlined">account_tree</span>Browse files</button>
+        <button type="button" class="lib-small-link is-quiet" data-lib-action="browse-files" title="Its files as a tree, a list or a size map"><span class="material-symbols-outlined">account_tree</span>Browse files</button>
         <button type="button" class="lib-small-link" data-lib-action="images" title="Every image in the package"><span class="material-symbols-outlined">grid_view</span>View images</button>
       </span>
     </div>`;
@@ -4429,14 +4429,9 @@ function libDetailHeaderHtml(item, details) {
             : ""
         }
         ${libOffloadButtonHtml(item, { big: true })}
-        <div class="lib-actions-row lib-open-row">
-          <button type="button" class="lib-btn lib-btn-accent" data-lib-action="explore" title="Open it in Package Explorer">
-            <span class="material-symbols-outlined">space_dashboard</span>Explore
-          </button>
-          <button type="button" class="lib-btn lib-btn-accent" data-lib-action="open-details" title="Open it in VAR Details">
-            <span class="material-symbols-outlined">open_in_new</span>VAR Details
-          </button>
-        </div>
+        <button type="button" class="lib-btn lib-btn-accent lib-btn-full" data-lib-action="open-details" title="Its pictures, content, dependencies and files">
+          <span class="material-symbols-outlined">space_dashboard</span>Open details
+        </button>
         <div class="lib-actions-row">
           <button type="button" class="lib-btn lib-btn-destructive" data-lib-action="delete">
             <span class="material-symbols-outlined">delete</span>Delete · ${escapeHtml(formatBytesLocal(item.size_bytes))}
@@ -6231,7 +6226,7 @@ function pkgLandingHtml() {
         <button type="button" class="pkg-drop" data-pkg-act="pick">
           <span class="pkg-drop-icon"><span class="material-symbols-outlined">deployed_code</span></span>
           <b>Explore a package</b>
-          <span>Drop a .var here, or click to pick one. You can also right-click a package in VAR Packages → Explore.</span>
+          <span>Drop a .var here, or click to pick one. You can also right-click a package in VAR Packages → Open Details.</span>
         </button>
         ${
           cards.length
@@ -8155,6 +8150,10 @@ async function pkgLoadShared({ auto = false } = {}) {
     PKG.shared = auto ? null : { error: `Couldn't compare: ${String(e?.message || e)}. Build the database first (Database page).` };
   }
   pkgRenderShared();
+  // The Files views can now mark and filter the shared files.
+  pkgRenderFileCats();
+  pkgRenderFileList();
+  if (pkgFileView() === "list") pkgRenderFiles();
 }
 
 // ---- Events ---------------------------------------------------------------------------
@@ -9644,7 +9643,7 @@ function sourcesRowHtml(i) {
       <span class="sources-row-acts">
         ${
           r.inLibrary
-            ? `<button type="button" class="icon-button" data-sources-act="details" data-sources-i="${i}" title="Open your copy in VAR Details">
+            ? `<button type="button" class="icon-button" data-sources-act="details" data-sources-i="${i}" title="Open your copy's details">
                  <span class="material-symbols-outlined">description</span></button>`
             : ""
         }
@@ -10026,7 +10025,7 @@ async function sourcesOpenDetails(row) {
     showToast(`Couldn't find ${row.filename} in your library — rescan VAR Packages.`, "error");
     return;
   }
-  openVarDetailsView(item, "folder");
+  openPackageDetails(item, "folder");
 }
 
 function sourcesShowInLibrary(row) {
@@ -10040,7 +10039,7 @@ function sourcesRowMenu(event, row) {
   if (row.inLibrary) {
     items.push(
       {
-        label: "Open in VAR Details",
+        label: "Open details",
         action: () => sourcesOpenDetails(row).catch((e) => addLog(`Sources: ${String(e)}`)),
       },
       { label: "Show in VAR Packages", action: () => sourcesShowInLibrary(row) },
@@ -10102,7 +10101,7 @@ function sourcesRenderSaved() {
           <span class="sources-row-acts">
             ${
               inLib
-                ? `<button type="button" class="icon-button" data-sources-saved-details="${i}" title="Open your copy in VAR Details"><span class="material-symbols-outlined">description</span></button>`
+                ? `<button type="button" class="icon-button" data-sources-saved-details="${i}" title="Open your copy's details"><span class="material-symbols-outlined">description</span></button>`
                 : ""
             }
             <button type="button" class="icon-button" data-sources-saved-open="${i}" title="Open the link in your browser"><span class="material-symbols-outlined">open_in_new</span></button>
@@ -10282,7 +10281,7 @@ function setupSourcesPage() {
     const items = [];
     if (sourcesInLibrary(row.filename)) {
       items.push(
-        { label: "Open in VAR Details", action: () => sourcesOpenDetails(row).catch((err) => addLog(`Sources: ${String(err)}`)) },
+        { label: "Open details", action: () => sourcesOpenDetails(row).catch((err) => addLog(`Sources: ${String(err)}`)) },
         { label: "Show in VAR Packages", action: () => sourcesShowInLibrary(row) },
         { separator: true },
       );
@@ -10352,7 +10351,7 @@ function libOnKeyDown(event) {
   }
   if (event.key === "Enter") {
     const item = libFindItem(state.vpLead ?? state.vpSelAnchor);
-    if (item) openVarDetailsView(item, "folder");
+    if (item) openPackageDetails(item, "folder");
     return;
   }
   if (event.key === "Delete") {
@@ -10460,8 +10459,13 @@ function libRunAction(action, trigger) {
       if (item) pkgOpen(item);
       break;
     case "open-details":
+      if (item) openPackageDetails(item, "folder");
+      break;
     case "browse-files":
-      if (item) openVarDetailsView(item, "folder");
+      if (item) {
+        pkgOpen(item);
+        pkgScrollTo("files");
+      }
       break;
     case "delete":
       if (item) vpDeleteOne(item.file_path, trigger).catch((e) => addLog(`VAR Packages: ${String(e)}`));
@@ -10669,8 +10673,7 @@ function libContextMenu(event, item) {
         },
       ]
     : [
-        { label: "Explore", action: () => pkgOpen(item) },
-        { label: "Open Details", action: () => openVarDetailsView(item, "folder") },
+        { label: "Open Details", action: () => openPackageDetails(item, "folder") },
         {
           label: "Show in Explorer",
           action: () =>
@@ -11031,7 +11034,7 @@ function setupLibraryView() {
   scroll?.addEventListener("dblclick", (event) => {
     if (event.target.closest("button, input, [data-lib-author]")) return;
     const item = hostItem(event.target);
-    if (item) openVarDetailsView(item, "folder");
+    if (item) openPackageDetails(item, "folder");
   });
   scroll?.addEventListener("contextmenu", (event) => {
     const item = hostItem(event.target);
@@ -13238,6 +13241,28 @@ function openVarDetailsView(item, source = null) {
 
 window.__openVarDetailsView = openVarDetailsView;
 
+// The one way to open a package's details. Package Explorer when its file is
+// on disk; VAR Details otherwise — it handles packages only the database
+// knows, and offers to download one that's gone. `target` is a listing item
+// or a .var path.
+async function openPackageDetails(target, source = null) {
+  const fp = typeof target === "string" ? target : target?.file_path;
+  if (fp && /\.var(\.disabled)?$/i.test(fp) && invoke) {
+    const exists = await invoke("path_exists", { path: fp }).catch(() => false);
+    if (exists) {
+      pkgOpen(target);
+      return;
+    }
+  }
+  if (typeof target === "string") {
+    showVarDetailsView();
+    loadVarDetailsFromPath(target).catch((e) => addLog(`VAR Details: ${String(e)}`));
+    return;
+  }
+  openVarDetailsView(target, source);
+}
+
+
 // Action-button entry point: open a candidate package in VAR Details.
 // Prefers a freshly-loaded view from disk when we have a real file path
 // (local candidates carry the absolute .var path in `package_file`);
@@ -13248,14 +13273,13 @@ window.__openVarDetailsView = openVarDetailsView;
 function openCandidatePackageInVarDetails(packageId, packageFile) {
   if (!packageId || typeof openVarDetailsView !== "function") return;
   const hasPath = packageFile && /[\\/]/.test(packageFile) && /\.var$/i.test(packageFile);
-  if (hasPath && typeof loadVarDetailsFromPath === "function") {
-    showVarDetailsView();
-    loadVarDetailsFromPath(packageFile);
+  if (hasPath) {
+    openPackageDetails(packageFile);
     return;
   }
   const cached = (state.varPackagesItems ?? []).find((it) => it.package_id === packageId);
   if (cached) {
-    openVarDetailsView(cached, "folder");
+    openPackageDetails(cached, "folder");
     return;
   }
   const fileName = packageFile ? String(packageFile).split(/[\\/]/).pop() : `${packageId}.var`;
@@ -13788,7 +13812,7 @@ function depRenderList() {
             : `<button class="ghost-button dep-scan-action" type="button" data-dep-move="activate" data-dep-pkg="${pkgAttr}" title="Move it into AddonPackages so VaM loads it">Move to AddonPackages</button>`;
         action =
           move +
-          `<button class="icon-button" type="button" data-dep-details="${pkgAttr}" title="Open this package in VAR Details"><span class="material-symbols-outlined">description</span></button>` +
+          `<button class="icon-button" type="button" data-dep-details="${pkgAttr}" title="Open this package's details"><span class="material-symbols-outlined">description</span></button>` +
           `<button class="icon-button" type="button" data-dep-reveal="${pkgAttr}" title="Show in Explorer"><span class="material-symbols-outlined">folder_open</span></button>` +
           `<button class="icon-button dep-scan-act-danger" type="button" data-dep-delete="${pkgAttr}" title="Send ${escapeAttribute(localName)} to the Recycle Bin" aria-label="Send ${escapeAttribute(localName)} to the Recycle Bin"><span class="material-symbols-outlined">delete</span></button>`;
       } else if (it.status === "missing" && !it.url) {
@@ -16519,7 +16543,7 @@ function setupDatabasePackages() {
       return;
     }
     const item = dbPkgsItem(event.target.closest("tr[data-file-path]"));
-    if (item) openVarDetailsView(item, "db");
+    if (item) openPackageDetails(item, "db");
   });
   tbody?.addEventListener("contextmenu", (event) => {
     const item = dbPkgsItem(event.target.closest("tr[data-file-path]"));
@@ -16527,7 +16551,7 @@ function setupDatabasePackages() {
     event.preventDefault();
     const onDisk = Boolean(item.indexed);
     showContextMenu(event.clientX, event.clientY, [
-      { label: "Open Details", action: () => openVarDetailsView(item, "db") },
+      { label: "Open Details", action: () => openPackageDetails(item, "db") },
       ...(onDisk
         ? [
             {
@@ -17524,7 +17548,7 @@ async function openSourceRowInVarDetails(packageId, packageFile, sourceType) {
     indexed: Boolean(packageFile),
     scene_image_data: null,
   };
-  openVarDetailsView(item, source);
+  openPackageDetails(item, source);
 }
 
 function groupMenuItems() {
@@ -22462,7 +22486,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
         const cached = (state.varPackagesItems ?? []).find((it) => it.package_id === packageId);
         if (cached) {
-          openVarDetailsView(cached, "folder");
+          openPackageDetails(cached, "folder");
           return;
         }
         const fileName = filePath ? filePath.split(/[\\/]/).pop() : `${packageId}.var`;
@@ -24441,7 +24465,7 @@ window.addEventListener("DOMContentLoaded", async () => {
           file_name: fileName,
           creator: candidate.creator_name ?? deriveCreatorFromPackageId(candidate.package_id) ?? null,
         };
-        openVarDetailsView(item, "db");
+        openPackageDetails(item, "db");
       });
     }
 
@@ -25619,9 +25643,9 @@ window.addEventListener("DOMContentLoaded", async () => {
             </div>
             <div class="missing-candidate-actions">
               <button type="button" class="missing-candidate-action" data-action="open-var-details"
-                      data-package-id="${pkgAttr}" title="Open this package in VAR Details">
+                      data-package-id="${pkgAttr}" title="Open this package's details">
                 <span class="material-symbols-outlined">description</span>
-                <span>VAR Details</span>
+                <span>Details</span>
               </button>
               <button type="button" class="missing-candidate-action" data-action="copy-pkg-id"
                       data-package-id="${pkgAttr}" title="Copy the package id to clipboard">
@@ -27273,9 +27297,9 @@ window.addEventListener("DOMContentLoaded", async () => {
                 <div class="missing-candidate-actions">
                   <button type="button" class="missing-candidate-action" data-iz-action="open-var-details"
                           data-source-pkg="${pkgAttr}" data-source-var="${sourceVarAttr}"
-                          title="Open the source package in VAR Details">
+                          title="Open the source package's details">
                     <span class="material-symbols-outlined">description</span>
-                    <span>VAR Details</span>
+                    <span>Details</span>
                   </button>
                   <button type="button" class="missing-candidate-action" data-iz-action="copy-ref"
                           data-source-pkg="${pkgAttr}" data-ref-path="${refPathAttr}"
@@ -27970,7 +27994,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (pkg) {
         items.push({ separator: true });
         items.push({
-          label: "Open source pkg in VAR Details",
+          label: "Open source package details",
           action: () => openCandidatePackageInVarDetails(pkg, sourceVar),
         });
       }
@@ -28023,7 +28047,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         },
       });
       items.push({
-        label: "Open source pkg in VAR Details",
+        label: "Open source package details",
         action: () => openCandidatePackageInVarDetails(group.source_pkg_id, group.source_var_path),
       });
       if (group.source_var_path) {
@@ -29263,7 +29287,7 @@ function bindDbFindEvents() {
   if (openVd) openVd.addEventListener("click", () => {
     const v = (state.targetVarPath || $("dbf-target-var-path")?.value || "").trim();
     if (!/\.var$/i.test(v)) { addLog(t("targetVarRequired")); return; }
-    loadVarDetailsFromPath(v).catch((e) => addLog(`VAR Details: ${String(e)}`));
+    openPackageDetails(v);
   });
   syncOpenVarDetailsButton();
   const inp = $("dbf-input-dir");
