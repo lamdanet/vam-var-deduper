@@ -6394,6 +6394,21 @@ fn mega_ctr_decrypts_across_chunk_boundaries() {
     assert_eq!(out, plain);
 }
 
+// The MEGA round-trip tests encrypt and decrypt with the same code, so they
+// can't catch an AES that's wrong both ways. This pins it to the standard.
+#[test]
+fn mega_aes_matches_the_fips_197_test_vector() {
+    // FIPS-197 appendix C.1: AES-128, key 00 01 .. 0f, plaintext 00 11 .. ff.
+    let key: [u8; 16] = core::array::from_fn(|i| i as u8);
+    let plain: [u8; 16] = core::array::from_fn(|i| i as u8 * 0x11);
+    let (enc, dec) = crate::mega::testing::aes_block(&key, plain);
+    assert_eq!(
+        enc,
+        [0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a]
+    );
+    assert_eq!(dec, plain);
+}
+
 #[test]
 fn mega_folder_node_keys_unwrap_and_name_the_file() {
     use crate::mega::testing::*;

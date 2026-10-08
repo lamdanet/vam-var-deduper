@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::{Array, Block, BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use aes::Aes128;
 use base64::Engine;
 use serde::Serialize;
@@ -146,7 +146,12 @@ fn folder_file_url(handle: &str, key_text: &str, node: &str) -> String {
 // ----------------------------------------------------------------------------
 
 fn aes(key: &[u8; 16]) -> Aes128 {
-    Aes128::new(GenericArray::from_slice(key))
+    Aes128::new(&Array::from(*key))
+}
+
+/// `bytes` as one AES block. Callers always hand over exactly 16 bytes.
+fn block(bytes: &mut [u8]) -> &mut Block<Aes128> {
+    bytes.try_into().expect("AES works on 16-byte blocks")
 }
 
 /// The name in a node's encrypted attributes: AES-CBC (zero IV) over
@@ -163,7 +168,7 @@ fn decrypt_name(aes_key: &[u8; 16], at: &str) -> Option<String> {
     for chunk in data.chunks_mut(16) {
         let mut cur = [0u8; 16];
         cur.copy_from_slice(chunk);
-        cipher.decrypt_block(GenericArray::from_mut_slice(chunk));
+        cipher.decrypt_block(block(chunk));
         for (b, p) in chunk.iter_mut().zip(prev.iter()) {
             *b ^= p;
         }
@@ -188,8 +193,8 @@ fn unwrap_node_key(folder_key: &[u8; 16], k: &str, at: &str, is_file: bool) -> O
         if key.len() != if is_file { 32 } else { 16 } {
             continue;
         }
-        for block in key.chunks_mut(16) {
-            cipher.decrypt_block(GenericArray::from_mut_slice(block));
+        for chunk in key.chunks_mut(16) {
+            cipher.decrypt_block(block(chunk));
         }
         let aes_key: [u8; 16] = if is_file {
             FileKey(key.clone().try_into().ok()?).aes_key()
@@ -218,11 +223,11 @@ impl CtrDecryptor {
     }
 
     fn block_keystream(&self, block_index: u64) -> [u8; 16] {
-        let mut block = [0u8; 16];
-        block[..8].copy_from_slice(&self.nonce);
-        block[8..].copy_from_slice(&block_index.to_be_bytes());
-        self.cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
-        block
+        let mut counter = [0u8; 16];
+        counter[..8].copy_from_slice(&self.nonce);
+        counter[8..].copy_from_slice(&block_index.to_be_bytes());
+        self.cipher.encrypt_block(block(&mut counter));
+        counter
     }
 
     fn seek(&mut self, offset: u64) {
@@ -473,6 +478,16 @@ pub(crate) fn open_download(url: &str) -> Result<MegaDownload, String> {
 pub(crate) mod testing {
     use super::*;
 
+    /// One block through the app's AES-128, encrypted then decrypted again.
+    pub(crate) fn aes_block(key: &[u8; 16], plain: [u8; 16]) -> ([u8; 16], [u8; 16]) {
+        let cipher = aes(key);
+        let mut enc = plain;
+        cipher.encrypt_block(block(&mut enc));
+        let mut dec = enc;
+        cipher.decrypt_block(block(&mut dec));
+        (enc, dec)
+    }
+
     pub(crate) fn file_key(bytes: [u8; 32]) -> FileKey {
         FileKey(bytes)
     }
@@ -492,7 +507,7 @@ pub(crate) mod testing {
             for (b, p) in chunk.iter_mut().zip(prev.iter()) {
                 *b ^= p;
             }
-            cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
+            cipher.encrypt_block(block(chunk));
             prev.copy_from_slice(chunk);
         }
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
@@ -501,8 +516,8 @@ pub(crate) mod testing {
     pub(crate) fn wrap_key(folder_key: &[u8; 16], key: &[u8]) -> String {
         let mut out = key.to_vec();
         let cipher = aes(folder_key);
-        for block in out.chunks_mut(16) {
-            cipher.encrypt_block(GenericArray::from_mut_slice(block));
+        for chunk in out.chunks_mut(16) {
+            cipher.encrypt_block(block(chunk));
         }
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(out)
     }
