@@ -55,10 +55,11 @@ release time, it fills it with the commit messages since the last release.
   like Explorer's, or as a map sized by bytes, and you can show only its
   clothing, hair, morphs, textures and so on. Long dependency lists switch
   to a list you can filter and search. It also compares its files with your
-  database to show what other packages share.
-  Open it from the sidebar, a package's right-click menu or the Explore
-  button in its details, or drop a `.var` on the page. VAR Details is still
-  there
+  database: which files other packages have too, how much their copies
+  take, and a shortcut to clean against it. **Open details** everywhere in
+  the app now opens it (VAR Details still opens for packages that are only
+  in the database or whose file is gone); you can also drop a `.var` on
+  the page
 
 ### Changed
 - Downloads resume where they stopped instead of starting over, retry by
