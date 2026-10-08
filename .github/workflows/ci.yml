@@ -1,0 +1,49 @@
+# Builds and tests every pull request and every push to main, on Windows (the
+# only platform the app supports). The "Test" job is a required check on main,
+# so it runs for every PR, docs-only ones included; skipping it would leave the
+# PR waiting forever on a check that never reports.
+#
+# PRs from forks run with a read-only token and no secrets (pull_request, not
+# pull_request_target), so a PR's code can't touch the repo.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to the same PR/branch cancels the run still going for the old one.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Only main saves the cache; PRs reuse it without filling the quota.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check the UI and scripts parse
+        shell: bash
+        run: |
+          node --check ui/app.js
+          for f in scripts/*.mjs; do node --check "$f"; done
+
+      - name: Build
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Test
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml

@@ -1,0 +1,20 @@
+# Weekly PRs for outdated dependencies. Minor and patch updates are grouped
+# into one PR per ecosystem to keep the noise down. CI tests each PR.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-and-patch:
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
