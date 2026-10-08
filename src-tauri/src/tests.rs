@@ -6269,6 +6269,7 @@ fn download_task_extracts_a_var_from_a_password_protected_zip_source() {
         dest.display().to_string(),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        false,
         db,
     )
     .expect("task");
@@ -6469,6 +6470,7 @@ fn download_falls_back_to_a_working_link_and_remembers() {
         dest.display().to_string(),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        false,
         db.clone(),
     )
     .expect("task");

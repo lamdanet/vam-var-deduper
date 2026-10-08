@@ -424,6 +424,8 @@ pub(crate) struct ProgressPayload {
     #[serde(default)]
     pub(crate) offload_result: Option<OffloadResponse>,
     #[serde(default)]
+    pub(crate) verify_result: Option<crate::integrity::IntegrityResponse>,
+    #[serde(default)]
     pub(crate) source_scan_result: Option<crate::sources::SourceScanResult>,
 }
 
@@ -959,6 +961,8 @@ pub(crate) struct VarPackagesFolderCache {
     pub(crate) missing_unique: u64,
     /// `hub_index::generation()` the items' Hub fields were filled for.
     pub(crate) hub_stamp: u64,
+    /// `integrity::generation()` the items' `damaged` was filled for.
+    pub(crate) integrity_stamp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1047,6 +1051,9 @@ pub(crate) struct VarPackageListItem {
     /// ... and, on the newest local version of a family, a newer Hub version.
     pub(crate) hub_update_version: Option<u64>,
     pub(crate) hub_update_file: Option<String>,
+    /// A full integrity check (`integrity`) found it damaged: the first
+    /// failing entry. `None` when unchecked, fine, or changed since.
+    pub(crate) damaged: Option<String>,
     /// Top-level dependency keys, kept server-side for the dependency graph
     /// and the details panel; never sent with a page.
     #[serde(skip)]

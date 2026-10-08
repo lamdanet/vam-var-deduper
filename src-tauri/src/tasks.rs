@@ -1621,6 +1621,7 @@ pub(crate) fn list_var_packages(
                 items: scanned,
                 missing_unique,
                 hub_stamp: 0,
+                integrity_stamp: 0,
             });
         } else {
             // An apply mutated the library mid-walk. Drop the cache so the next
@@ -1646,13 +1647,19 @@ pub(crate) fn list_var_packages(
     // Hub fields (updates, Not on Hub) follow the Hub package index, which
     // loads and refreshes on its own schedule.
     let hub_generation = crate::hub_index::generation();
+    let integrity_generation = crate::integrity::generation();
     if let Some((fresh, _)) = fresh_items.as_mut() {
         crate::hub_index::annotate(fresh);
+        crate::integrity::annotate(fresh, &db);
     }
     if let Some(c) = cache.as_mut() {
         if c.hub_stamp != hub_generation {
             crate::hub_index::annotate(&mut c.items);
             c.hub_stamp = hub_generation;
+        }
+        if c.integrity_stamp != integrity_generation {
+            crate::integrity::annotate(&mut c.items, &db);
+            c.integrity_stamp = integrity_generation;
         }
     }
     let (items, missing_unique): (&[VarPackageListItem], u64) = match (fresh_items.as_ref(), cache.as_ref()) {
@@ -5153,6 +5160,7 @@ pub(crate) fn run_download_one_task(
     dest_dir: String,
     cancel: Arc<AtomicBool>,
     pause: Arc<AtomicBool>,
+    replace: bool,
     db: Db,
 ) -> Result<DownloadVarsResponse> {
     let dest = PathBuf::from(dest_dir.trim());
@@ -5187,7 +5195,9 @@ pub(crate) fn run_download_one_task(
         dest_dir: dest.display().to_string(),
     };
 
-    if final_path.exists() {
+    // `replace` (Redownload of a damaged copy) downloads anyway and swaps the
+    // new file in over the old one.
+    if final_path.exists() && !replace {
         if let Ok(meta) = std::fs::metadata(&final_path) {
             let _ = crate::db::update_download_link_size(&db, &safe_name, meta.len());
         }
@@ -5285,6 +5295,18 @@ pub(crate) fn run_download_one_task(
             },
             None => crate::hub::download_to_file(url, &tmp_path, &cancel, &mut report),
         };
+        // Every entry's checksum, not just "it opens": a cut-short or garbled
+        // transfer is caught here instead of in VaM.
+        let fetched = match fetched {
+            Ok(true) if crate::hub::is_valid_var(&tmp_path) => match crate::integrity::verify_var(&tmp_path) {
+                Ok(()) => Ok(true),
+                Err(e) => {
+                    discard_partial();
+                    Err(anyhow::anyhow!("downloaded file is damaged ({e})"))
+                }
+            },
+            other => other,
+        };
         let error = match fetched {
             Ok(true) if crate::hub::is_valid_var(&tmp_path) => {
                 let _ = std::fs::remove_file(&src_path);
@@ -5347,6 +5369,7 @@ pub(crate) fn is_transient_download_error(error: &str) -> bool {
         "http 5",
         "http 429",
         "http 408",
+        "damaged",
     ]
     .iter()
     .any(|p| lc.contains(p))
@@ -5387,6 +5410,7 @@ pub(crate) fn start_download_one_task(
     download_url: String,
     filename: String,
     dest_dir: String,
+    replace: Option<bool>,
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
@@ -5419,7 +5443,16 @@ pub(crate) fn start_download_one_task(
     let db = db.inner().clone();
     thread::spawn(move || {
         let result = run_download_one_task(
-            &tasks, task_id, package_id, download_url, filename, dest_dir, cancel_flag, pause_flag, db,
+            &tasks,
+            task_id,
+            package_id,
+            download_url,
+            filename,
+            dest_dir,
+            cancel_flag,
+            pause_flag,
+            replace.unwrap_or(false),
+            db,
         );
         finish_download_vars_task(&tasks, task_id, result);
     });

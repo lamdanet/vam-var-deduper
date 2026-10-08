@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 17;
+pub(crate) const SCHEMA_VERSION: i32 = 18;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -657,6 +657,22 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         tx.commit().context("failed to commit v17 migration")?;
     }
 
+    if current < 18 {
+        // Full integrity checks (integrity.rs): the result for a file, valid
+        // while its size and modification time are unchanged.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS var_integrity (
+                file_path TEXT PRIMARY KEY,
+                size INTEGER NOT NULL,
+                modified_ns TEXT NOT NULL,
+                ok INTEGER NOT NULL,
+                error TEXT,
+                checked_at INTEGER NOT NULL
+            );",
+        )
+        .context("failed to create var_integrity")?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
@@ -724,6 +740,48 @@ pub(crate) fn update_download_link_size(db: &Db, filename: &str, size: u64) -> R
          WHERE filename = ?2 AND (size IS NULL OR size = 0)",
         params![size as i64, filename],
     )?;
+    Ok(())
+}
+
+/// Every stored integrity result, by file path.
+pub(crate) fn integrity_all(db: &Db) -> Result<HashMap<String, crate::integrity::IntegrityRow>> {
+    let handle = db.read()?;
+    let mut stmt = handle.prepare("SELECT file_path, size, modified_ns, ok, error FROM var_integrity")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            crate::integrity::IntegrityRow {
+                size: row.get::<_, i64>(1)? as u64,
+                modified_ns: row.get::<_, String>(2)?,
+                ok: row.get::<_, i64>(3)? != 0,
+                error: row.get::<_, Option<String>>(4)?,
+            },
+        ))
+    })?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let (path, row) = r?;
+        out.insert(path, row);
+    }
+    Ok(out)
+}
+
+pub(crate) fn integrity_put(db: &Db, rows: &[(String, crate::integrity::IntegrityRow)]) -> Result<()> {
+    let mut conn = db.conn.lock().map_err(|_| anyhow!("database connection poisoned"))?;
+    let tx = conn.transaction()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO var_integrity (file_path, size, modified_ns, ok, error, checked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
+        for (path, row) in rows {
+            stmt.execute(params![path, row.size as i64, row.modified_ns, i64::from(row.ok), row.error, now])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
