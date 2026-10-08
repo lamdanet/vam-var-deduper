@@ -40,8 +40,15 @@ You need:
 ```sh
 cargo run --manifest-path src-tauri/Cargo.toml    # run the app (debug build)
 cargo test --manifest-path src-tauri/Cargo.toml   # run the tests
+cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings   # lint
 node --check ui/app.js                            # quick syntax check of the UI
 ```
+
+CI runs all of these. Any clippy warning fails the build. If a lint really
+doesn't fit, add `#[allow(clippy::…)]` with a one-line comment saying why,
+like the Tauri commands in `src-tauri/src/tasks.rs`.
+
+Rust 1.87 or newer is needed (`rustup update` if the build says otherwise).
 
 ## Where things are
 
