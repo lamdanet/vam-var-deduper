@@ -17360,3 +17360,147 @@ button.pkg-stat:focus-visible::after {
 .fm-top .card {
   align-self: stretch;
 }
+
+/* ---- Fix Missing: Replacement Sources without boxes in boxes ---- */
+
+/* One scroll for the whole panel, not a short one inside it that cut the
+   candidates off. */
+.fm-detail-card .keep-options.fm-options {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.fm-detail-card .missing-candidate {
+  min-width: 0;
+}
+
+.fm-detail-card .missing-candidate-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-detail-card .missing-candidate-path,
+.fm-detail-card .detail-block code {
+  overflow-wrap: anywhere;
+}
+
+.fm-detail-card .missing-candidate-path {
+  white-space: normal;
+}
+
+.fm-missing-pkg {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.fm-missing-pkg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fm-missing-pkg-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent-warn) 18%, transparent);
+  color: var(--accent-warn);
+  font-size: 20px;
+}
+
+.fm-missing-pkg-icon.is-absent {
+  background: color-mix(in srgb, var(--accent-danger) 16%, transparent);
+  color: var(--accent-danger);
+}
+
+.fm-missing-pkg-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fm-missing-pkg-text b,
+.fm-missing-pkg-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-missing-pkg-text small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.fm-missing-pkg .fm-why {
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fm-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.fm-quick-label {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.fm-quick .ghost-button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.fm-covers {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.fm-use-all {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--line)) !important;
+  color: var(--primary) !important;
+}
+
+.fm-hint-line {
+  margin: -4px 0 8px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.fm-group-done {
+  font-weight: 600;
+}
+
+/* The apply buttons in one wrapping row (the old panel stacks them). */
+.fm-detail-card .quick-actions.fm-quick {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.fm-detail-card .quick-actions.fm-quick .ghost-button {
+  width: auto;
+}
