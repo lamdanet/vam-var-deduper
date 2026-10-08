@@ -61,10 +61,17 @@ release time, it fills it with the commit messages since the last release.
   open on request, or by themselves when there's no copy to use. The
   database is searched when your folders have no copy, or always if you tick
   that, putting the packages that cover the most first and offering to
-  download ones you don't have. The fixed copy's folder shows by name, and
-  after a fix the page leads you to check the fixed copy. Package Explorer
-  has a Check refs button and shows what the last check found, with Fix
-  references. Missing Resources is still there
+  download ones you don't have. When nothing in your folders has a file, the
+  page looks up its package's download by itself and leads with it:
+  download the package and the file works as it is, with nothing to
+  rewrite. The page checks again when the download finishes, keeping what
+  you chose, and says so if the file is still missing. A file nothing can
+  replace can be skipped. The summary learns as the lookups finish, and
+  counts what's ready: chosen, coming back by download, or skipped. The
+  fixed copy's folder shows by name. After a fix the page leads you to check
+  the fixed copy, then to put it in place of the original, keeping a backup.
+  Package Explorer has a Check refs button and shows what the last check
+  found, with Fix references. Missing Resources is still there
 - **Package Explorer**: a new page that shows one package in pictures. It
   says in plain words what's wrong with the package, if anything (missing or
   offloaded dependencies, not on the Hub, damaged…), and its main button
