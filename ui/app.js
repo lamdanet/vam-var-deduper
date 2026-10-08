@@ -588,6 +588,10 @@ const I18N = {
     settingsAboutEyebrow: "About",
     settingsAboutDesc:
       "Cross-package duplicate resource detection and removal for VAR packages.",
+    settingsReleaseNotes: "Release notes",
+    releaseNotesTitle: "Release notes",
+    releaseNotesClose: "Close",
+    releaseNotesEmpty: "No release notes yet.",
     settingsConfirmClear:
       "Clear all package and resource records from the local database? This cannot be undone.",
     settingsCleared: "Database cleared.",
@@ -2456,6 +2460,9 @@ function applySettingsCopy() {
 
   setText("settings-about-eyebrow", t("settingsAboutEyebrow"));
   setText("settings-about-desc", t("settingsAboutDesc"));
+  setText("settings-release-notes-label", t("settingsReleaseNotes"));
+  setText("release-notes-title", t("releaseNotesTitle"));
+  setText("release-notes-close", t("releaseNotesClose"));
 
   // Advanced settings
   setText("settings-advanced-title", t("settingsAdvancedTitle"));
@@ -5201,6 +5208,115 @@ async function sourceSave() {
   } finally {
     if (save) save.disabled = false;
   }
+}
+
+// ---- Settings > About: version + release notes -------------------------------
+// Both come from the app (app_info): the version from Cargo.toml and the notes
+// from CHANGELOG.md built into the exe, so neither can drift from the build.
+
+const ABOUT = { version: "", changelog: "" };
+
+function aboutInline(text) {
+  return escapeHtml(text)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+}
+
+// CHANGELOG.md -> HTML. Only the subset the changelog uses: "## [x.y.z] - date"
+// per release, "### Group" headings, "- " bullets (wrapped lines continue the
+// bullet), and plain paragraphs. The intro above the first release and an
+// empty Unreleased section are left out.
+function renderChangelog(markdown) {
+  const releases = [];
+  let current = null;
+  for (const raw of String(markdown).split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    const head = line.match(/^## \[([^\]]+)\](?:\s*-\s*(.+))?/);
+    if (head) {
+      current = { version: head[1], date: head[2] || "", blocks: [] };
+      releases.push(current);
+      continue;
+    }
+    if (!current || !line.trim()) {
+      if (current) current.blocks.push({ type: "gap" });
+      continue;
+    }
+    const group = line.match(/^###\s+(.+)/);
+    const bullet = line.match(/^\s*[-*]\s+(.+)/);
+    const last = current.blocks[current.blocks.length - 1];
+    if (group) current.blocks.push({ type: "group", text: group[1] });
+    else if (bullet) current.blocks.push({ type: "item", text: bullet[1] });
+    else if (last?.type === "item" && /^\s+/.test(line)) last.text += ` ${line.trim()}`;
+    else if (last?.type === "para") last.text += ` ${line.trim()}`;
+    else current.blocks.push({ type: "para", text: line.trim() });
+  }
+
+  const html = releases
+    .filter((r) => r.blocks.some((b) => b.type !== "gap"))
+    .map((r) => {
+      const isCurrent = r.version === ABOUT.version;
+      const label = /^\d/.test(r.version) ? `v${r.version}` : r.version;
+      let body = "";
+      let inList = false;
+      for (const b of r.blocks) {
+        if (b.type === "item" && !inList) {
+          body += "<ul>";
+          inList = true;
+        } else if (b.type !== "item" && inList) {
+          body += "</ul>";
+          inList = false;
+        }
+        if (b.type === "item") body += `<li>${aboutInline(b.text)}</li>`;
+        else if (b.type === "group") body += `<h5>${aboutInline(b.text)}</h5>`;
+        else if (b.type === "para") body += `<p>${aboutInline(b.text)}</p>`;
+      }
+      if (inList) body += "</ul>";
+      return (
+        `<section class="rn-release"><div class="rn-head">` +
+        `<span class="rn-version${isCurrent ? " is-current" : ""}">${escapeHtml(label)}</span>` +
+        (r.date ? `<span class="rn-date">${escapeHtml(r.date)}</span>` : "") +
+        `</div>${body}</section>`
+      );
+    })
+    .join("");
+  return html || `<p class="rn-empty">${escapeHtml(t("releaseNotesEmpty"))}</p>`;
+}
+
+function openReleaseNotes() {
+  const body = $("release-notes-body");
+  if (body) {
+    body.innerHTML = renderChangelog(ABOUT.changelog);
+    body.scrollTop = 0;
+  }
+  $("release-notes-backdrop")?.classList.remove("hidden");
+}
+
+function closeReleaseNotes() {
+  $("release-notes-backdrop")?.classList.add("hidden");
+}
+
+async function setupAbout() {
+  const backdrop = $("release-notes-backdrop");
+  $("settings-release-notes")?.addEventListener("click", openReleaseNotes);
+  $("release-notes-close")?.addEventListener("click", closeReleaseNotes);
+  backdrop?.addEventListener("click", (e) => {
+    if (e.target === backdrop) closeReleaseNotes();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && backdrop && !backdrop.classList.contains("hidden")) closeReleaseNotes();
+  });
+
+  if (!invoke) return;
+  try {
+    const info = await invoke("app_info");
+    ABOUT.version = info?.version || "";
+    ABOUT.changelog = info?.changelog || "";
+  } catch (err) {
+    addLog(`About: ${String(err)}`);
+  }
+  const pill = $("settings-about-version");
+  if (pill) pill.textContent = ABOUT.version ? `v${ABOUT.version}` : "";
 }
 
 function setupSources() {
@@ -18059,6 +18175,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   setupVamDir();
   setupOffload();
+  setupAbout();
   setupSources();
   setupSourcesPage();
   setupLibraryView();

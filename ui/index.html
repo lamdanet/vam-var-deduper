@@ -2924,12 +2924,17 @@
                   <div class="settings-about-text">
                     <h4 id="settings-about-title">VAM VAR Deduper</h4>
                     <div class="settings-about-meta">
-                      <span class="settings-version-pill" id="settings-about-version">v0.1.0</span>
+                      <!-- Filled from the app (Cargo.toml) at startup. -->
+                      <span class="settings-version-pill" id="settings-about-version"></span>
                     </div>
                   </div>
                 </div>
                 <div class="settings-about-footer">
                   <span>© 2026 VAM VAR Engine</span>
+                  <button id="settings-release-notes" class="ghost-button" type="button">
+                    <span class="material-symbols-outlined">description</span>
+                    <span id="settings-release-notes-label"></span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -3007,6 +3012,17 @@
     <!-- Transient toast notifications (auto-dismiss). Visible without opening
          the console drawer. -->
     <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+    <!-- Settings > About > Release notes (CHANGELOG.md, built into the exe). -->
+    <div id="release-notes-backdrop" class="dialog-backdrop hidden">
+      <div class="dialog-card release-notes-card" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+        <h3 id="release-notes-title"></h3>
+        <div id="release-notes-body" class="release-notes-body"></div>
+        <div class="dialog-actions">
+          <button id="release-notes-close" class="ghost-button" type="button"></button>
+        </div>
+      </div>
+    </div>
 
     <!-- VAR Packages maintenance preview. Must stay BEFORE #dialog-backdrop:
          every .dialog-backdrop shares z-index 1400, so DOM order decides

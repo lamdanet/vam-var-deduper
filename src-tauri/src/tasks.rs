@@ -728,6 +728,16 @@ pub(crate) fn format_bytes_command(size: u64) -> String {
     format_bytes(size)
 }
 
+/// Settings > About: the version (Cargo.toml is the only place it's set) and
+/// the release notes, built into the exe so they match this build.
+#[tauri::command]
+pub(crate) fn app_info() -> serde_json::Value {
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "changelog": include_str!("../../CHANGELOG.md"),
+    })
+}
+
 const PREVIEW_IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png"];
 
 /// Lowercased, forward-slashed. Compared against a lowercased path, so it also
