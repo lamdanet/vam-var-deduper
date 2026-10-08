@@ -7759,7 +7759,7 @@ function pkgOutlineHtml() {
           data-pkg-ol="${escapeAttribute(k.path)}" data-pkg-ol-kind="${dir ? "dir" : "file"}" style="--d:${depth};--c:${kind.color}" title="${escapeAttribute(k.path)}">
           <span class="pkg-ol-chev material-symbols-outlined">${dir ? (open ? "expand_more" : "chevron_right") : ""}</span>
           <span class="pkg-ol-icon material-symbols-outlined">${dir ? (open ? "folder_open" : "folder") : kind.icon}</span>
-          <span class="pkg-ol-name">${escapeHtml(k.name)}${dir ? `<small>${k.count.toLocaleString()} file${k.count === 1 ? "" : "s"}</small>` : ""}</span>
+          <span class="pkg-ol-name">${escapeHtml(k.name)}${dir ? `<small>${k.count.toLocaleString()} file${k.count === 1 ? "" : "s"}</small>` : pkgSharedBadge(k.path)}</span>
           <span class="pkg-ol-bar"><span style="width:${Math.max(0.5, (k.bytes / total) * 100).toFixed(2)}%"></span></span>
           <span class="pkg-ol-size">${escapeHtml(formatBytesLocal(k.bytes))}</span>
         </div>`);
@@ -7876,6 +7876,10 @@ function pkgFileCatOf(path) {
 function pkgFileRows() {
   const res = PKG.resources ?? [];
   if (!PKG.fileCat) return res;
+  if (PKG.fileCat === "shared") {
+    const byPath = PKG.shared?.byPath;
+    return byPath ? res.filter((r) => byPath.has(r.internal_path)) : res;
+  }
   if (PKG.fileRowsFor !== res || PKG.fileRowsCat !== PKG.fileCat) {
     PKG.fileRows = res.filter((r) => pkgFileCatOf(r.internal_path).key === PKG.fileCat);
     PKG.fileRowsFor = res;
@@ -7896,6 +7900,12 @@ function pkgChipsFadeAll() {
   pkgView()?.querySelectorAll(".pkg-chips-row").forEach(pkgChipsFade);
 }
 
+// "In 3 others" after a file another indexed package also has.
+function pkgSharedBadge(path) {
+  const n = PKG.shared?.byPath?.get(path);
+  return n ? `<span class="pkg-shared-badge" title="Also in ${pkgCount(n, "other package", "other packages")}">in ${n.toLocaleString()} other${n === 1 ? "" : "s"}</span>` : "";
+}
+
 function pkgRenderFileCats() {
   const host = $("pkg-file-cats");
   if (!host) return;
@@ -7913,11 +7923,22 @@ function pkgRenderFileCats() {
     totals.set(cat.key, t);
   }
   const cats = PKG_FILE_CATS.map((c) => totals.get(c.key)).filter(Boolean);
-  if (cats.length < 2) {
+  if (cats.length < 2 && !PKG.shared?.byPath?.size) {
     host.innerHTML = "";
     return;
   }
   const all = { key: "", label: "All files", icon: "", color: "var(--lib-accent)", n: res.length, bytes: res.reduce((s, r) => s + Number(r.size || 0), 0) };
+  const byPath = PKG.shared?.byPath;
+  if (byPath?.size) {
+    cats.push({
+      key: "shared",
+      label: "In other packages",
+      icon: "join_inner",
+      color: "var(--lib-warning)",
+      n: byPath.size,
+      bytes: res.filter((r) => byPath.has(r.internal_path)).reduce((a, r) => a + Number(r.size || 0), 0),
+    });
+  }
   host.innerHTML = [all, ...cats]
     .map(
       (c) => `<button type="button" class="pkg-chip-btn${(PKG.fileCat || "") === c.key ? " is-active" : ""}" data-pkg-filecat="${c.key}" style="--c:${c.color}"
@@ -7983,7 +8004,7 @@ function pkgRenderFileList() {
       const isImage = PKG_IMAGE_RE.test(path);
       return `<div class="pkg-file${isImage ? " is-image" : ""}"${isImage ? ` data-pkg-zoom-entry="${escapeAttribute(path)}"` : ""} title="${escapeAttribute(path)}">
           <span class="pkg-file-icon" style="color:${kind.color}"><span class="material-symbols-outlined">${kind.icon}</span></span>
-          <span class="pkg-file-path"><span class="pkg-file-dir">${escapeHtml(dir)}</span><span class="pkg-file-name">${escapeHtml(name)}</span></span>
+          <span class="pkg-file-path"><span class="pkg-file-dir">${escapeHtml(dir)}</span><span class="pkg-file-name">${escapeHtml(name)}</span>${pkgSharedBadge(path)}</span>
           <span class="pkg-file-bar"><span style="width:${Math.max(1, (Number(r.size) / max) * 100).toFixed(1)}%;background:${kind.color}"></span></span>
           <span class="pkg-file-size">${escapeHtml(formatBytesLocal(Number(r.size)))}</span>
         </div>`;
@@ -8082,6 +8103,21 @@ function pkgRenderShared() {
           <div class="pkg-legend-row"><span class="pkg-legend-dot" style="background:var(--lib-success)"></span><span class="pkg-legend-label">Only here</span><span class="pkg-legend-val">${escapeHtml(formatBytesLocal(total - s.bytes))}</span></div>
           <div class="pkg-legend-row"><span class="pkg-legend-dot" style="background:var(--lib-warning)"></span><span class="pkg-legend-label">Also in other packages</span><span class="pkg-legend-val">${escapeHtml(formatBytesLocal(s.bytes))}</span></div>
           <p class="pkg-muted">${s.files.toLocaleString()} of its files have a copy in ${pkgCount(s.packages.length, "other package", "other packages")}. Files under 4 KB aren't compared.</p>
+          ${
+            s.files
+              ? `<p class="pkg-overlap-verdict">${
+                  s.bytes / total >= 0.6
+                    ? "Most of it is in other packages too — a good package to keep when cleaning duplicates."
+                    : (total - s.bytes) / total >= 0.8
+                      ? "Mostly files no other package has."
+                      : "Part of it is in other packages."
+                } Their copies take <b>${escapeHtml(formatBytesLocal(s.copies))}</b>.</p>
+                <div class="pkg-overlap-acts">
+                  <button type="button" class="pkg-mini-btn" data-pkg-act="show-shared"><span class="material-symbols-outlined">filter_list</span>Show these files</button>
+                  <button type="button" class="pkg-mini-btn" data-pkg-act="clean-vars" title="Open Clean VARs with this package as the one to keep"><span class="material-symbols-outlined">cleaning_services</span>Clean against it</button>
+                </div>`
+              : ""
+          }
         </div>
       </div>
       <div class="pkg-card">
@@ -8110,6 +8146,11 @@ async function pkgLoadShared({ auto = false } = {}) {
     if (token !== PKG.token) return;
     let bytes = 0;
     let files = 0;
+    // What the other packages' copies take: what cleaning against this one
+    // could free.
+    let copies = 0;
+    // internal path -> how many other packages have that file.
+    const byPath = new Map();
     const packages = new Map();
     for (const r of res) {
       const refs = map?.[String(Number(r.crc32) >>> 0)];
@@ -8129,6 +8170,8 @@ async function pkgLoadShared({ auto = false } = {}) {
         p.files += 1;
         p.crcs.push(Number(r.crc32) >>> 0);
       }
+      byPath.set(r.internal_path, seen.size);
+      copies += Number(r.size) * seen.size;
     }
     const list = [...packages.values()].sort((a, b) => b.bytes - a.bytes || a.package_id.localeCompare(b.package_id));
     const groups = new Map();
@@ -8141,6 +8184,8 @@ async function pkgLoadShared({ auto = false } = {}) {
     PKG.shared = {
       bytes,
       files,
+      copies,
+      byPath,
       packages: list,
       groups: [...groups.values()].sort((a, b) => b.bytes - a.bytes || b.packages.length - a.packages.length),
       open: new Set(),
@@ -8175,6 +8220,31 @@ function pkgZoomEntry(entry) {
     .catch(() => {});
 }
 
+// Clean VARs prefers a favorite creator's copy as the one to keep and never
+// keeps a blocked creator's. One flag per creator: 1 favorite, 2 blocked.
+async function pkgSetCreatorFlag(creator, flag) {
+  if (!creator || !invoke) return;
+  try {
+    await invoke("set_creator_flag", { creatorName: creator, flag });
+  } catch (e) {
+    showToast(`Couldn't save that: ${String(e?.message || e)}`, "error");
+    return;
+  }
+  if (flag === 1) _favoriteCreators.add(creator);
+  else _favoriteCreators.delete(creator);
+  if (flag === 2) _blockedCreators.add(creator);
+  else _blockedCreators.delete(creator);
+  showToast(
+    flag === 1
+      ? `Clean VARs will prefer ${creator}'s copies.`
+      : flag === 2
+        ? `Clean VARs will never keep ${creator}'s copies.`
+        : `${creator} is back to normal in Clean VARs.`,
+    "success",
+    4000,
+  );
+}
+
 function pkgMoreMenu(event) {
   const item = PKG.item;
   if (!item) return;
@@ -8187,6 +8257,21 @@ function pkgMoreMenu(event) {
     { label: "View all images", action: () => vpImagesOpen(item.file_path) },
     { label: "Export scene image", action: () => exportOneSceneImage(item.file_path, item.package_id) },
     { label: "Add download source…", action: () => sourceOpen({ packageId: item.package_id, fileName: item.file_name || `${item.package_id}.var` }) },
+    ...(() => {
+      const creator = deriveCreatorFromPackageId(item.package_id);
+      if (!creator) return [];
+      const fav = _favoriteCreators.has(creator);
+      const blocked = _blockedCreators.has(creator);
+      return [
+        {
+          label: `Creator ${creator} in Clean VARs`,
+          submenu: [
+            { label: `${fav ? "✓ " : ""}Prefer their copies`, action: () => pkgSetCreatorFlag(creator, fav ? 0 : 1) },
+            { label: `${blocked ? "✓ " : ""}Never keep their copies`, action: () => pkgSetCreatorFlag(creator, blocked ? 0 : 2) },
+          ],
+        },
+      ];
+    })(),
     ...(item.__lib
       ? [
           {
@@ -8244,6 +8329,13 @@ function pkgRunAction(act, event) {
       return;
     case "shared":
       pkgLoadShared();
+      return;
+    case "show-shared":
+      pkgSetFileCat("shared");
+      pkgScrollTo("files");
+      return;
+    case "clean-vars":
+      if (PKG.item) sendVarToTargetPage("db-find", PKG.item.file_path);
       return;
     case "more":
       // The page-wide click handler closes menus: keep this click from it.
