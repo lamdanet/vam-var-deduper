@@ -44,6 +44,15 @@ release time, it fills it with the commit messages since the last release.
   your library, checked first and skipped when already there. Settings can
   make it move them instead of copying
 - The first-run dialog finds a VaM folder next to the app by itself
+- **Package Explorer**: a new page that shows one package in pictures. You
+  get its cover and pictures, tiles with its size, content, morphs and
+  dependencies, and a chart of what its bytes are made of. Its scenes, looks
+  and clothing show as image cards you can hide or star in VaM. A map shows
+  what it needs and what needs it, and a treemap shows its files. It can also
+  compare its files with your database to find what other packages share.
+  Open it from the sidebar, a package's right-click menu or the Explore
+  button in its details, or drop a `.var` on the page. VAR Details is still
+  there
 
 ### Changed
 - Downloads resume where they stopped instead of starting over, retry by
