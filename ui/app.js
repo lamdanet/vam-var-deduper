@@ -7096,8 +7096,26 @@ function pkgRenderDepGraph() {
   const expand = PKG.depExpand ?? { left: false, right: false };
   const depsBytes = (d.dependencies ?? []).reduce((s, x) => s + (Number(x.size_bytes) || 0), 0);
   const empty = !deps.length && !users.length && (q || filter);
+  // Collapsing must not mean scrolling to the end of a long column: say what's
+  // open, with Show fewer, above the map.
+  const opened = pkgDepView() === "map" && !empty
+    ? [
+        expand.right && deps.length > PKG_DEP_CAP ? ["deps-less", `all ${deps.length} it needs`] : null,
+        expand.left && users.length > PKG_DEP_CAP ? ["users-less", `all ${users.length} that use it`] : null,
+      ].filter(Boolean)
+    : [];
+  const bar = opened.length
+    ? `<div class="pkg-graph-bar"><span class="material-symbols-outlined">unfold_more</span>Showing ${opened.map(([, text]) => text).join(" and ")}${opened
+        .map(
+          ([act]) => `<button type="button" class="pkg-mini-btn" data-pkg-act="${act}"><span class="material-symbols-outlined">unfold_less</span>Show fewer${
+            opened.length > 1 ? (act === "deps-less" ? " needed" : " users") : ""
+          }</button>`,
+        )
+        .join("")}</div>`
+    : "";
   host.innerHTML = `
     <div class="pkg-card pkg-graph-card">
+      ${bar}
       ${
         empty
           ? `<div class="pkg-empty-mini"><span class="material-symbols-outlined">search_off</span>No package matches.</div>`

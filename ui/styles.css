@@ -17531,3 +17531,28 @@ button.pkg-bar-row:not(:disabled):hover {
   color: var(--lib-text-3);
   font-size: 18px !important;
 }
+
+.pkg-graph-bar {
+  position: sticky;
+  top: 70px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -6px -6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--lib-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lib-elevated) 92%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--lib-text-2);
+  font-size: 12px;
+}
+
+.pkg-graph-bar > .material-symbols-outlined {
+  color: var(--lib-accent);
+}
+
+.pkg-graph-bar .pkg-mini-btn:first-of-type {
+  margin-left: auto;
+}
