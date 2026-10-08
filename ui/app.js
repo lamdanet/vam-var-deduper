@@ -1310,7 +1310,9 @@ let downloadsRefreshTimer = 0;
 function downloadsRefreshSoon() {
   clearTimeout(downloadsRefreshTimer);
   downloadsRefreshTimer = setTimeout(() => {
-    vpRefreshAfterMutation().catch(() => {});
+    vpRefreshAfterMutation()
+      .then(() => prefsMaintain({ force: true }))
+      .catch(() => {});
   }, 1500);
 }
 
@@ -4251,9 +4253,17 @@ function libContentSectionHtml(item, details) {
         <button type="button" class="lib-small-link" data-lib-action="images" title="Every image in the package"><span class="material-symbols-outlined">grid_view</span>View images</button>
       </span>
     </div>`;
+  const prefs = PREFS.cache.get(item.package_id);
+  if (!prefs && vamDir() && invoke) {
+    libLoadPrefs(item).then((loaded) => {
+      if (loaded && libCurrentItem()?.file_path === item.file_path) libRenderDetail();
+    });
+  }
   const body = groups
     .map((g) => {
       const collapsed = libStoreGet(LIB_STORE.category + g.key) === "0";
+      const allHidden = prefs && g.rows.length > 0 && g.rows.every((c) => prefs.hidden.has(c.path));
+      const allFav = prefs && g.rows.length > 0 && g.rows.every((c) => prefs.favorite.has(c.path));
       const limitKey = `cat:${item.file_path}:${g.key}`;
       const showAll = LIB_DETAILS.expanded.has(limitKey);
       const visible = showAll ? g.rows : g.rows.slice(0, 60);
@@ -4266,7 +4276,22 @@ function libContentSectionHtml(item, details) {
           const thumb = c.thumb
             ? `${libThumbHtml(item.file_path, gradient, "lib-content-thumb", c.thumb)}</div>`
             : `<div class="lib-content-thumb" style="--lib-thumb-bg:${escapeAttribute(gradient)}"></div>`;
-          return `<div class="lib-content-row" title="${escapeAttribute(c.path)}">
+          const hidden = prefs?.hidden.has(c.path);
+          const fav = prefs?.favorite.has(c.path);
+          const auto = prefs?.auto.has(c.path);
+          const flags = prefs
+            ? `<button type="button" class="lib-content-flag${hidden ? " is-on" : ""}" data-lib-flag="hide" data-lib-flag-path="${escapeAttribute(c.path)}" title="${
+                hidden
+                  ? auto
+                    ? "Hidden in VaM by auto-hide (a dependency) — click to show"
+                    : "Hidden in VaM — click to show"
+                  : "Hide in VaM's browser"
+              }"><span class="material-symbols-outlined">${hidden ? "visibility_off" : "visibility"}</span></button>
+              <button type="button" class="lib-content-flag lib-content-fav${fav ? " is-on" : ""}" data-lib-flag="fav" data-lib-flag-path="${escapeAttribute(c.path)}" title="${
+                fav ? "A favorite in VaM — click to unfavorite" : "Favorite in VaM's browser"
+              }"><span class="material-symbols-outlined">star</span></button>`
+            : "";
+          return `<div class="lib-content-row${hidden ? " is-hidden" : ""}" title="${escapeAttribute(c.path)}">
             ${thumb}
             <span class="lib-content-name">${escapeHtml(c.name)}${
               tag ? `<span class="lib-content-tag" style="color:${tag.color}bb">${escapeHtml(tag.label)}</span>` : ""
@@ -4278,6 +4303,7 @@ function libContentSectionHtml(item, details) {
                   }"><span class="material-symbols-outlined">person_add</span></button>`
                 : ""
             }
+            ${flags}
           </div>`;
         })
         .join("");
@@ -4285,11 +4311,23 @@ function libContentSectionHtml(item, details) {
         g.rows.length > visible.length
           ? `<button type="button" class="lib-more" data-lib-expand="${escapeAttribute(limitKey)}">+ ${g.rows.length - visible.length} more</button>`
           : "";
+      const catTools = prefs
+        ? `<span class="lib-cat-tools">
+            <button type="button" class="lib-content-flag${allHidden ? " is-on" : ""}" data-lib-flag-cat="hide" data-lib-cat-key="${g.key}" title="${
+              allHidden ? "Show all of these in VaM" : "Hide all of these in VaM's browser"
+            }"><span class="material-symbols-outlined">${allHidden ? "visibility_off" : "visibility"}</span></button>
+            <button type="button" class="lib-content-flag lib-content-fav${allFav ? " is-on" : ""}" data-lib-flag-cat="fav" data-lib-cat-key="${g.key}" title="${
+              allFav ? "Unfavorite all of these" : "Favorite all of these in VaM"
+            }"><span class="material-symbols-outlined">star</span></button>
+          </span>`
+        : "";
       return `<div class="lib-cat">
+          <div class="lib-cat-bar">
           <button type="button" class="lib-cat-head" data-lib-cat="${g.key}">
             <span class="material-symbols-outlined">${collapsed ? "chevron_right" : "expand_more"}</span>
             ${escapeHtml(g.label)} <small>(${g.rows.length})</small>
-          </button>
+          </button>${catTools}
+          </div>
           ${collapsed ? "" : `<div class="lib-box">${rows}${more}</div>`}
         </div>`;
     })
@@ -4651,6 +4689,7 @@ async function refreshVarPackagesFromFolder({
     if (page?.facets) state.varPackagesFacets = page.facets;
     state.vpHasListing = true;
     listed = true;
+    if (forceRescan) setTimeout(() => prefsMaintain(), 1500);
   } catch (error) {
     if (!append) {
       state.varPackagesItems = [];
@@ -5603,6 +5642,7 @@ async function libSetRole(items, installed) {
     "success",
   );
   await refreshVarPackagesFromFolder({ forceRescan: false, keepLoaded: true }).catch(() => {});
+  if (PREFS.autoHide) await autoHideSync(true, { quiet: true });
 }
 
 // "Frees X" in the details panel, extended with what deleting it would leave
@@ -5656,6 +5696,97 @@ async function libRemoveOrphans() {
   toast.dismiss(6000);
   vpPruneSelection(removed.map((r) => r.file_path));
   await vpRefreshAfterMutation();
+}
+
+// ---- VaM hide / favorite flags (vamprefs.rs) -----------------------------------------
+// VaM's own AddonPackagesFilePrefs/<package>/<item>.hide|.fav: hidden items
+// disappear from VaM's content browser, favorites get its star. Per item in the
+// details panel's content list; "Hide dependency content in VaM" (Settings)
+// hides everything in packages that are only dependencies.
+
+const PREFS = { cache: new Map(), autoHide: false, maintainedAt: 0 };
+const PREFS_STORE = "vamprefs.autoHideDeps";
+
+function prefsLoadSetting() {
+  try {
+    PREFS.autoHide = localStorage.getItem(PREFS_STORE) === "1";
+  } catch (_e) {}
+  const box = $("settings-auto-hide-deps");
+  if (box) box.checked = PREFS.autoHide;
+}
+
+async function libLoadPrefs(item) {
+  if (!invoke || !vamDir() || !item?.package_id) return null;
+  try {
+    const res = await invoke("vam_prefs_get", { vamDir: vamDir(), packageId: item.package_id });
+    const prefs = { hidden: new Set(res?.hidden ?? []), favorite: new Set(res?.favorite ?? []), auto: new Set(res?.auto ?? []) };
+    PREFS.cache.set(item.package_id, prefs);
+    return prefs;
+  } catch (_e) {
+    return null;
+  }
+}
+
+async function libToggleFlag(item, paths, kind, on) {
+  if (!invoke || !item || !paths.length) return;
+  try {
+    await invoke("vam_prefs_set", { vamDir: vamDir(), packageId: item.package_id, paths, kind, on });
+  } catch (e) {
+    showToast(String(e?.message || e), "error");
+    return;
+  }
+  await libLoadPrefs(item);
+  libRenderDetail();
+}
+
+async function autoHideSync(enabled, { quiet = false } = {}) {
+  if (!invoke || !vamDir()) return;
+  const status = $("settings-auto-hide-status");
+  if (status && !quiet) status.textContent = enabled ? "Hiding dependency content…" : "Bringing back what it hid…";
+  try {
+    const res = await invoke("auto_hide_sync", { vamDir: vamDir(), enabled });
+    PREFS.cache.clear();
+    const msg = enabled
+      ? `Hid ${res.hidden.toLocaleString()} item${res.hidden === 1 ? "" : "s"} in ${res.packages.toLocaleString()} dependency packages${
+          res.unhidden ? `; brought back ${res.unhidden.toLocaleString()}` : ""
+        }.`
+      : `Brought back ${res.unhidden.toLocaleString()} item${res.unhidden === 1 ? "" : "s"} auto-hide had hidden.`;
+    if (status) status.textContent = msg;
+    if (!quiet || res.hidden || res.unhidden) addLog(`Auto-hide: ${msg}`);
+    if (!quiet) showToast(msg, "success", 5000);
+  } catch (e) {
+    if (status) status.textContent = "";
+    if (!quiet) showToast(`Auto-hide: ${String(e?.message || e)}`, "error", 6000);
+  }
+}
+
+// After the library changes: copy flags to new versions, and keep auto-hide in
+// step with the dependency roles. At most once a minute.
+async function prefsMaintain({ force = false } = {}) {
+  if (!invoke || !vamDir() || !state.vpHasListing) return;
+  if (!force && Date.now() - PREFS.maintainedAt < 60000) return;
+  PREFS.maintainedAt = Date.now();
+  try {
+    const copied = await invoke("vam_prefs_carry_over", { vamDir: vamDir() });
+    if (copied) addLog(`VaM flags: copied ${copied} hide/favorite flag${copied === 1 ? "" : "s"} to new package versions`);
+  } catch (_e) {}
+  if (PREFS.autoHide) await autoHideSync(true, { quiet: true });
+}
+
+function setupVamPrefs() {
+  prefsLoadSetting();
+  $("settings-auto-hide-deps")?.addEventListener("change", async (e) => {
+    const on = Boolean(e.target.checked);
+    PREFS.autoHide = on;
+    try {
+      localStorage.setItem(PREFS_STORE, on ? "1" : "0");
+    } catch (_e) {}
+    if (on && !state.vpHasListing) {
+      showToast("Open VAR Packages once so the app knows your dependencies — hiding starts then.", "info", 6000);
+      return;
+    }
+    await autoHideSync(on);
+  });
 }
 
 // ---- Extract presets ----------------------------------------------------------------
@@ -7806,6 +7937,32 @@ function libHandleSharedClick(event) {
         ? libDepItem({ file_path: fp, resolved_id: id, size_bytes: offload.getAttribute("data-offload-size"), offloaded: true })
         : null);
     if (item) offloadOpen([item], offload.getAttribute("data-lib-offload") === "restore");
+    return true;
+  }
+  const flag = target.closest?.("[data-lib-flag]");
+  if (flag) {
+    const item = libCurrentItem();
+    const prefs = item && PREFS.cache.get(item.package_id);
+    if (!item || !prefs) return true;
+    const kind = flag.getAttribute("data-lib-flag");
+    const path = flag.getAttribute("data-lib-flag-path");
+    const on = !(kind === "hide" ? prefs.hidden : prefs.favorite).has(path);
+    libToggleFlag(item, [path], kind, on);
+    return true;
+  }
+  const flagCat = target.closest?.("[data-lib-flag-cat]");
+  if (flagCat) {
+    event.stopPropagation?.();
+    const item = libCurrentItem();
+    const prefs = item && PREFS.cache.get(item.package_id);
+    const details = item && LIB_DETAILS.cache.get(libDetailsKey(item));
+    if (!item || !prefs || !details) return true;
+    const kind = flagCat.getAttribute("data-lib-flag-cat");
+    const paths = (details.content ?? [])
+      .filter((c) => c.category === flagCat.getAttribute("data-lib-cat-key"))
+      .map((c) => c.path);
+    const set = kind === "hide" ? prefs.hidden : prefs.favorite;
+    libToggleFlag(item, paths, kind, !paths.every((p) => set.has(p)));
     return true;
   }
   const extract = target.closest?.("[data-lib-extract]");
@@ -19203,6 +19360,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVamDir();
   setupOffload();
   setupExtract();
+  setupVamPrefs();
   // The Hub package index: shortly after start-up, then every 30 minutes.
   setTimeout(() => hubIndexRefresh(false), 1500);
   setInterval(() => hubIndexRefresh(false), 30 * 60 * 1000);

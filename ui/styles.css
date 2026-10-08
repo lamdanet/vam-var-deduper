@@ -14266,6 +14266,75 @@ button.lib-dep-ref:hover {
   color: #fff;
 }
 
+.lib-cat-bar {
+  display: flex;
+  align-items: center;
+}
+
+.lib-cat-bar .lib-cat-head {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lib-cat-tools {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+
+.lib-cat:hover .lib-cat-tools,
+.lib-cat-tools:focus-within {
+  opacity: 1;
+}
+
+.lib-content-flag {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lib-text-3);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.lib-content-row:hover .lib-content-flag,
+.lib-content-flag.is-on,
+.lib-cat-tools .lib-content-flag {
+  opacity: 1;
+}
+
+.lib-content-flag:hover {
+  background: var(--lib-hover);
+  color: var(--lib-text);
+}
+
+.lib-content-flag.is-on {
+  color: var(--lib-error);
+}
+
+.lib-content-fav.is-on {
+  color: var(--lib-warning);
+}
+
+.lib-content-fav.is-on .material-symbols-outlined {
+  font-variation-settings: "FILL" 1;
+}
+
+.lib-view .lib-content-flag .material-symbols-outlined {
+  font-size: 15px;
+}
+
+.lib-content-row.is-hidden .lib-content-name {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
 .lib-chip.lib-chip-orphan {
   background: color-mix(in srgb, var(--lib-text-3) 30%, rgba(0, 0, 0, 0.5));
   color: #fff;

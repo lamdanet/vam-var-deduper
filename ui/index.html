@@ -2538,6 +2538,21 @@
               </div>
 
               <div class="settings-path-card">
+                <span class="settings-path-label">VaM's content browser</span>
+                <label class="check-row" for="settings-auto-hide-deps">
+                  <input id="settings-auto-hide-deps" type="checkbox" />
+                  <span>Hide dependency content in VaM</span>
+                </label>
+                <p class="settings-path-hint">
+                  Hides the scenes, looks, poses, clothing and hair inside packages that are only dependencies, so
+                  VaM's browser shows the packages you chose. It uses VaM's own hide flags (AddonPackagesFilePrefs);
+                  nothing is deleted. Turning it off brings back only what it hid — never what you hid yourself.
+                  Hide or favorite single items from a package's content list in VAR Packages.
+                </p>
+                <p class="settings-path-hint" id="settings-auto-hide-status"></p>
+              </div>
+
+              <div class="settings-path-card">
                 <label class="settings-path-label" id="settings-path-output-label" for="settings-output-dir"></label>
                 <div class="input-with-button">
                   <div class="input-with-icon">
