@@ -5904,11 +5904,141 @@ function pkgBareItem(filePath, extra = {}) {
 
 function pkgResolveItem(target) {
   const fp = typeof target === "string" ? target : target?.file_path;
+  // Only the database knows it: explored by id.
+  if (!fp && typeof target === "object" && target?.package_id) return pkgBareItem("", { ...target, __lib: false });
   if (!fp) return null;
   const lib = libFindItem(fp);
   if (lib) return { ...lib, __lib: true };
   if (typeof target === "object") return pkgBareItem(fp, { ...target, __lib: false });
   return pkgBareItem(fp);
+}
+
+// ---- Not on disk ----------------------------------------------------------------------
+// A package whose file is gone (or that only the database knows) still opens:
+// its files come from the database index, and the page finds a download for
+// it (the Hub, then your saved links). Content and dependencies need the file.
+
+function pkgHostLabel(host) {
+  return { hub: "the Hub", pixeldrain: "Pixeldrain", mediafire: "MediaFire", mega: "MEGA" }[host] ?? (host || "");
+}
+
+function pkgMissingHtml(what) {
+  return `<div class="pkg-empty"><span class="material-symbols-outlined">cloud_download</span>
+      <b>Not on disk</b><span>Download it to see ${escapeHtml(what)}.</span></div>`;
+}
+
+async function pkgResolveSource(token) {
+  const item = PKG.item;
+  if (!item || !invoke) return;
+  PKG.avail = { state: "resolving" };
+  pkgRenderHero();
+  let taskId = null;
+  let result = null;
+  try {
+    const handle = await invoke("start_resolve_var_source_task", { packageId: item.package_id });
+    taskId = handle?.id ?? null;
+    if (taskId == null) throw new Error("couldn't start the check");
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (token !== PKG.token) return;
+      const p = await invoke("get_task_progress", { taskId });
+      if (!p) break;
+      if (p.error) throw new Error(String(p.error));
+      if (p.done) {
+        result = p.var_source_result ?? null;
+        break;
+      }
+    }
+  } catch (e) {
+    if (token === PKG.token) {
+      PKG.avail = { state: "unavailable", error: String(e?.message || e) };
+      pkgRenderHero();
+    }
+    return;
+  } finally {
+    if (taskId != null) invoke("clear_task", { taskId }).catch(() => {});
+  }
+  if (token !== PKG.token) return;
+  PKG.avail = result?.download_url
+    ? {
+        state: "available",
+        url: result.download_url,
+        filename: result.filename || `${item.package_id}.var`,
+        size: result.file_size != null ? Number(result.file_size) : null,
+        host: result.host || "",
+      }
+    : { state: "unavailable", error: result?.error ? String(result.error) : null };
+  pkgRenderHero();
+}
+
+// Download into the folder the database last saw it in, else the downloads
+// folder; open it here once it lands.
+async function pkgDownload() {
+  const item = PKG.item;
+  const a = PKG.avail ?? {};
+  if (!item || !a.url) return;
+  const fp = String(item.file_path || "");
+  const cut = Math.max(fp.lastIndexOf("\\"), fp.lastIndexOf("/"));
+  const destDir = (cut > 0 ? fp.slice(0, cut) : "") || (await ensureDownloadsDir());
+  if (!destDir) return;
+  const token = PKG.token;
+  PKG.avail = { ...a, state: "downloading" };
+  pkgRenderHero();
+  queueDownload({
+    packageId: item.package_id,
+    url: a.url,
+    filename: a.filename,
+    host: a.host,
+    destDir,
+    label: a.filename,
+    autoDeps: true,
+    onDone: (status, info) => {
+      if (token !== PKG.token) return;
+      if (status === "done" || status === "exists") {
+        const p = info?.localPath;
+        if (p) {
+          varPackageThumbCache.delete(p);
+          pkgOpen(p, { fromHistory: true });
+        }
+      } else if (status === "cancelled") {
+        PKG.avail = { ...a, state: "available" };
+        pkgRenderHero();
+      } else {
+        PKG.avail = { ...a, state: "failed", error: "The download failed — see the Downloads panel." };
+        pkgRenderHero();
+      }
+    },
+  });
+}
+
+// The health line of a package that isn't on disk.
+function pkgMissingHealth() {
+  const a = PKG.avail ?? {};
+  const where = [pkgHostLabel(a.host), a.size ? formatBytesLocal(a.size) : ""].filter(Boolean).join(", ");
+  switch (a.state) {
+    case "available":
+      return [{ level: "warn", icon: "cloud_download", text: `Not on disk. It can be downloaded${where ? ` (${where})` : ""}.`, act: "download" }];
+    case "downloading":
+      return [{ level: "info", icon: "downloading", text: "Downloading — it opens here when it's done.", act: "open-downloads" }];
+    case "failed":
+      return [{ level: "err", icon: "error", text: a.error || "The download failed.", act: "download" }];
+    case "unavailable":
+      return [
+        {
+          level: "err",
+          icon: "cloud_off",
+          text: a.error ? `Not on disk, and the Hub couldn't be reached: ${a.error}` : "Not on disk, and no download was found on the Hub or in your saved links.",
+          act: "add-source",
+        },
+      ];
+    default:
+      return [{ level: "warn", icon: "cloud_download", text: "Not on disk. Looking for a download…" }];
+  }
+}
+
+function pkgHealthRows(item, details) {
+  if (PKG.missing) return pkgMissingHealth();
+  return details ? pkgHealth(item, details) : [];
 }
 
 function pkgView() {
@@ -5949,6 +6079,7 @@ function pkgRemember(item) {
 async function pkgOpen(target, { fromHistory = false } = {}) {
   const item = pkgResolveItem(target);
   if (!item || !invoke) return;
+  const onDisk = item.file_path ? Boolean(await invoke("path_exists", { path: item.file_path }).catch(() => false)) : false;
   if (!fromHistory && PKG.item && PKG.item.file_path !== item.file_path) {
     PKG.history.push(PKG.item);
     if (PKG.history.length > 30) PKG.history.shift();
@@ -5983,12 +6114,35 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
     depQuery: "",
     depExpand: { left: false, right: false },
     shared: null,
+    missing: !onDisk,
+    avail: { state: "idle" },
   });
-  pkgRemember(item);
+  if (onDisk) pkgRemember(item);
   pkgShowView();
   pkgRender();
   const scroll = $("pkg-scroll");
   if (scroll) scroll.scrollTop = 0;
+  if (!onDisk) {
+    // Not on disk: its files from the database index, and a download.
+    PKG.details = { missing: true, error: "Not on disk" };
+    pkgRenderAll();
+    pkgResolveSource(token);
+    invoke("load_db_package_resources", { packageId: item.package_id })
+      .then((rows) => {
+        if (token !== PKG.token) return;
+        PKG.resources = (Array.isArray(rows) ? rows : []).map((r) => ({ internal_path: r.internal_path, crc32: r.crc32 ?? null, size: Number(r.size || 0) }));
+        if (!PKG.resources.length) PKG.resError = "Not in the database index either.";
+        pkgRenderAll();
+        pkgLoadShared({ auto: true });
+      })
+      .catch((e) => {
+        if (token !== PKG.token) return;
+        PKG.resources = [];
+        PKG.resError = `Not in the database index either (${String(e?.message || e)}).`;
+        pkgRenderAll();
+      });
+    return;
+  }
   invoke("get_var_package_details", { filePath: item.file_path })
     .then((details) => {
       if (token !== PKG.token) return;
@@ -6126,6 +6280,7 @@ function pkgRender() {
       <section class="pkg-sec" data-pkg-sec="shared">
         <div class="pkg-sec-head">
           <h2><span class="material-symbols-outlined">join_inner</span>Overlap with other packages</h2>
+          <div class="pkg-sec-tools" id="pkg-shared-tools"></div>
         </div>
         <div id="pkg-shared"></div>
       </section>
@@ -6265,6 +6420,10 @@ function pkgPaintCover() {
     apply(varPackageThumbCache.get(key));
     return;
   }
+  if (PKG.missing) {
+    apply(null);
+    return;
+  }
   invoke?.("get_var_image", { filePath: item.file_path, entry: entry || null })
     .then((url) => {
       libThumbCacheSet(key, url || null);
@@ -6360,13 +6519,16 @@ function pkgFixButton(act, item, details) {
       enable: ["power_settings_new", "Enable", "Let VaM load it again"],
       "restore-deps": ["unarchive", "Restore dependencies", "Move its offloaded dependencies back into AddonPackages"],
       "hub-update": ["upgrade", `Update to v${item.hub_update_version}`, "Download the new version; this one stays until you remove it"],
+      download: ["download", PKG.avail?.size ? `Download · ${formatBytesLocal(PKG.avail.size)}` : "Download", `Download it from ${pkgHostLabel(PKG.avail?.host) || "its source"}`],
+      "add-source": ["add_link", "Add a download link", "Save a link where it can be downloaded"],
+      "open-downloads": ["download", "Open Downloads", "See the download's progress"],
     }[act] ?? null
   );
 }
 
 function pkgHealthHtml(item, details, primaryAct) {
-  if (!PKG.details) return `<div class="pkg-health">${pkgSkeleton(1)}</div>`;
-  const rows = pkgHealth(item, details);
+  if (!PKG.details && !PKG.missing) return `<div class="pkg-health">${pkgSkeleton(1)}</div>`;
+  const rows = pkgHealthRows(item, details);
   if (!rows.length) return "";
   return `<div class="pkg-health">${rows
     .map((h) => {
@@ -6389,6 +6551,20 @@ function pkgIconAct(act, icon, title, { on = false, label = "" } = {}) {
 // and the rarer tools in More.
 function pkgActionsHtml(item, details, primaryAct) {
   const fav = _favoritePackages.has(item.package_id);
+  if (PKG.missing) {
+    // Without the file, only what works by name.
+    const fix = primaryAct ? pkgFixButton(primaryAct, item, details) : null;
+    return `${
+      fix
+        ? `<button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-pkg-act="${primaryAct}" title="${escapeAttribute(fix[2])}">
+             <span class="material-symbols-outlined">${fix[0]}</span><span>${escapeHtml(fix[1])}</span></button>`
+        : ""
+    }<div class="pkg-tools">${[
+      pkgIconAct("favorite", "star", fav ? "Remove from favorites" : "Add to favorites", { on: fav, label: "Favorite" }),
+      ...(primaryAct !== "add-source" ? [pkgIconAct("add-source", "add_link", "Save a link where it can be downloaded", { label: "Add link" })] : []),
+      ...(item.hub_resource_id ? [pkgIconAct("view-hub", "explore", "View on the Hub", { label: "Hub" })] : []),
+    ].join("")}</div>`;
+  }
   const extractable = (details?.content ?? []).some((c) => LIB_EXTRACTABLE.has(c.fine));
   const fix = primaryAct ? pkgFixButton(primaryAct, item, details) : null;
   const primary = fix
@@ -6443,7 +6619,7 @@ function pkgRenderHero() {
   const gallery = pkgGalleryEntries();
   const strip = [{ entry: "", label: "Package image" }, ...gallery.slice(0, 4).map((e) => ({ entry: e, label: e }))];
   const stripHtml =
-    PKG.resources && gallery.length
+    PKG.resources && gallery.length && !PKG.missing
       ? `<div class="pkg-strip">${strip
           .map(
             (s) => `<button type="button" class="pkg-strip-btn${s.entry === PKG.cover ? " is-active" : ""}" data-pkg-cover="${escapeAttribute(s.entry)}" title="${escapeAttribute(s.label)}">
@@ -6455,13 +6631,13 @@ function pkgRenderHero() {
             : ""
         }</div>`
       : "";
-  const health = details ? pkgHealth(item, details) : [];
+  const health = pkgHealthRows(item, details);
   const primaryAct = health.find((h) => h.act && (h.level === "err" || h.level === "warn" || h.act === "hub-update"))?.act ?? null;
   const desc = details?.description ? `<p class="pkg-desc" title="${escapeAttribute(details.description)}">${escapeHtml(details.description)}</p>` : "";
   const support = details?.promotional_link
     ? `<button type="button" class="lib-link lib-support" data-lib-url="${escapeAttribute(details.promotional_link)}"><span class="material-symbols-outlined">favorite</span>Support the creator</button>`
     : "";
-  const error = PKG.details?.error
+  const error = PKG.details?.error && !PKG.missing
     ? `<p class="pkg-error"><span class="material-symbols-outlined">error</span>Could not read this package: ${escapeHtml(PKG.details.error)}</p>`
     : "";
   host.innerHTML = `
@@ -6486,7 +6662,13 @@ function pkgRenderHero() {
           <div class="pkg-chips">${pkgChipsHtml(item, details)}</div>
           ${error}${pkgHealthHtml(item, details, primaryAct)}${desc}
           <div class="pkg-actions">${pkgActionsHtml(item, details, primaryAct)}</div>
-          <div class="pkg-path" title="${escapeAttribute(item.file_path)}"><span class="material-symbols-outlined">folder</span>${escapeHtml(item.file_path)}</div>
+          ${
+            item.file_path
+              ? `<div class="pkg-path" title="${escapeAttribute(item.file_path)}"><span class="material-symbols-outlined">folder</span>${escapeHtml(item.file_path)}${
+                  PKG.missing ? " <em>(not there any more)</em>" : ""
+                }</div>`
+              : ""
+          }
         </div>
       </div>
     </div>`;
@@ -6538,7 +6720,7 @@ function pkgRenderStats() {
   const kinds = res ? pkgKindTotals() : [];
   const morphBytes = kinds.find((k) => k.key === "morph")?.value ?? 0;
   const folders = res ? new Set(res.map((r) => r.internal_path.slice(0, Math.max(0, r.internal_path.lastIndexOf("/"))))).size : 0;
-  const wait = `<span class="lib-skeleton pkg-stat-skel"></span>`;
+  const wait = PKG.missing ? "—" : `<span class="lib-skeleton pkg-stat-skel"></span>`;
   const deps = d?.dependencies ?? [];
   const ok = deps.filter((x) => (x.status === "found" || x.status === "other_version") && !x.offloaded).length;
   const missing = deps.filter((x) => x.status === "missing" || x.status === "indexed").length;
@@ -6644,6 +6826,13 @@ function pkgRenderComposition() {
     sizeCard = `<div class="pkg-card"><h3>What's inside</h3>${pkgSkeleton(4)}</div>`;
   } else if (!PKG.resources.length) {
     sizeCard = `<div class="pkg-card"><h3>What's inside</h3><p class="pkg-muted">${escapeHtml(PKG.resError || "No files.")}</p></div>`;
+  } else if (!PKG.resources.some((r) => Number(r.size) > 0)) {
+    // Packages added to the database from a list have names but no sizes.
+    sizeCard = `<div class="pkg-card"><h3>What's inside</h3><div class="pkg-empty-mini"><span class="material-symbols-outlined">help</span>${pkgCount(
+      PKG.resources.length,
+      "file",
+      "files",
+    )} — the database doesn't know their sizes (the package was added from a list).</div></div>`;
   } else {
     const all = pkgKindTotals();
     const total = all.reduce((s, k) => s + k.value, 0);
@@ -6687,7 +6876,9 @@ function pkgRenderComposition() {
   }
   const d = PKG.details && !PKG.details.error ? PKG.details : null;
   let contentCard;
-  if (!PKG.details) {
+  if (PKG.missing) {
+    contentCard = `<div class="pkg-card pkg-content-card"><h3>Content</h3>${pkgMissingHtml("its content")}</div>`;
+  } else if (!PKG.details) {
     contentCard = `<div class="pkg-card"><h3>Content</h3>${pkgSkeleton(4)}</div>`;
   } else {
     const content = d?.content ?? [];
@@ -6757,7 +6948,11 @@ function pkgTileHtml(c, item, prefs) {
         ${c.thumb ? "" : `<span class="pkg-tile-glyph material-symbols-outlined">${PKG_CAT_ICONS[c.category] ?? "draft"}</span>`}
         <span class="pkg-tile-cat" style="--c:hsl(${hue} 70% 60%)"><span class="material-symbols-outlined">${PKG_CAT_ICONS[c.category] ?? "draft"}</span></span>
         ${fav ? `<span class="pkg-tile-star material-symbols-outlined">star</span>` : ""}
-        <span class="pkg-tile-tools">${extract}${flags}</span>
+        <span class="pkg-tile-tools">${
+          PKG_VAM_RE.test(c.path)
+            ? `<button type="button" class="pkg-tile-flag" data-pkg-vam="${escapeAttribute(c.path)}" title="Its textures and previews"><span class="material-symbols-outlined">texture</span></button>`
+            : ""
+        }${extract}${flags}</span>
       </div>
       <div class="pkg-tile-name">${escapeHtml(c.name)}</div>
       ${tag ? `<div class="pkg-tile-tag" style="color:${tag.color}">${escapeHtml(tag.label)}</div>` : ""}
@@ -6775,6 +6970,11 @@ function pkgRenderContent() {
   const chipsHost = $("pkg-content-cats");
   const item = PKG.item;
   if (!host || !item) return;
+  if (PKG.missing) {
+    if (chipsHost) chipsHost.innerHTML = "";
+    host.innerHTML = pkgMissingHtml("its scenes, looks, clothing and hair");
+    return;
+  }
   if (!PKG.details) {
     host.innerHTML = `<div class="pkg-gallery">${Array.from({ length: 8 }, () => `<div class="pkg-card-skel"></div>`).join("")}</div>`;
     return;
@@ -6993,6 +7193,11 @@ function pkgRenderDeps() {
   const host = $("pkg-deps");
   const tools = $("pkg-deps-tools");
   if (!host || !PKG.item) return;
+  if (PKG.missing) {
+    if (tools) tools.innerHTML = "";
+    host.innerHTML = pkgMissingHtml("what it needs");
+    return;
+  }
   if (!PKG.details) {
     host.innerHTML = `<div class="pkg-card">${pkgSkeleton(4)}</div>`;
     return;
@@ -7799,6 +8004,8 @@ function pkgTreeClick(t) {
       pkgRenderFiles();
     } else if (PKG_IMAGE_RE.test(path)) {
       pkgZoomEntry(path);
+    } else if (PKG_VAM_RE.test(path)) {
+      pkgVamPreview(path);
     }
     return true;
   }
@@ -7836,6 +8043,10 @@ function pkgTreeClick(t) {
   } else {
     if (PKG_IMAGE_RE.test(path)) {
       pkgZoomEntry(path);
+      return true;
+    }
+    if (PKG_VAM_RE.test(path)) {
+      pkgVamPreview(path);
       return true;
     }
     const input = $("pkg-file-search");
@@ -8002,7 +8213,10 @@ function pkgRenderFileList() {
       const name = slash >= 0 ? path.slice(slash + 1) : path;
       const kind = pkgKindOf(path);
       const isImage = PKG_IMAGE_RE.test(path);
-      return `<div class="pkg-file${isImage ? " is-image" : ""}"${isImage ? ` data-pkg-zoom-entry="${escapeAttribute(path)}"` : ""} title="${escapeAttribute(path)}">
+      const isVam = PKG_VAM_RE.test(path) && !PKG.missing;
+      return `<div class="pkg-file${isImage ? " is-image" : ""}${isVam ? " is-vam" : ""}"${isImage ? ` data-pkg-zoom-entry="${escapeAttribute(path)}"` : ""}${
+        isVam ? ` data-pkg-vam="${escapeAttribute(path)}" title="${escapeAttribute(`${path}\nClick for its textures`)}"` : ` title="${escapeAttribute(path)}"`
+      }>
           <span class="pkg-file-icon" style="color:${kind.color}"><span class="material-symbols-outlined">${kind.icon}</span></span>
           <span class="pkg-file-path"><span class="pkg-file-dir">${escapeHtml(dir)}</span><span class="pkg-file-name">${escapeHtml(name)}</span>${pkgSharedBadge(path)}</span>
           <span class="pkg-file-bar"><span style="width:${Math.max(1, (Number(r.size) / max) * 100).toFixed(1)}%;background:${kind.color}"></span></span>
@@ -8025,19 +8239,40 @@ function pkgRenderShared() {
   const host = $("pkg-shared");
   if (!host || !PKG.item) return;
   const s = PKG.shared;
+  const source = s?.source ?? pkgOverlapSource();
+  const tools = $("pkg-shared-tools");
+  if (tools) {
+    tools.innerHTML = `<div class="pkg-seg pkg-seg-sm">${[
+      ["db", "storage", "Database", "Packages in the database index (fast)"],
+      ["folders", "folder_copy", "Your folders", "Every .var in AddonPackages, the offload folder and your library folders (Settings), read now"],
+    ]
+      .map(
+        ([key, icon, label, title]) => `<button type="button" class="pkg-seg-btn${source === key ? " is-active" : ""}" data-pkg-overlapsrc="${key}" title="${escapeAttribute(title)}">
+          <span class="material-symbols-outlined">${icon}</span>${label}</button>`,
+      )
+      .join("")}</div>`;
+  }
   if (!s) {
     host.innerHTML = `
       <div class="pkg-card pkg-shared-cta">
         <span class="pkg-shared-icon"><span class="material-symbols-outlined">join_inner</span></span>
         <div><b>Which of its files are in other packages too?</b>
-          <span class="pkg-muted">Compares every file's checksum with the packages in your database index. Copies are what Clean VARs can remove.</span></div>
+          <span class="pkg-muted">${
+            source === "folders"
+              ? "Reads every .var in AddonPackages, the offload folder and your library folders (Settings) — slower than the database, but finds packages it hasn't indexed."
+              : "Compares every file's checksum with the packages in your database index. Copies are what Clean VARs can remove."
+          }</span></div>
         <button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-pkg-act="shared" ${PKG.resources?.length ? "" : "disabled"}>
           <span class="material-symbols-outlined">compare_arrows</span><span>Compare</span></button>
       </div>`;
     return;
   }
   if (s.loading) {
-    host.innerHTML = `<div class="pkg-card">${pkgSkeleton(4)}</div>`;
+    host.innerHTML =
+      s.progress != null
+        ? `<div class="pkg-card"><div class="pkg-progress"><span style="width:${Math.max(2, Math.round(s.progress * 100))}%"></span></div>
+             <p class="pkg-muted">${escapeHtml(s.message || "Working…")}</p></div>`
+        : `<div class="pkg-card">${pkgSkeleton(4)}</div>`;
     return;
   }
   if (s.error) {
@@ -8102,7 +8337,9 @@ function pkgRenderShared() {
         <div class="pkg-legend">
           <div class="pkg-legend-row"><span class="pkg-legend-dot" style="background:var(--lib-success)"></span><span class="pkg-legend-label">Only here</span><span class="pkg-legend-val">${escapeHtml(formatBytesLocal(total - s.bytes))}</span></div>
           <div class="pkg-legend-row"><span class="pkg-legend-dot" style="background:var(--lib-warning)"></span><span class="pkg-legend-label">Also in other packages</span><span class="pkg-legend-val">${escapeHtml(formatBytesLocal(s.bytes))}</span></div>
-          <p class="pkg-muted">${s.files.toLocaleString()} of its files have a copy in ${pkgCount(s.packages.length, "other package", "other packages")}. Files under 4 KB aren't compared.</p>
+          <p class="pkg-muted">${s.files.toLocaleString()} of its files have a copy in ${pkgCount(s.packages.length, "other package", "other packages")} ${
+            s.source === "folders" ? "in your folders" : "in the database"
+          }.${s.source === "folders" ? "" : " Files under 4 KB aren't compared."}</p>
           ${
             s.files
               ? `<p class="pkg-overlap-verdict">${
@@ -8128,15 +8365,94 @@ function pkgRenderShared() {
   libThumbWatch(host);
 }
 
-async function pkgLoadShared({ auto = false } = {}) {
+const PKG_OVERLAP_STORE = "pkg.overlapSource";
+
+// "db": the database index (fast). "folders": every .var in AddonPackages, the
+// offload folder and your library folders, read now (what VAR Details called
+// Scan Local).
+function pkgOverlapSource() {
+  try {
+    return localStorage.getItem(PKG_OVERLAP_STORE) === "folders" ? "folders" : "db";
+  } catch (_e) {
+    return "db";
+  }
+}
+
+// `entries`: [{ path, size, crc, refs: [{ package_id, file_path }] }], one per
+// file of this package that another package also has.
+function pkgOverlapFrom(entries, source) {
+  let bytes = 0;
+  let files = 0;
+  // What the other packages' copies take: what cleaning against this one
+  // could free.
+  let copies = 0;
+  // internal path -> how many other packages have that file.
+  const byPath = new Map();
+  const packages = new Map();
+  for (const e of entries) {
+    const seen = new Set();
+    for (const ref of e.refs) {
+      if (!ref.package_id || ref.package_id === PKG.item.package_id || seen.has(ref.package_id)) continue;
+      seen.add(ref.package_id);
+      let p = packages.get(ref.package_id);
+      if (!p) {
+        p = { package_id: ref.package_id, file_path: ref.file_path, bytes: 0, files: 0, crcs: [] };
+        packages.set(ref.package_id, p);
+      }
+      p.bytes += e.size;
+      p.files += 1;
+      p.crcs.push(e.crc);
+    }
+    if (!seen.size) continue;
+    bytes += e.size;
+    files += 1;
+    copies += e.size * seen.size;
+    byPath.set(e.path, seen.size);
+  }
+  const list = [...packages.values()].sort((a, b) => b.bytes - a.bytes || a.package_id.localeCompare(b.package_id));
+  const groups = new Map();
+  for (const p of list) {
+    const key = p.crcs.sort((a, b) => a - b).join(",");
+    const g = groups.get(key) ?? { key, bytes: p.bytes, files: p.files, packages: [] };
+    g.packages.push(p);
+    groups.set(key, g);
+  }
+  return {
+    source,
+    bytes,
+    files,
+    copies,
+    byPath,
+    packages: list,
+    groups: [...groups.values()].sort((a, b) => b.bytes - a.bytes || b.packages.length - a.packages.length),
+    open: new Set(),
+  };
+}
+
+// The Files views can now mark and filter the shared files.
+function pkgAfterShared() {
+  pkgRenderShared();
+  pkgRenderFileCats();
+  pkgRenderFileList();
+  if (pkgFileView() === "list") pkgRenderFiles();
+}
+
+async function pkgLoadShared({ auto = false, source = pkgOverlapSource() } = {}) {
   const item = PKG.item;
-  const res = (PKG.resources ?? []).filter((r) => Number(r.size) >= 4096);
   if (!item || !invoke) return;
+  if (source === "folders") {
+    // Reading every package takes a while: only when asked.
+    if (!auto) await pkgLoadSharedFolders();
+    return;
+  }
+  // Files under 4 KB aren't worth comparing; a size-less database entry (added
+  // from a list) is compared anyway.
+  const res = (PKG.resources ?? []).filter((r) => r.crc32 != null && (Number(r.size) >= 4096 || !Number(r.size)));
   // Only when the index holds packages (an empty one would say "nothing
   // shared"), and not for thousands of files nobody asked to compare.
   if (auto && (res.length > 400 || !(state.varPackagesItems ?? []).some((it) => it.indexed))) return;
   const token = PKG.token;
-  PKG.shared = { loading: true };
+  PKG.shared = { loading: true, source: "db" };
   pkgRenderShared();
   try {
     const map = await invoke("find_resources_by_crcs_bulk", {
@@ -8144,68 +8460,180 @@ async function pkgLoadShared({ auto = false } = {}) {
       excludePackageId: item.package_id,
     });
     if (token !== PKG.token) return;
-    let bytes = 0;
-    let files = 0;
-    // What the other packages' copies take: what cleaning against this one
-    // could free.
-    let copies = 0;
-    // internal path -> how many other packages have that file.
-    const byPath = new Map();
-    const packages = new Map();
-    for (const r of res) {
-      const refs = map?.[String(Number(r.crc32) >>> 0)];
-      if (!refs?.length) continue;
-      bytes += Number(r.size);
-      files += 1;
-      const seen = new Set();
-      for (const ref of refs) {
-        if (seen.has(ref.package_id)) continue;
-        seen.add(ref.package_id);
-        let p = packages.get(ref.package_id);
-        if (!p) {
-          p = { package_id: ref.package_id, file_path: ref.file_path, bytes: 0, files: 0, crcs: [] };
-          packages.set(ref.package_id, p);
-        }
-        p.bytes += Number(r.size);
-        p.files += 1;
-        p.crcs.push(Number(r.crc32) >>> 0);
-      }
-      byPath.set(r.internal_path, seen.size);
-      copies += Number(r.size) * seen.size;
-    }
-    const list = [...packages.values()].sort((a, b) => b.bytes - a.bytes || a.package_id.localeCompare(b.package_id));
-    const groups = new Map();
-    for (const p of list) {
-      const key = p.crcs.sort((a, b) => a - b).join(",");
-      const g = groups.get(key) ?? { key, bytes: p.bytes, files: p.files, packages: [] };
-      g.packages.push(p);
-      groups.set(key, g);
-    }
-    PKG.shared = {
-      bytes,
-      files,
-      copies,
-      byPath,
-      packages: list,
-      groups: [...groups.values()].sort((a, b) => b.bytes - a.bytes || b.packages.length - a.packages.length),
-      open: new Set(),
-    };
+    const entries = res
+      .map((r) => ({ path: r.internal_path, size: Number(r.size), crc: Number(r.crc32) >>> 0, refs: map?.[String(Number(r.crc32) >>> 0)] ?? [] }))
+      .filter((e) => e.refs.length);
+    PKG.shared = pkgOverlapFrom(entries, "db");
   } catch (e) {
     if (token !== PKG.token) return;
-    PKG.shared = auto ? null : { error: `Couldn't compare: ${String(e?.message || e)}. Build the database first (Database page).` };
+    PKG.shared = auto ? null : { source: "db", error: `Couldn't compare: ${String(e?.message || e)}. Build the database first (Database page).` };
   }
+  pkgAfterShared();
+}
+
+async function pkgLoadSharedFolders() {
+  const item = PKG.item;
+  const token = PKG.token;
+  const addon = vamAddonPackagesDir();
+  if (!addon) {
+    PKG.shared = { source: "folders", error: "Set your VaM folder in Settings first." };
+    pkgRenderShared();
+    return;
+  }
+  const extra = [...new Set([...getAdditionalDirs("downloadVars"), ...getUserAdditionalDirs("varDetails")])];
+  PKG.shared = { loading: true, progress: 0, message: "Reading your folders…", source: "folders" };
   pkgRenderShared();
-  // The Files views can now mark and filter the shared files.
-  pkgRenderFileCats();
-  pkgRenderFileList();
-  if (pkgFileView() === "list") pkgRenderFiles();
+  const request = {
+    mode: "local",
+    input_dir: addon,
+    additional_input_dirs: extra,
+    include_vap: false,
+    include_unshared: false,
+    ...(PKG.missing ? { source_package_id: item.package_id } : { target_var_path: item.file_path }),
+  };
+  let taskId = null;
+  let result = null;
+  let failed = null;
+  try {
+    const handle = await invoke("start_db_find_task", { request });
+    taskId = handle?.id ?? null;
+    if (taskId == null) throw new Error("couldn't start the scan");
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 400));
+      const p = await invoke("get_task_progress", { taskId });
+      if (token !== PKG.token) return;
+      if (!p) break;
+      if (p.error) throw new Error(String(p.error));
+      PKG.shared = { loading: true, progress: Number(p.progress ?? 0), message: String(p.message ?? "Working…"), source: "folders" };
+      pkgRenderShared();
+      if (p.done) {
+        result = p.db_find_result ?? null;
+        break;
+      }
+    }
+  } catch (e) {
+    failed = String(e?.message || e);
+  } finally {
+    if (taskId != null) invoke("clear_task", { taskId }).catch(() => {});
+  }
+  if (token !== PKG.token) return;
+  if (failed || !result) {
+    PKG.shared = { source: "folders", error: `Couldn't compare with your folders: ${failed || "no result"}.` };
+    pkgRenderShared();
+    return;
+  }
+  const entries = (result.groups ?? [])
+    .map((g) => ({ path: g.source_refs?.[0]?.internal_path ?? "", size: Number(g.size ?? 0), crc: Number(g.crc32) >>> 0, refs: g.db_matches ?? [] }))
+    .filter((e) => e.path && e.refs.length);
+  PKG.shared = pkgOverlapFrom(entries, "folders");
+  pkgAfterShared();
 }
 
 // ---- Events ---------------------------------------------------------------------------
 
+// ---- Clothing and hair: their textures and previews -----------------------------------
+// A .vam (or its .vaj / .vab) opens a sheet of the images that belong to the
+// item, with their sizes (what VAR Details showed in its preview panel).
+
+const PKG_VAM_RE = /\.(vam|vaj|vab)$/i;
+const PKG_VAM_CACHE = new Map();
+
+function pkgVamModal() {
+  let m = $("pkg-vam-modal");
+  if (m) return m;
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `<div id="pkg-vam-modal" class="lib-view pkg-modal hidden" role="dialog" aria-modal="true" aria-labelledby="pkg-vam-title">
+      <div class="pkg-modal-card">
+        <header class="pkg-modal-head">
+          <span class="material-symbols-outlined">texture</span>
+          <div><b id="pkg-vam-title"></b><small id="pkg-vam-sub"></small></div>
+          <button type="button" class="pkg-icon-act" data-pkg-vam-close aria-label="Close" title="Close"><span class="material-symbols-outlined">close</span></button>
+        </header>
+        <div class="pkg-modal-body" id="pkg-vam-body"></div>
+      </div>
+    </div>`,
+  );
+  m = $("pkg-vam-modal");
+  m.addEventListener("click", (e) => {
+    if (e.target === m || e.target.closest("[data-pkg-vam-close]")) {
+      pkgVamClose();
+      return;
+    }
+    const tile = e.target.closest("[data-pkg-vam-img]");
+    if (tile) pkgVamShow(tile);
+  });
+  return m;
+}
+
+function pkgVamClose() {
+  $("pkg-vam-modal")?.classList.add("hidden");
+}
+
+async function pkgVamShow(tile) {
+  const item = PKG.item;
+  const path = tile.getAttribute("data-pkg-vam-img");
+  let url = PKG_VAM_CACHE.get(`${item.file_path}::${path}`);
+  if (!url) {
+    tile.classList.add("is-loading");
+    try {
+      url = await invoke("load_preview_image_data", { packagePath: item.file_path, internalPath: path });
+      PKG_VAM_CACHE.set(`${item.file_path}::${path}`, url);
+      const thumb = tile.querySelector(".pkg-vam-thumb");
+      if (thumb) thumb.innerHTML = `<img alt="" src="${escapeAttribute(url)}" />`;
+    } catch (e) {
+      showToast(`Couldn't load that image: ${String(e?.message || e)}`, "error");
+      return;
+    } finally {
+      tile.classList.remove("is-loading");
+    }
+  }
+  openImageZoom(url, path.split("/").pop());
+}
+
+async function pkgVamPreview(path) {
+  const item = PKG.item;
+  if (!item || PKG.missing || !invoke) return;
+  const vamPath = path.replace(/\.(vaj|vab)$/i, ".vam");
+  const m = pkgVamModal();
+  const body = $("pkg-vam-body");
+  $("pkg-vam-title").textContent = vamPath.split("/").pop();
+  $("pkg-vam-sub").textContent = vamPath.slice(0, Math.max(0, vamPath.lastIndexOf("/")));
+  body.innerHTML = `<div class="pkg-vam-grid">${Array.from({ length: 6 }, () => `<div class="pkg-card-skel"></div>`).join("")}</div>`;
+  m.classList.remove("hidden");
+  let res = null;
+  try {
+    res = await invoke("get_vam_preview", { packageId: item.package_id, packagePath: item.file_path, vamPath });
+  } catch (e) {
+    body.innerHTML = `<p class="pkg-error"><span class="material-symbols-outlined">error</span>${escapeHtml(String(e?.message || e))}</p>`;
+    return;
+  }
+  const images = res?.images ?? [];
+  if (!images.length) {
+    body.innerHTML = `<div class="pkg-empty"><span class="material-symbols-outlined">texture</span><b>No textures or previews</b><span>Nothing beside this item in the package.</span></div>`;
+    return;
+  }
+  for (const im of images) if (im.data_url) PKG_VAM_CACHE.set(`${item.file_path}::${im.internal_path}`, im.data_url);
+  $("pkg-vam-sub").textContent = `${pkgCount(images.length, "image", "images")} · ${formatBytesLocal(images.reduce((s, im) => s + Number(im.size || 0), 0))}`;
+  body.innerHTML = `<div class="pkg-vam-grid">${images
+    .map((im) => {
+      const name = im.internal_path.split("/").pop();
+      const dims = im.width && im.height ? `${im.width}×${im.height}` : "";
+      const url = PKG_VAM_CACHE.get(`${item.file_path}::${im.internal_path}`);
+      return `<button type="button" class="pkg-vam-img" data-pkg-vam-img="${escapeAttribute(im.internal_path)}" title="${escapeAttribute(im.internal_path)}">
+          <span class="pkg-vam-thumb">${
+            url ? `<img alt="" src="${escapeAttribute(url)}" />` : `<span class="material-symbols-outlined">image</span><small>Large — click to load</small>`
+          }</span>
+          <span class="pkg-vam-name">${escapeHtml(name)}</span>
+          <span class="pkg-vam-meta">${[dims, formatBytesLocal(Number(im.size || 0))].filter(Boolean).join(" · ")}</span>
+        </button>`;
+    })
+    .join("")}</div>`;
+}
+
 function pkgZoomEntry(entry) {
   const item = PKG.item;
-  if (!item || !invoke) return;
+  if (!item || !invoke || PKG.missing) return;
   const key = pkgCoverKey(entry);
   const show = (url) => url && openImageZoom(url, entry || libTitle(item));
   if (varPackageThumbCache.get(key)) {
@@ -8330,6 +8758,15 @@ function pkgRunAction(act, event) {
     case "shared":
       pkgLoadShared();
       return;
+    case "download":
+      pkgDownload();
+      return;
+    case "add-source":
+      if (PKG.item) sourceOpen({ packageId: PKG.item.package_id, fileName: PKG.item.file_name || `${PKG.item.package_id}.var` });
+      return;
+    case "open-downloads":
+      window.__toggleDownloads?.();
+      return;
     case "show-shared":
       pkgSetFileCat("shared");
       pkgScrollTo("files");
@@ -8436,6 +8873,21 @@ function pkgOnClick(event) {
     pkgOpen(id ? { file_path: fp, package_id: id, size_bytes: size } : fp);
     return;
   }
+  const overlapSrc = t.closest?.("[data-pkg-overlapsrc]");
+  if (overlapSrc) {
+    const source = overlapSrc.getAttribute("data-pkg-overlapsrc");
+    try {
+      localStorage.setItem(PKG_OVERLAP_STORE, source);
+    } catch (_e) {}
+    PKG.shared = null;
+    pkgLoadShared({ source });
+    return;
+  }
+  const vam = t.closest?.("[data-pkg-vam]");
+  if (vam) {
+    pkgVamPreview(vam.getAttribute("data-pkg-vam"));
+    return;
+  }
   const depView = t.closest?.("[data-pkg-depview]");
   if (depView) {
     try {
@@ -8516,6 +8968,10 @@ function pkgOnClick(event) {
       pkgZoomEntry(path);
       return;
     }
+    if (PKG_VAM_RE.test(path)) {
+      pkgVamPreview(path);
+      return;
+    }
     const name = path.split("/").pop();
     const input = $("pkg-file-search");
     if (input) input.value = name;
@@ -8590,6 +9046,11 @@ function setupPackageExplorer() {
     },
     { passive: false },
   );
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("pkg-vam-modal")?.classList.contains("hidden") && $("pkg-vam-modal")) {
+      if (!$("image-zoom-backdrop") || $("image-zoom-backdrop").classList.contains("hidden")) pkgVamClose();
+    }
+  });
   // Graph and tree nodes and picture cards act like buttons from the keyboard.
   view.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
@@ -13333,25 +13794,11 @@ function openVarDetailsView(item, source = null) {
 
 window.__openVarDetailsView = openVarDetailsView;
 
-// The one way to open a package's details. Package Explorer when its file is
-// on disk; VAR Details otherwise — it handles packages only the database
-// knows, and offers to download one that's gone. `target` is a listing item
-// or a .var path.
-async function openPackageDetails(target, source = null) {
-  const fp = typeof target === "string" ? target : target?.file_path;
-  if (fp && /\.var(\.disabled)?$/i.test(fp) && invoke) {
-    const exists = await invoke("path_exists", { path: fp }).catch(() => false);
-    if (exists) {
-      pkgOpen(target);
-      return;
-    }
-  }
-  if (typeof target === "string") {
-    showVarDetailsView();
-    loadVarDetailsFromPath(target).catch((e) => addLog(`VAR Details: ${String(e)}`));
-    return;
-  }
-  openVarDetailsView(target, source);
+// The one way to open a package's details: Package Explorer, which also
+// handles packages only the database knows and files that are gone (it finds
+// a download). `target` is a listing item, a database stub or a .var path.
+async function openPackageDetails(target) {
+  pkgOpen(target);
 }
 
 
