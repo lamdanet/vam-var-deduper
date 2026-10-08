@@ -5823,6 +5823,7 @@ const PKG = {
   treeSel: "",
   treeLimit: new Map(),
   treeJustOpened: null,
+  treeView: null,
   // { loading } | { error } | { bytes, files, packages: [...] }
   shared: null,
   history: [],
@@ -5970,6 +5971,7 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
     treeSel: "",
     treeLimit: new Map(),
     treeJustOpened: null,
+    treeView: null,
     shared: null,
   });
   pkgRemember(item);
@@ -6097,6 +6099,8 @@ function pkgRender() {
             <div class="pkg-seg" role="tablist">
               <button type="button" class="pkg-seg-btn" data-pkg-fileview="tree" title="Folders as a tree you can open and close">
                 <span class="material-symbols-outlined">account_tree</span>Tree</button>
+              <button type="button" class="pkg-seg-btn" data-pkg-fileview="list" title="Folders as an indented list, as in Explorer">
+                <span class="material-symbols-outlined">format_list_bulleted</span>List</button>
               <button type="button" class="pkg-seg-btn" data-pkg-fileview="map" title="Folders and files sized by bytes">
                 <span class="material-symbols-outlined">dashboard</span>Size map</button>
             </div>
@@ -6898,21 +6902,20 @@ function pkgRenderFiles() {
   pkgView()
     ?.querySelectorAll("[data-pkg-fileview]")
     .forEach((b) => b.classList.toggle("is-active", b.getAttribute("data-pkg-fileview") === view));
+  host.classList.remove("hidden");
   if (view === "tree") {
-    // Re-rendering replaces the scroller: keep where the user was.
-    const old = host.querySelector(".pkg-tree-wrap");
-    const keep = old ? [old.scrollTop, old.scrollLeft] : null;
     const focus = PKG.treeJustOpened;
     host.innerHTML = pkgTreeHtml();
-    const wrap = host.querySelector(".pkg-tree-wrap");
-    if (wrap && keep) [wrap.scrollTop, wrap.scrollLeft] = keep;
-    const node = focus != null && wrap?.querySelector(`[data-pkg-tn="${CSS.escape(focus)}"]`);
-    if (node) {
-      const box = node.getBoundingClientRect();
-      const view = wrap.getBoundingClientRect();
-      if (box.bottom > view.bottom - 40) wrap.scrollTop += box.bottom - view.bottom + 120;
-      if (box.right > view.right - 260) wrap.scrollLeft += box.right - view.right + 300;
-    }
+    pkgTreeSetup(focus);
+    pkgRenderFileList();
+    return;
+  }
+  if (view === "list") {
+    // Re-rendering replaces the scroller: keep where the user was.
+    const keep = $("pkg-outline")?.scrollTop ?? 0;
+    host.innerHTML = pkgOutlineHtml();
+    const outline = $("pkg-outline");
+    if (outline) outline.scrollTop = keep;
     pkgRenderFileList();
     return;
   }
@@ -6979,7 +6982,8 @@ const PKG_TREE_LIMIT = 40;
 
 function pkgFileView() {
   try {
-    return localStorage.getItem(PKG_TREE_STORE) === "map" ? "map" : "tree";
+    const view = localStorage.getItem(PKG_TREE_STORE);
+    return view === "map" || view === "list" ? view : "tree";
   } catch (_e) {
     return "tree";
   }
@@ -7099,6 +7103,8 @@ function pkgTreeHtml() {
   const Y = (m) => 20 + m.y * ROW;
   const W = 18 + maxDepth * COL + 300;
   const H = row * ROW + 16;
+  PKG.treeDims = { W, H };
+  PKG.treePos = new Map(nodes.filter((m) => !m.n.file && !m.n.more).map((m) => [m.n.path, { x: X(m), y: Y(m) }]));
   const fresh = PKG.treeJustOpened;
   const isNew = (m) => fresh != null && m.parent && m.parent.n.path === fresh && !m.parent.n.file;
   const edgeSvg = edges
@@ -7150,18 +7156,237 @@ function pkgTreeHtml() {
     })
     .join("");
   PKG.treeJustOpened = null;
+  const zoom = Math.round((PKG.treeView?.k ?? 1) * 100);
   return `
     <div class="pkg-tree-tools">
-      <span class="pkg-muted">Click a folder to open it and list its files below · circle size is bytes</span>
+      <span class="pkg-muted">Drag to move · Ctrl + wheel to zoom · click a folder to open it and list its files below</span>
+      <div class="pkg-zoom">
+        <button type="button" data-pkg-tz="out" title="Zoom out"><span class="material-symbols-outlined">remove</span></button>
+        <button type="button" class="pkg-zoom-val" id="pkg-tree-zoom-val" data-pkg-tz="reset" title="Back to 100%">${zoom}%</button>
+        <button type="button" data-pkg-tz="in" title="Zoom in"><span class="material-symbols-outlined">add</span></button>
+        <button type="button" data-pkg-tz="fit" title="Fit the whole tree"><span class="material-symbols-outlined">fit_screen</span></button>
+      </div>
       <button type="button" class="pkg-mini-btn" data-pkg-tree="expand"><span class="material-symbols-outlined">unfold_more</span>Expand all</button>
       <button type="button" class="pkg-mini-btn" data-pkg-tree="collapse"><span class="material-symbols-outlined">unfold_less</span>Collapse</button>
     </div>
-    <div class="pkg-card pkg-tree-wrap">
-      <svg class="pkg-tree" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${edgeSvg}${nodeSvg}</svg>
+    <div class="pkg-card pkg-tree-view" id="pkg-tree-view" style="height:${Math.round(Math.min(620, Math.max(240, H + 24)))}px">
+      <svg class="pkg-tree" width="100%" height="100%"><g id="pkg-tree-g">${edgeSvg}${nodeSvg}</g></svg>
     </div>`;
 }
 
+// ---- Files tree: zoom and pan ---------------------------------------------------------
+// The tree is drawn once at 1:1 and moved with a transform: drag to pan, wheel
+// to scroll it, Ctrl + wheel (or the buttons) to zoom around the pointer.
+
+const PKG_TREE_ZOOM = { min: 0.2, max: 3 };
+
+function pkgTreeViewState() {
+  if (!PKG.treeView) PKG.treeView = { k: 1, tx: 0, ty: 0 };
+  return PKG.treeView;
+}
+
+function pkgTreeClamp(vp) {
+  const v = pkgTreeViewState();
+  const { W, H } = PKG.treeDims ?? { W: 0, H: 0 };
+  const m = 40;
+  const span = (size, view, t) => {
+    const lo = Math.min(m, view - size - m);
+    const hi = Math.max(m, view - size - m);
+    return Math.max(lo, Math.min(hi, t));
+  };
+  v.tx = span(W * v.k, vp.clientWidth, v.tx);
+  v.ty = span(H * v.k, vp.clientHeight, v.ty);
+}
+
+function pkgTreeApply(vp) {
+  const v = pkgTreeViewState();
+  pkgTreeClamp(vp);
+  vp.querySelector("#pkg-tree-g")?.setAttribute("transform", `translate(${v.tx.toFixed(1)},${v.ty.toFixed(1)}) scale(${v.k.toFixed(3)})`);
+  const label = $("pkg-tree-zoom-val");
+  if (label) label.textContent = `${Math.round(v.k * 100)}%`;
+}
+
+function pkgTreeZoomAt(vp, factor, mx, my) {
+  const v = pkgTreeViewState();
+  const k = Math.max(PKG_TREE_ZOOM.min, Math.min(PKG_TREE_ZOOM.max, v.k * factor));
+  v.tx = mx - ((mx - v.tx) * k) / v.k;
+  v.ty = my - ((my - v.ty) * k) / v.k;
+  v.k = k;
+  pkgTreeApply(vp);
+}
+
+function pkgTreeFit(vp) {
+  const v = pkgTreeViewState();
+  const { W, H } = PKG.treeDims ?? { W: 1, H: 1 };
+  const k = Math.max(PKG_TREE_ZOOM.min, Math.min(1.5, (vp.clientWidth - 40) / W, (vp.clientHeight - 40) / H));
+  v.k = k;
+  v.tx = (vp.clientWidth - W * k) / 2;
+  v.ty = Math.max(20, (vp.clientHeight - H * k) / 2);
+  pkgTreeApply(vp);
+}
+
+function pkgTreeZoomButton(action) {
+  const vp = $("pkg-tree-view");
+  if (!vp) return;
+  const v = pkgTreeViewState();
+  const cx = vp.clientWidth / 2;
+  const cy = vp.clientHeight / 2;
+  if (action === "in") pkgTreeZoomAt(vp, 1.25, cx, cy);
+  else if (action === "out") pkgTreeZoomAt(vp, 0.8, cx, cy);
+  else if (action === "fit") pkgTreeFit(vp);
+  else if (action === "reset") pkgTreeZoomAt(vp, 1 / v.k, cx, cy);
+}
+
+// After a folder opens: bring it (and what it holds) into view.
+function pkgTreeFocus(vp, path) {
+  const p = PKG.treePos?.get(path);
+  if (!p) return;
+  const v = pkgTreeViewState();
+  const sx = p.x * v.k + v.tx;
+  const sy = p.y * v.k + v.ty;
+  if (sx < 0 || sx > vp.clientWidth * 0.6) v.tx = vp.clientWidth * 0.2 - p.x * v.k;
+  if (sy < 20 || sy > vp.clientHeight - 60) v.ty = vp.clientHeight * 0.25 - p.y * v.k;
+  pkgTreeApply(vp);
+}
+
+function pkgTreeSetup(focus) {
+  const vp = $("pkg-tree-view");
+  if (!vp) return;
+  pkgTreeApply(vp);
+  if (focus != null) pkgTreeFocus(vp, focus);
+  vp.addEventListener(
+    "wheel",
+    (e) => {
+      const v = pkgTreeViewState();
+      const rect = vp.getBoundingClientRect();
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        pkgTreeZoomAt(vp, Math.exp(-e.deltaY * 0.0015), e.clientX - rect.left, e.clientY - rect.top);
+        return;
+      }
+      const before = [v.tx, v.ty];
+      v.tx -= e.shiftKey ? e.deltaY : e.deltaX;
+      v.ty -= e.shiftKey ? 0 : e.deltaY;
+      pkgTreeClamp(vp);
+      // At the tree's edge the page scrolls on instead.
+      if (v.tx !== before[0] || v.ty !== before[1]) {
+        e.preventDefault();
+        pkgTreeApply(vp);
+      }
+    },
+    { passive: false },
+  );
+  let drag = null;
+  let moved = false;
+  vp.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const v = pkgTreeViewState();
+    drag = { x: e.clientX, y: e.clientY, tx: v.tx, ty: v.ty, id: e.pointerId };
+    moved = false;
+  });
+  vp.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    if (!moved) {
+      moved = true;
+      vp.setPointerCapture?.(drag.id);
+      vp.classList.add("is-dragging");
+    }
+    const v = pkgTreeViewState();
+    v.tx = drag.tx + dx;
+    v.ty = drag.ty + dy;
+    pkgTreeApply(vp);
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null;
+    vp.classList.remove("is-dragging");
+  };
+  vp.addEventListener("pointerup", end);
+  vp.addEventListener("pointercancel", end);
+  // A drag is not a click on the node it ended over.
+  vp.addEventListener(
+    "click",
+    (e) => {
+      if (!moved) return;
+      moved = false;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    true,
+  );
+}
+
+// ---- Files list: folder outline -------------------------------------------------------
+// The same folders as an indented list, as in Explorer. Open state is shared
+// with the tree.
+
+function pkgOutlineHtml() {
+  const root = pkgBuildTree();
+  const total = Math.max(1, root.bytes);
+  const rows = [];
+  const walk = (n, depth) => {
+    for (const k of pkgTreeChildren(n)) {
+      if (k.more) {
+        rows.push(`<div class="pkg-ol-row is-more" data-pkg-tn-more="${escapeAttribute(k.path)}" style="--d:${depth}">
+            <span class="pkg-ol-chev"></span><span class="pkg-ol-icon material-symbols-outlined">more_horiz</span>
+            <span class="pkg-ol-name">+ ${k.count.toLocaleString()} more</span><span class="pkg-ol-bar"></span>
+            <span class="pkg-ol-size">${escapeHtml(formatBytesLocal(k.bytes))}</span></div>`);
+        continue;
+      }
+      const dir = !k.file;
+      const open = dir && PKG.treeOpen.has(k.path);
+      const kind = pkgTreeKind(k);
+      const isImage = k.file && PKG_IMAGE_RE.test(k.path);
+      rows.push(`<div class="pkg-ol-row${dir ? " is-dir" : ""}${open ? " is-open" : ""}${isImage ? " is-image" : ""}"
+          data-pkg-ol="${escapeAttribute(k.path)}" data-pkg-ol-kind="${dir ? "dir" : "file"}" style="--d:${depth};--c:${kind.color}" title="${escapeAttribute(k.path)}">
+          <span class="pkg-ol-chev material-symbols-outlined">${dir ? (open ? "expand_more" : "chevron_right") : ""}</span>
+          <span class="pkg-ol-icon material-symbols-outlined">${dir ? (open ? "folder_open" : "folder") : kind.icon}</span>
+          <span class="pkg-ol-name">${escapeHtml(k.name)}${dir ? `<small>${k.count.toLocaleString()} file${k.count === 1 ? "" : "s"}</small>` : ""}</span>
+          <span class="pkg-ol-bar"><span style="width:${Math.max(0.5, (k.bytes / total) * 100).toFixed(2)}%"></span></span>
+          <span class="pkg-ol-size">${escapeHtml(formatBytesLocal(k.bytes))}</span>
+        </div>`);
+      if (open) walk(k, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return `
+    <div class="pkg-tree-tools">
+      <span class="pkg-muted">Click a folder to open it · searching lists the matching files</span>
+      <button type="button" class="pkg-mini-btn" data-pkg-tree="expand"><span class="material-symbols-outlined">unfold_more</span>Expand all</button>
+      <button type="button" class="pkg-mini-btn" data-pkg-tree="collapse"><span class="material-symbols-outlined">unfold_less</span>Collapse</button>
+    </div>
+    <div class="pkg-card pkg-outline" id="pkg-outline">
+      <div class="pkg-ol-row pkg-ol-head" style="--d:0">
+        <span class="pkg-ol-chev"></span><span class="pkg-ol-icon material-symbols-outlined">deployed_code</span>
+        <span class="pkg-ol-name">${escapeHtml(root.name)}<small>${root.count.toLocaleString()} files</small></span>
+        <span class="pkg-ol-bar"></span><span class="pkg-ol-size">${escapeHtml(formatBytesLocal(root.bytes))}</span>
+      </div>
+      ${rows.join("")}
+    </div>`;
+}
+
+
 function pkgTreeClick(t) {
+  const tz = t.closest?.("[data-pkg-tz]");
+  if (tz) {
+    pkgTreeZoomButton(tz.getAttribute("data-pkg-tz"));
+    return true;
+  }
+  const row = t.closest?.("[data-pkg-ol]");
+  if (row) {
+    const path = row.getAttribute("data-pkg-ol");
+    if (row.getAttribute("data-pkg-ol-kind") === "dir") {
+      if (PKG.treeOpen.has(path)) PKG.treeOpen.delete(path);
+      else PKG.treeOpen.add(path);
+      pkgRenderFiles();
+    } else if (PKG_IMAGE_RE.test(path)) {
+      pkgZoomEntry(path);
+    }
+    return true;
+  }
   const more = t.closest?.("[data-pkg-tn-more]");
   if (more) {
     const path = more.getAttribute("data-pkg-tn-more");
@@ -7217,6 +7442,13 @@ function pkgRenderFileList() {
     return;
   }
   const q = PKG.fileQuery;
+  if (pkgFileView() === "list") {
+    $("pkg-treemap")?.classList.toggle("hidden", Boolean(q));
+    if (!q) {
+      host.innerHTML = "";
+      return;
+    }
+  }
   const rows = PKG.resources
     .filter(
       (r) =>
