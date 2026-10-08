@@ -2553,6 +2553,18 @@
               </div>
 
               <div class="settings-path-card">
+                <span class="settings-path-label">Dropping .var files on the window</span>
+                <label class="check-row" for="settings-drop-move">
+                  <input id="settings-drop-move" type="checkbox" />
+                  <span>Move them into AddonPackages instead of copying</span>
+                </label>
+                <p class="settings-path-hint">
+                  Drop .var files or folders anywhere (except VAR Details, Missing Resources and Internalize, which take
+                  one .var) to add them to your library. Each is checked first; ones already in the library are skipped.
+                </p>
+              </div>
+
+              <div class="settings-path-card">
                 <label class="settings-path-label" id="settings-path-output-label" for="settings-output-dir"></label>
                 <div class="input-with-button">
                   <div class="input-with-icon">
@@ -3032,6 +3044,15 @@
     <!-- Transient toast notifications (auto-dismiss). Visible without opening
          the console drawer. -->
     <div id="toast-host" class="toast-host" aria-live="polite"></div>
+
+    <!-- Shown while .var files are dragged over the window (setupDropImport). -->
+    <div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
+      <div class="drop-overlay-card">
+        <span class="material-symbols-outlined">add_circle</span>
+        <b>Drop to add to your library</b>
+        <span>.var files or folders — each is checked, then copied into AddonPackages</span>
+      </div>
+    </div>
 
     <!-- Settings > About > Release notes (CHANGELOG.md, built into the exe). -->
     <div id="release-notes-backdrop" class="dialog-backdrop hidden">

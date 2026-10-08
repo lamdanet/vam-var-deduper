@@ -5789,6 +5789,121 @@ function setupVamPrefs() {
   });
 }
 
+// ---- Drop .var files on the window (dropin.rs) ---------------------------------------
+// Anywhere except the pages that take a single .var (VAR Details, Missing
+// Resources, Internalize): the dropped packages are checked and copied — or
+// moved, per Settings — into AddonPackages.
+
+const DROP_STORE = "dropin.moveFiles";
+
+function dropTakenByPage() {
+  return ["var-details-view", "missing-resources-view", "internalize-resources-view"].some(
+    (id) => $(id) && !$(id).classList.contains("hidden"),
+  );
+}
+
+function dropOverlay(show) {
+  $("drop-overlay")?.classList.toggle("hidden", !show);
+}
+
+function dropMoveFiles() {
+  try {
+    return localStorage.getItem(DROP_STORE) === "1";
+  } catch (_e) {
+    return false;
+  }
+}
+
+async function dropImport(paths) {
+  if (!invoke || !paths.length) return;
+  const addonDir = vamAddonPackagesDir();
+  if (!addonDir) {
+    showToast("Set your VaM directory in Settings first.", "error");
+    openVamDirSettings();
+    return;
+  }
+  const args = {
+    paths,
+    addonDir,
+    byCreator: Boolean($("settings-organize-by-creator")?.checked),
+    moveFiles: dropMoveFiles(),
+  };
+  let plan = null;
+  try {
+    plan = await invoke("import_var_files", { ...args, dryRun: true });
+  } catch (e) {
+    showToast(String(e?.message || e), "error");
+    return;
+  }
+  const n = plan?.imported?.length ?? 0;
+  const skippedNote = [
+    plan?.existing?.length ? `${plan.existing.length} already in your library` : "",
+    plan?.invalid?.length ? `${plan.invalid.length} not valid packages` : "",
+    plan?.otherFiles ? `${plan.otherFiles} other file${plan.otherFiles === 1 ? "" : "s"} ignored` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  for (const [file, why] of plan?.invalid ?? []) addLog(`Add to library: ${file} — ${why}`);
+  if (!n) {
+    showToast(skippedNote ? `Nothing to add (${skippedNote}).` : "No .var files in that drop.", "info", 6000);
+    return;
+  }
+  const names = plan.imported.slice(0, 6).map((i) => i.name).join(", ") + (n > 6 ? `, +${n - 6} more` : "");
+  const ok = await showAppConfirm(
+    `${args.moveFiles ? "Move" : "Add"} ${n} package${n === 1 ? "" : "s"} to your library? ${
+      args.moveFiles ? "They're moved" : "They're copied"
+    } into AddonPackages${args.byCreator ? " (creator folders)" : ""} after a full check, and count as installed.\n\n${names}${
+      skippedNote ? `\n\nSkipped: ${skippedNote}.` : ""
+    }`,
+  );
+  if (!ok) return;
+  const toast = showToast(`Adding ${n} package${n === 1 ? "" : "s"}…`, "info", 0);
+  let res = null;
+  try {
+    res = await invoke("import_var_files", { ...args, dryRun: false });
+  } catch (e) {
+    toast.update(String(e?.message || e), "error");
+    toast.dismiss(6000);
+    return;
+  }
+  for (const [file, why] of res?.invalid ?? []) addLog(`Add to library: ${file} — ${why}`);
+  const added = res?.imported?.length ?? 0;
+  toast.update(
+    `${args.moveFiles ? "Moved" : "Added"} ${added} package${added === 1 ? "" : "s"} to your library${
+      res?.invalid?.length ? `; ${res.invalid.length} couldn't be added — see Console` : ""
+    }.`,
+    res?.invalid?.length ? "error" : "success",
+  );
+  toast.dismiss(6000);
+  await vpRefreshAfterMutation().catch(() => {});
+}
+
+function setupDropImport() {
+  const tauriEvent = window.__TAURI__?.event;
+  if (!tauriEvent?.listen) return;
+  const box = $("settings-drop-move");
+  if (box) {
+    box.checked = dropMoveFiles();
+    box.addEventListener("change", () => {
+      try {
+        localStorage.setItem(DROP_STORE, box.checked ? "1" : "0");
+      } catch (_e) {}
+    });
+  }
+  const over = () => dropOverlay(!dropTakenByPage() && !document.querySelector(".dialog-backdrop:not(.hidden)"));
+  tauriEvent.listen("tauri://drag-enter", over).catch(() => {});
+  tauriEvent.listen("tauri://drag-over", over).catch(() => {});
+  tauriEvent.listen("tauri://drag-leave", () => dropOverlay(false)).catch(() => {});
+  tauriEvent
+    .listen("tauri://drag-drop", (event) => {
+      dropOverlay(false);
+      if (dropTakenByPage() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
+      const paths = (event?.payload?.paths ?? []).map(String);
+      dropImport(paths).catch((e) => addLog(`Add to library: ${String(e)}`));
+    })
+    .catch(() => {});
+}
+
 // ---- Extract presets ----------------------------------------------------------------
 // After VaM Backstage's "Extract appearance / outfit preset", plus hair and
 // morph presets: the people in a package's scenes, legacy looks and
@@ -16707,6 +16822,18 @@ function showVamSetup() {
   $("vam-setup-error")?.classList.add("hidden");
   renderVamSetup();
   $("vam-setup-backdrop")?.classList.remove("hidden");
+  // A VaM folder next to the app (or above it) is offered straight away.
+  invoke?.("detect_vam_dir")
+    .then((found) => {
+      if (!found?.info?.valid || VAM_SETUP.info) return;
+      VAM_SETUP.info = found.info;
+      renderVamSetup();
+      vpSetText(
+        "vam-setup-found-text",
+        `${Number(found.info.var_count).toLocaleString()} var files found — detected from ${found.source}`,
+      );
+    })
+    .catch(() => {});
 }
 
 function hideVamSetup() {
@@ -19361,6 +19488,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupOffload();
   setupExtract();
   setupVamPrefs();
+  setupDropImport();
   // The Hub package index: shortly after start-up, then every 30 minutes.
   setTimeout(() => hubIndexRefresh(false), 1500);
   setInterval(() => hubIndexRefresh(false), 30 * 60 * 1000);

@@ -14266,6 +14266,41 @@ button.lib-dep-ref:hover {
   color: #fff;
 }
 
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 28px 40px;
+  border: 2px dashed var(--primary);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.drop-overlay-card b {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.drop-overlay-card .material-symbols-outlined {
+  font-size: 40px;
+  color: var(--primary);
+}
+
 .lib-cat-bar {
   display: flex;
   align-items: center;
