@@ -10,6 +10,26 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-08
+
+A maintenance release: the libraries the app is built on are updated, and the
+app works the same as before.
+
+### Changed
+- Updated the libraries behind Hub access and downloads, `.var` reading and
+  writing, and MEGA decryption, plus Tauri and several smaller ones. The app
+  still connects through Windows' own secure connection, so the Hub keeps
+  working, and new files it writes into a `.var` are byte-for-byte the same as
+  before
+- When a `.var` is rewritten, files copied over unchanged are now marked as
+  made on Windows instead of Unix. VaM ignores this mark
+
+### Project
+- VAM VAR Deduper is now open source under the MIT license. Report bugs and
+  ideas through the [issue forms](https://github.com/lamdanet/vam-var-deduper/issues/new/choose),
+  and ask questions in [Discussions](https://github.com/lamdanet/vam-var-deduper/discussions)
+- Every change is now built, linted and tested automatically before it's merged
+
 ## [0.1.0] - 2026-10-08
 
 First release of VAM VAR Deduper, a Windows desktop app for cleaning up and
