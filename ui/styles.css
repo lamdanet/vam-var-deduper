@@ -18861,33 +18861,6 @@ button.pkg-stat:focus-visible::after {
   padding-left: 52px;
 }
 
-/* The line down from the package's icon, and a branch to each row. */
-.fm-group-rows .fm-row::before {
-  content: "";
-  position: absolute;
-  left: 30px;
-  top: 0;
-  bottom: 0;
-  border-left: 2px solid color-mix(in srgb, var(--primary) 40%, var(--line));
-}
-
-.fm-group-rows .fm-row:first-child::before {
-  top: -8px;
-}
-
-.fm-group-rows .fm-row:last-child::before {
-  bottom: 50%;
-}
-
-.fm-group-rows .fm-row::after {
-  content: "";
-  position: absolute;
-  left: 30px;
-  top: 50%;
-  width: 14px;
-  border-top: 2px solid color-mix(in srgb, var(--primary) 40%, var(--line));
-}
-
 /* "from 映雪2": the package it points at, as plain as the file name. */
 .fm-row-pkg {
   color: var(--text);
@@ -19074,4 +19047,65 @@ button.pkg-stat:focus-visible::after {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 10px;
+}
+
+/* ---- Fix Missing: grouping without lines, copies without boxes ---- */
+
+/* A package's header and its rows share a soft band; the rows are indented
+   under the header. No lines to break at row borders. */
+.fm-group {
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.fm-group + .fm-group {
+  border-top: 0;
+}
+
+.fm-group .fm-group-label {
+  padding-bottom: 10px;
+}
+
+.fm-group-rows .fm-row:last-child {
+  border-bottom: 0;
+}
+
+/* A chosen card's copies: a plain list inside it, not cards in a card. */
+.fm-cand-row .fm-cand-alts {
+  gap: 0;
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.fm-cand-alt {
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 6px;
+  background: none;
+}
+
+.fm-cand-alt:last-child {
+  border-bottom: 0;
+}
+
+.fm-cand-alt:hover {
+  border-color: color-mix(in srgb, var(--line) 70%, transparent);
+  background: var(--surface-3);
+}
+
+.fm-cand-alt[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--line) 70%, transparent);
+  background: color-mix(in srgb, var(--accent-success) 10%, transparent);
+}
+
+.fm-cand-alt:last-child:hover,
+.fm-cand-alt:last-child[aria-checked="true"] {
+  border-bottom: 0;
+}
+
+.fm-cand-alts-h {
+  padding: 4px 4px 2px;
 }
