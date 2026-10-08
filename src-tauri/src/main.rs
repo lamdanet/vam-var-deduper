@@ -3,6 +3,7 @@
 mod archives;
 mod config;
 mod db;
+mod disable;
 mod execute;
 mod extract;
 mod fix_var;
@@ -30,6 +31,7 @@ use crate::{
     extract::{extract_probe, extract_run},
     hub_index::{hub_exact_download, hub_index_lookup, hub_index_refresh, hub_index_status},
     integrity::start_verify_packages_task,
+    disable::{plan_disable, set_packages_disabled},
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
@@ -91,6 +93,8 @@ fn main() {
             hub_index_lookup,
             hub_exact_download,
             start_verify_packages_task,
+            plan_disable,
+            set_packages_disabled,
             load_config,
             path_exists,
             pick_folder,
