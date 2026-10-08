@@ -50,9 +50,13 @@ release time, it fills it with the commit messages since the last release.
   the package each reference points at, says in words what's wrong (not
   installed, or a file missing) and what's chosen, and has To choose / Chosen
   filters. The best replacement is one click (Use it), and Auto-pick takes
-  every exact copy. Replacement Sources stays beside the list as it scrolls,
-  and Run Fixes says how many it will apply. A missing package can be found
-  and downloaded from the list. Package Explorer has a Check refs button and
+  every exact copy. Replacement Sources stays beside the list as it scrolls:
+  it shows the missing package (why it's missing, Find it / Download,
+  Explore), marks how many other missing files each replacement covers
+  (Use for all), keeps Apply to the same package / filtered / all, and
+  searches the database by itself when your folders have no copy, putting
+  the packages that cover the most first and offering to download ones you
+  don't have. Run Fixes says how many it will apply. Package Explorer has a Check refs button and
   shows what the last check found, with Fix references. Missing Resources is
   still there
 - **Package Explorer**: a new page that shows one package in pictures. It
