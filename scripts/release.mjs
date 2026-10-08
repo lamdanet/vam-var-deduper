@@ -104,7 +104,7 @@ if (branch !== "main") fail(`release from main (you're on ${branch}): git switch
 // Uncommitted notes in CHANGELOG.md are fine: they go into the release commit.
 const dirty = git("status", "--porcelain", "--untracked-files=no")
   .split("\n")
-  .filter((l) => l && !/^.. CHANGELOG\.md$/.test(l))
+  .filter((l) => l && !/^\S*\s+CHANGELOG\.md$/.test(l)) // git() trims the first line's leading space
   .join("\n");
 if (dirty) fail(`commit or stash your changes first:\n${dirty}`);
 
