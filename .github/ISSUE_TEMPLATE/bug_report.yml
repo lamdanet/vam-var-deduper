@@ -1,0 +1,89 @@
+name: Bug report
+description: Something in the app doesn't work as it should
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please check the [existing issues](https://github.com/lamdanet/vam-var-deduper/issues) first, in case it's already known.
+        For security problems, don't use this form. See [SECURITY.md](https://github.com/lamdanet/vam-var-deduper/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown under Settings → About (e.g. v0.1.0).
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: page
+    attributes:
+      label: Where in the app?
+      options:
+        - Clean VARs
+        - Database
+        - VAR Packages
+        - Hub
+        - Sources
+        - VAR Details
+        - Resource List
+        - Missing Resources
+        - Internalize Resources
+        - Reclaim Space
+        - Unique Resources
+        - Settings
+        - Find Dependencies / Downloads
+        - Startup / the whole app
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact steps, so the problem can be seen on another machine.
+      placeholder: |
+        1. Open VAR Packages
+        2. Select a package and click Offload
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console log
+      description: Open **Console** (top right in the app) and paste what it shows around the problem. Remove anything private first.
+      render: text
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+
+  - type: input
+    id: library-size
+    attributes:
+      label: Library size (roughly)
+      description: How many .var packages, and roughly how many GB. Helpful for slowness or crashes.
+      placeholder: ~12,000 packages, 400 GB
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, a package that triggers it, workarounds you found...

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help
+    url: https://github.com/lamdanet/vam-var-deduper/discussions
+    about: Ask how to do something, or share tips. Issues are for bugs and feature requests.
+  - name: Security problem
+    url: https://github.com/lamdanet/vam-var-deduper/security/advisories/new
+    about: Report it privately, not as a public issue.
