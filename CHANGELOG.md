@@ -55,13 +55,16 @@ release time, it fills it with the commit messages since the last release.
   like Explorer's, or as a map sized by bytes, and you can show only its
   clothing, hair, morphs, textures and so on. Long dependency lists switch
   to a list you can filter and search. It also compares its files with your
-  database: which files other packages have too, how much their copies
-  take, and a shortcut to clean against it. **Open details** everywhere in
-  the app now opens it (VAR Details still opens for packages that are only
-  in the database or whose file is gone); you can also drop a `.var` on
+  database or your folders: which files other packages have too, how much
+  their copies take, and a shortcut to clean against it. A clothing or hair
+  item opens a sheet of its textures. Packages whose file is gone, or that
+  only the database knows, open too, with a Download button. **Open
+  details** everywhere in the app opens it; you can also drop a `.var` on
   the page
 
 ### Changed
+- Package Explorer replaces the VAR Details page, which is gone: everything
+  it did is in Package Explorer
 - Downloads resume where they stopped instead of starting over, retry by
   themselves after network trouble, and can be paused and resumed. The queue
   survives a restart, waiting for Resume. What you asked for downloads before
@@ -79,8 +82,8 @@ release time, it fills it with the commit messages since the last release.
 ### Fixed
 - Offloaded dependencies in the details sidebar can be moved back into
   AddonPackages, one at a time or all at once
-- Saved sources marked In library open your copy in VAR Details, from a button
-  or the right-click menu
+- Saved sources marked In library open your copy's details, from a button or
+  the right-click menu
 
 ## [0.1.1] - 2026-10-08
 
