@@ -44,15 +44,17 @@ release time, it fills it with the commit messages since the last release.
   your library, checked first and skipped when already there. Settings can
   make it move them instead of copying
 - The first-run dialog finds a VaM folder next to the app by itself
-- **Fix Missing**: a new page for a package's missing resources. It checks
-  every reference in the package's scenes, looks and presets, groups the
-  broken ones by the package they point at (not installed, or installed
-  without that file), and suggests a replacement for each; Auto-pick takes
-  every exact copy in one go. A missing package can be found and
-  downloaded from its card. Fix a copy or the original (with a backup).
-  Package Explorer has a Check refs button, shows what the last check
-  found, and opens the page with Fix references. Missing Resources is still
-  there
+- **Fix Missing**: Missing Resources' layout, made easier to work through. The
+  settings fold to one line after a check, so the results are in view. The
+  package card shows the package and what was found. The list is grouped by
+  the package each reference points at, says in words what's wrong (not
+  installed, or a file missing) and what's chosen, and has To choose / Chosen
+  filters. The best replacement is one click (Use it), and Auto-pick takes
+  every exact copy. Replacement Sources stays beside the list as it scrolls,
+  and Run Fixes says how many it will apply. A missing package can be found
+  and downloaded from the list. Package Explorer has a Check refs button and
+  shows what the last check found, with Fix references. Missing Resources is
+  still there
 - **Package Explorer**: a new page that shows one package in pictures. It
   says in plain words what's wrong with the package, if anything (missing or
   offloaded dependencies, not on the Hub, damaged…), and its main button
