@@ -1,3 +1,7 @@
 # Excluded from `git archive` output (the "Download ZIP" equivalent).
 # These are tracked in the repo but not useful to someone reading the code.
 src-tauri/gen/   export-ignore
+
+# Written by tauri-build with LF line endings. Checking them out as CRLF
+# would make every build rewrite them and show them as modified.
+src-tauri/gen/schemas/*.json   text eol=lf
