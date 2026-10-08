@@ -6347,6 +6347,17 @@ pub(crate) fn start_apply_missing_resources_fix_task(
                     .ok_or_else(|| "invalid target file name".to_string())?;
                 Some(Path::new(dir).join("changed").join(file_name))
             };
+            // Checking the fixed copy and fixing it again would write it over
+            // itself while reading it.
+            if let Some(out) = &output_path_owned {
+                if out.exists()
+                    && fs::canonicalize(out).ok() == fs::canonicalize(target_path).ok()
+                {
+                    return Err(
+                        "This is the fixed copy itself: fix it in place instead.".to_string()
+                    );
+                }
+            }
 
             // Backup only makes sense when we're overwriting the original;
             // with an output-folder workflow the original IS the backup.

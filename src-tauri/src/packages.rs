@@ -1599,6 +1599,32 @@ pub(crate) fn move_var_to_creator_folder(
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// Fix Missing's last step: puts the fixed copy it wrote in place of the
+/// original package, backing the original up first when `backup` is set.
+/// Returns where the backup went.
+#[tauri::command]
+pub(crate) fn replace_var_with_fixed_copy(
+    original_path: String,
+    fixed_path: String,
+    backup: bool,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let original = PathBuf::from(&original_path);
+    let fixed = PathBuf::from(&fixed_path);
+    let backup_root = if backup {
+        Some(
+            crate::fix_var::fixed_copy_backup_root(&original, &fixed)
+                .ok_or_else(|| "no folder for the backup".to_string())?,
+        )
+    } else {
+        None
+    };
+    let saved = crate::fix_var::replace_with_fixed_copy(&original, &fixed, backup_root.as_deref())
+        .map_err(|err| err.to_string())?;
+    invalidate_var_packages_cache(&state);
+    Ok(saved.map(|p| p.to_string_lossy().to_string()))
+}
+
 fn resolve_roots(input_dir: &str, additional: Option<Vec<String>>) -> Result<Vec<PathBuf>, String> {
     let dir = Path::new(input_dir);
     if !dir.is_dir() {
