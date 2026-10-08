@@ -1506,8 +1506,7 @@ pub(crate) fn find_crc_matches_bulk<F: FnMut(usize, usize)>(
     // Prepare once at the full chunk size and reuse it for every full chunk;
     // only the (possibly short) tail needs a second prepare. Saves ceil(N/500)
     // format!+prepare calls down to at most 2 across the whole batch.
-    let full_chunks = crcs.chunks_exact(CRC_LOOKUP_CHUNK);
-    let tail = full_chunks.remainder();
+    let (full_chunks, tail) = crcs.as_chunks::<CRC_LOOKUP_CHUNK>();
     let mut full_stmt = if crcs.len() >= CRC_LOOKUP_CHUNK {
         let placeholders = vec!["?"; CRC_LOOKUP_CHUNK].join(",");
         let sql = format!("{}{})", CRC_MATCH_QUERY_PREFIX, placeholders);
@@ -1551,7 +1550,7 @@ pub(crate) fn find_crc_matches_bulk<F: FnMut(usize, usize)>(
     };
 
     if let Some(stmt) = full_stmt.as_mut() {
-        for chunk in crcs.chunks_exact(CRC_LOOKUP_CHUNK) {
+        for chunk in full_chunks {
             run_chunk(stmt, chunk, &mut out)?;
             processed += chunk.len();
             on_chunk(processed, total);
