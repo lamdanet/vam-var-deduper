@@ -7,6 +7,7 @@ mod execute;
 mod extract;
 mod fix_var;
 mod hub;
+mod hub_index;
 mod import;
 mod internalize;
 mod library;
@@ -26,6 +27,7 @@ use tauri::Manager;
 
 use crate::{
     extract::{extract_probe, extract_run},
+    hub_index::{hub_exact_download, hub_index_lookup, hub_index_refresh, hub_index_status},
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
@@ -74,11 +76,18 @@ fn main() {
             let db = db::open(app.handle())?;
             app.manage(AppState::new());
             app.manage(db);
+            if let Ok(dir) = app.path().app_config_dir() {
+                hub_index::init(dir);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             extract_probe,
             extract_run,
+            hub_index_refresh,
+            hub_index_status,
+            hub_index_lookup,
+            hub_exact_download,
             load_config,
             path_exists,
             pick_folder,

@@ -819,12 +819,14 @@ pub(crate) fn status_matches(
         "standalone" => item.used_by_count == 0,
         "broken" => item.missing_dep_count > 0,
         "outdated" => item.newer_version,
+        "updates" => item.hub_update_version.is_some(),
+        "local" => item.on_hub == Some(false),
         _ => true,
     }
 }
 
 const STATUS_KEYS: &[&str] = &[
-    "favorites", "dependency", "standalone", "broken", "outdated", "indexed", "unindexed",
+    "favorites", "dependency", "standalone", "broken", "outdated", "updates", "local", "indexed", "unindexed",
 ];
 
 pub(crate) fn type_matches(item: &VarPackageListItem, filters: &VarPackageFilters) -> bool {

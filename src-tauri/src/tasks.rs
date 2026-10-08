@@ -1620,6 +1620,7 @@ pub(crate) fn list_var_packages(
                 cache_key: cache_key.clone(),
                 items: scanned,
                 missing_unique,
+                hub_stamp: 0,
             });
         } else {
             // An apply mutated the library mid-walk. Drop the cache so the next
@@ -1638,10 +1639,22 @@ pub(crate) fn list_var_packages(
         db::get_favorite_package_ids(&conn).map_err(|err| err.to_string())?
     };
 
-    let cache = state
+    let mut cache = state
         .var_packages_folder_cache
         .lock()
         .map_err(|_| "var packages folder cache poisoned".to_string())?;
+    // Hub fields (updates, Not on Hub) follow the Hub package index, which
+    // loads and refreshes on its own schedule.
+    let hub_generation = crate::hub_index::generation();
+    if let Some((fresh, _)) = fresh_items.as_mut() {
+        crate::hub_index::annotate(fresh);
+    }
+    if let Some(c) = cache.as_mut() {
+        if c.hub_stamp != hub_generation {
+            crate::hub_index::annotate(&mut c.items);
+            c.hub_stamp = hub_generation;
+        }
+    }
     let (items, missing_unique): (&[VarPackageListItem], u64) = match (fresh_items.as_ref(), cache.as_ref()) {
         (Some((fresh, missing)), _) => (fresh.as_slice(), *missing),
         (None, Some(c)) if c.cache_key == cache_key => (&c.items, c.missing_unique),

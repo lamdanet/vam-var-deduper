@@ -957,6 +957,8 @@ pub(crate) struct VarPackagesFolderCache {
     pub(crate) items: Vec<VarPackageListItem>,
     /// Distinct dependency keys that don't resolve exactly in `items`.
     pub(crate) missing_unique: u64,
+    /// `hub_index::generation()` the items' Hub fields were filled for.
+    pub(crate) hub_stamp: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1037,6 +1039,14 @@ pub(crate) struct VarPackageListItem {
     pub(crate) license: Option<String>,
     /// The archive and its meta.json could be read.
     pub(crate) readable: bool,
+    /// From the Hub package index (`hub_index`): whether this exact file is on
+    /// the Hub (`None` while no index is loaded) ...
+    pub(crate) on_hub: Option<bool>,
+    /// ... its Hub resource (this file's, else its family's) ...
+    pub(crate) hub_resource_id: Option<String>,
+    /// ... and, on the newest local version of a family, a newer Hub version.
+    pub(crate) hub_update_version: Option<u64>,
+    pub(crate) hub_update_file: Option<String>,
     /// Top-level dependency keys, kept server-side for the dependency graph
     /// and the details panel; never sent with a page.
     #[serde(skip)]
