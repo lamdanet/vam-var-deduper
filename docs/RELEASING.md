@@ -14,22 +14,22 @@ Always release from `main`.
 
 ## 1. Bump the version
 
-The version lives in three files and they must match. If they don't, the
-workflow stops before building:
+The version lives in one place: `version = "X.Y.Z"` under `[package]` in
+`src-tauri/Cargo.toml`. Tauri reads it from there, so `tauri.conf.json` and
+`package.json` deliberately have no version field.
 
-| File | Field |
-| --- | --- |
-| `src-tauri/Cargo.toml` | `version = "X.Y.Z"` under `[package]` |
-| `src-tauri/tauri.conf.json` | `"version": "X.Y.Z"` |
-| `package.json` | `"version": "X.Y.Z"` |
-
-Then update the lockfile, commit and push:
+Edit that line, build once so `Cargo.lock` picks up the new version, then
+commit and push:
 
 ```sh
-cargo update -p vam_var_deduper_tauri --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
 git commit -am "Release vX.Y.Z"
 git push origin main
 ```
+
+The release workflow builds with `--locked`. If you skip the build,
+`Cargo.lock` still has the old version and the release fails at the build
+step. Build, commit and push again to fix it.
 
 ## 2. Start the release (pick one)
 

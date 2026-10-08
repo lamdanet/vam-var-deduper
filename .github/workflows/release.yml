@@ -4,8 +4,9 @@
 #   - push a tag like v0.2.0
 #   - Actions tab -> Release -> Run workflow (on main); it tags the commit itself
 #
-# The version must match src-tauri/Cargo.toml and src-tauri/tauri.conf.json, so
-# a release can't go out labelled with a version the app doesn't report.
+# The version must match src-tauri/Cargo.toml (the app's only version; Tauri
+# reads it from there), so a release can't go out labelled with a version the
+# app doesn't report.
 
 name: Release
 
@@ -46,7 +47,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
-          conf_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
 
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             version="${GITHUB_REF_NAME#v}"
@@ -63,8 +63,8 @@ jobs:
             fi
           fi
 
-          if [ "$version" != "$cargo_version" ] || [ "$version" != "$conf_version" ]; then
-            echo "::error::Release version $version doesn't match the app: Cargo.toml has $cargo_version, tauri.conf.json has $conf_version. Bump both first (docs/RELEASING.md)."
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::Release version $version doesn't match src-tauri/Cargo.toml ($cargo_version). Bump it first (docs/RELEASING.md)."
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
