@@ -44,41 +44,32 @@ release time, it fills it with the commit messages since the last release.
   your library, checked first and skipped when already there. Settings can
   make it move them instead of copying
 - The first-run dialog finds a VaM folder next to the app by itself
-- **Fix Missing**: Missing Resources' layout, made easier to work through.
-  After a check, a summary says what's easy and what needs a look: for
-  example, 32 of 33 missing files are already inside the package (no
-  download, no new dependency), with one button to choose every exact copy.
-  The settings fold into one line with the package, so the results are in
-  view. Every missing file in the list says where its best replacement comes
-  from and whether it adds a dependency, with Use on hover and on the
-  selected row; Enter uses it and moves to the next one. Red is kept for
-  files nothing can bring back. Packages with several missing files get a
-  header with how many are ready, and the list filters by To do, Ready, Not
-  installed or File missing. Replacement Sources stays beside the list with
-  Run Fixes at its top, the one place for it; in a narrow window it's a
-  sheet at the bottom that opens when you pick a row. It puts the best
-  replacement first, lists one line per package (its other copies behind
-  "N more copies"), says how many missing files each package covers (Use
-  for all N), and only offers Apply to the same package / shown / all where
-  that does something. The missing package's details (Find it / Download,
-  Explore, the file and what uses it) open on request. The database is
-  searched when your folders have no copy, or always if you tick that,
-  showing the five packages that cover the most first and offering to
-  download ones you don't have. Each missing file says what kind it is
-  (Morph, Script, Texture…), and the list works from the keyboard and with
-  screen readers. Writing a fixed copy no longer asks first; only fixing the
-  original does. The empty page lists the packages you checked lately and
-  the ones with missing dependencies, to start from. When nothing in your folders has a file, the
-  page looks up its package's download by itself and leads with it:
-  download the package and the file works as it is, with nothing to
-  rewrite. The page checks again when the download finishes, keeping what
-  you chose, and says so if the file is still missing. A file nothing can
-  replace can be skipped. The summary learns as the lookups finish, and
-  counts what's ready: chosen, coming back by download, or skipped. The
-  fixed copy's folder shows by name. After a fix the page leads you to check
-  the fixed copy, then to put it in place of the original, keeping a backup.
-  Package Explorer has a Check refs button and shows what the last check
-  found, with Fix references. Missing Resources is still there
+- **Fix Missing**: Missing Resources, made easier to work through. The
+  package you check shows with its picture, coloured tags and what the check
+  found. A summary says what's easy and what needs a look (for example, 32
+  of 33 missing files are already inside the package: no download, no new
+  dependency) with one button to choose every exact copy. Each missing file
+  says what kind it is (Morph, Script, Texture…) and where its suggested
+  replacement comes from, with Use; Enter uses it and moves on. The
+  suggestion says why it's the one, preferring a copy inside the package,
+  then the package that has the most of your missing files. Replacement
+  Sources stays beside the list: what you chose sits at its top with Clear
+  and Use it for other missing files, and the candidates are tabs (In your
+  folders, In the database), a click anywhere on a card picks it, and a
+  chosen card lists its other copies. Run Fixes is at the top of the panel
+  (a sheet at the bottom of a narrow window). You fix as many or as few as
+  you like: files you leave alone stay as they are. When nothing in your
+  folders has a file, the page looks up its package's download by itself:
+  download it and the file works as it is, and the page checks again when
+  the download finishes, keeping your choices. The database lists the
+  packages that have the most of your missing files first and offers to
+  download ones you don't have. Writing a fixed copy doesn't ask first; then
+  the page leads you to check the copy and put it in place of the original,
+  keeping a backup. The empty page lists packages you checked lately and the
+  ones with missing dependencies. The list works from the keyboard and with
+  screen readers. Package Explorer has a Check refs button and shows what
+  the last check found, with Fix references. Missing Resources is still
+  there
 - **Package Explorer**: a new page that shows one package in pictures. It
   says in plain words what's wrong with the package, if anything (missing or
   offloaded dependencies, not on the Hub, damaged…), and its main button
