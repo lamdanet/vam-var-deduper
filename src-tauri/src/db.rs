@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 18;
+pub(crate) const SCHEMA_VERSION: i32 = 19;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -673,6 +673,20 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         .context("failed to create var_integrity")?;
     }
 
+    if current < 19 {
+        // Installed vs dependency per package family (roles.rs): 1 = the user
+        // chose it, 0 = pulled in for another package. user_set marks an
+        // explicit choice.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS package_roles (
+                family TEXT PRIMARY KEY,
+                installed INTEGER NOT NULL,
+                user_set INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .context("failed to create package_roles")?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
@@ -740,6 +754,50 @@ pub(crate) fn update_download_link_size(db: &Db, filename: &str, size: u64) -> R
          WHERE filename = ?2 AND (size IS NULL OR size = 0)",
         params![size as i64, filename],
     )?;
+    Ok(())
+}
+
+/// Installed (true) / dependency (false) by package family.
+pub(crate) fn roles_all(db: &Db) -> Result<HashMap<String, bool>> {
+    let handle = db.read()?;
+    let mut stmt = handle.prepare("SELECT family, installed FROM package_roles")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0)))?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let (family, installed) = r?;
+        out.insert(family, installed);
+    }
+    Ok(out)
+}
+
+/// First-sight roles; never overwrites one already stored.
+pub(crate) fn roles_insert_new(db: &Db, rows: &[(String, bool)]) -> Result<()> {
+    let mut conn = db.conn.lock().map_err(|_| anyhow!("database connection poisoned"))?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare("INSERT OR IGNORE INTO package_roles (family, installed) VALUES (?1, ?2)")?;
+        for (family, installed) in rows {
+            stmt.execute(params![family, i64::from(*installed)])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// An explicit role (the user's, or a download's intent).
+pub(crate) fn roles_set(db: &Db, families: &[String], installed: bool) -> Result<()> {
+    let mut conn = db.conn.lock().map_err(|_| anyhow!("database connection poisoned"))?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO package_roles (family, installed, user_set) VALUES (?1, ?2, 1)
+             ON CONFLICT(family) DO UPDATE SET installed = excluded.installed, user_set = 1",
+        )?;
+        for family in families {
+            stmt.execute(params![family, i64::from(installed)])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 

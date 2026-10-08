@@ -1051,6 +1051,11 @@ pub(crate) struct VarPackageListItem {
     /// ... and, on the newest local version of a family, a newer Hub version.
     pub(crate) hub_update_version: Option<u64>,
     pub(crate) hub_update_file: Option<String>,
+    /// The user chose it (or its family), rather than it being pulled in as a
+    /// dependency (`roles`).
+    pub(crate) installed: bool,
+    /// A dependency nothing uses any more (or only other orphans do).
+    pub(crate) orphan: bool,
     /// A full integrity check (`integrity`) found it damaged: the first
     /// failing entry. `None` when unchecked, fine, or changed since.
     pub(crate) damaged: Option<String>,

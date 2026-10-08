@@ -18,6 +18,7 @@ mod models;
 mod naming;
 mod offload;
 mod packages;
+mod roles;
 mod scan;
 mod sources;
 mod tasks;
@@ -32,6 +33,7 @@ use crate::{
     hub_index::{hub_exact_download, hub_index_lookup, hub_index_refresh, hub_index_status},
     integrity::start_verify_packages_task,
     disable::{plan_disable, set_packages_disabled},
+    roles::{plan_remove_packages, set_package_roles},
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
@@ -95,6 +97,8 @@ fn main() {
             start_verify_packages_task,
             plan_disable,
             set_packages_disabled,
+            plan_remove_packages,
+            set_package_roles,
             load_config,
             path_exists,
             pick_folder,

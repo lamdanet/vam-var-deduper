@@ -58,7 +58,7 @@ fn active(item: &VarPackageListItem) -> bool {
 }
 
 /// Resolved forward edges (any version that's present) and their reverse.
-fn graph(items: &[VarPackageListItem]) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+pub(crate) fn graph(items: &[VarPackageListItem]) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
     let index = LibIndex::build(items);
     let mut forward = vec![Vec::new(); items.len()];
     let mut users = vec![Vec::new(); items.len()];

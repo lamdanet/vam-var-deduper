@@ -823,13 +823,15 @@ pub(crate) fn status_matches(
         "local" => item.on_hub == Some(false),
         "damaged" => item.damaged.is_some() || !item.readable,
         "disabled" => item.disabled,
+        "installed" => item.installed,
+        "orphan" => item.orphan,
         _ => true,
     }
 }
 
 const STATUS_KEYS: &[&str] = &[
-    "favorites", "dependency", "standalone", "broken", "outdated", "updates", "local", "damaged", "disabled",
-    "indexed", "unindexed",
+    "favorites", "installed", "dependency", "standalone", "orphan", "broken", "outdated", "updates", "local",
+    "damaged", "disabled", "indexed", "unindexed",
 ];
 
 pub(crate) fn type_matches(item: &VarPackageListItem, filters: &VarPackageFilters) -> bool {

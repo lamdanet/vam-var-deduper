@@ -1610,6 +1610,7 @@ pub(crate) fn list_var_packages(
             });
         }
         let missing_unique = crate::library::apply_graph(&mut scanned);
+        crate::roles::apply(&mut scanned, &db);
 
         let mut cache = state
             .var_packages_folder_cache
