@@ -10,6 +10,15 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Added
+- **Extract presets**: save the people in a package's scenes, legacy looks
+  and appearance presets as VaM presets: their whole appearance, clothing,
+  hair or morphs. They land in `Custom/Atom/Person/<kind>/extracted`, with the
+  scene's picture, ready in VaM's preset browsers. Open it from a package's
+  right-click menu, the Extract presets link in its details, the button on a
+  scene row, or for several selected packages at once. The presets use the
+  package's own files, so keep it installed
+
 ### Changed
 - **Scan Dependencies** replaces Download Dependencies, Find Dependencies
   Locally and Remove dependencies. It checks AddonPackages, the offload folder
