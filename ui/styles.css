@@ -17290,7 +17290,8 @@ button.pkg-stat:focus-visible::after {
 /* .panel.card clips its content: this panel scrolls instead (as specific). */
 .panel.card.fm-detail-card {
   position: sticky;
-  top: 12px;
+  /* Below the app header, which sticks too. */
+  top: calc(var(--header-h, 56px) + 12px);
   max-height: calc(100vh - var(--header-h, 70px) - 24px);
   overflow-x: hidden;
   overflow-y: auto;
