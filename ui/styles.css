@@ -15629,7 +15629,6 @@ button.lib-dep-ref:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: auto;
   font-family: var(--lib-mono);
   font-size: 11px;
   color: var(--lib-text-3);
@@ -17543,8 +17542,8 @@ button.pkg-bar-row:not(:disabled):hover {
   padding: 8px 10px;
   border: 1px solid var(--lib-border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--lib-elevated) 92%, transparent);
-  backdrop-filter: blur(8px);
+  background: var(--lib-elevated);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
   color: var(--lib-text-2);
   font-size: 12px;
 }
@@ -17555,4 +17554,132 @@ button.pkg-bar-row:not(:disabled):hover {
 
 .pkg-graph-bar .pkg-mini-btn:first-of-type {
   margin-left: auto;
+}
+
+/* ---- Package Explorer: third review ---- */
+
+/* 1. Chips in sentence case here, as the rest of the page ("VaM", not "VAM"). */
+.pkg-view .lib-chip {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* 2. Toolbar groups; labels when the hero has room. */
+.pkg-hero-text {
+  container-type: inline-size;
+  container-name: pkghero;
+}
+
+.pkg-actions {
+  flex-wrap: wrap;
+}
+
+.pkg-icon-label {
+  display: none;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@container pkghero (min-width: 760px) {
+  .pkg-icon-act {
+    width: auto;
+    gap: 6px;
+    padding: 0 10px;
+    grid-auto-flow: column;
+  }
+
+  .pkg-icon-act .material-symbols-outlined {
+    font-size: 18px;
+  }
+
+  .pkg-icon-label {
+    display: inline;
+  }
+}
+
+/* 4. Content card: a picture tile per category, filling the card. */
+.pkg-content-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.pkg-cat-tiles {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-auto-rows: minmax(96px, 1fr);
+  gap: 8px;
+}
+
+.pkg-cat-tile {
+  position: relative;
+  min-height: 96px;
+  padding: 0;
+  border: 1px solid var(--lib-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--lib-elevated);
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pkg-cat-tile:hover {
+  border-color: var(--c);
+}
+
+.pkg-cat-thumb {
+  position: absolute;
+  inset: 0;
+  background: var(--lib-thumb-bg);
+}
+
+.pkg-cat-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.25s;
+}
+
+.pkg-cat-tile:hover .pkg-cat-thumb img {
+  transform: scale(1.05);
+}
+
+.pkg-cat-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(transparent 35%, rgba(0, 0, 0, 0.75));
+}
+
+.pkg-cat-label {
+  position: absolute;
+  left: 10px;
+  bottom: 9px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.pkg-cat-label .material-symbols-outlined {
+  color: var(--c);
+  font-size: 16px;
+}
+
+.pkg-cat-count {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 1;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 12px;
+  font-weight: 700;
 }

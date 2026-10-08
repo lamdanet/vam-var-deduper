@@ -6160,9 +6160,19 @@ function pkgRenderAll() {
   pkgRenderShared();
 }
 
+const PKG_COUNT_UNITS = {
+  content: ["item", "items"],
+  deps: ["dependency", "dependencies"],
+  files: ["file", "files"],
+  shared: ["package shares files", "packages share files"],
+};
+
 function pkgSetCount(key, n) {
   const el = $(`pkg-count-${key}`);
-  if (el) el.textContent = n ? Number(n).toLocaleString() : "";
+  if (!el) return;
+  el.textContent = n ? Number(n).toLocaleString() : "";
+  const [one, many] = PKG_COUNT_UNITS[key] ?? ["", ""];
+  el.closest("[data-pkg-goto]")?.setAttribute("title", n ? pkgCount(Number(n), one, many) : "");
 }
 
 function pkgScrollSpy() {
@@ -6375,9 +6385,9 @@ function pkgHealthHtml(item, details, primaryAct) {
     .join("")}</div>`;
 }
 
-function pkgIconAct(act, icon, title, { on = false } = {}) {
+function pkgIconAct(act, icon, title, { on = false, label = "" } = {}) {
   return `<button type="button" class="pkg-icon-act${on ? " is-on" : ""}" data-pkg-act="${act}" title="${escapeAttribute(title)}" aria-label="${escapeAttribute(title)}">
-      <span class="material-symbols-outlined">${icon}</span></button>`;
+      <span class="material-symbols-outlined">${icon}</span>${label ? `<span class="pkg-icon-label">${escapeHtml(label)}</span>` : ""}</button>`;
 }
 
 // One main button for whatever needs doing most; the rest as icons; Delete
@@ -6390,33 +6400,38 @@ function pkgActionsHtml(item, details, primaryAct) {
     ? `<button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-pkg-act="${primaryAct}" title="${escapeAttribute(fix[2])}">
          <span class="material-symbols-outlined">${fix[0]}</span><span>${escapeHtml(fix[1])}</span></button>`
     : "";
-  const icons = [
-    pkgIconAct("favorite", "star", fav ? "Remove from favorites" : "Add to favorites", { on: fav }),
-    pkgIconAct("explorer", "folder_open", "Show the file in Explorer"),
-    pkgIconAct("scan-deps", "account_tree", "Scan dependencies: see where each one is; download, move, offload or delete them"),
-    ...(extractable ? [pkgIconAct("extract", "person_add", "Extract presets: save clothing, hair, morphs or looks of its people")] : []),
-    pkgIconAct("verify", "verified", "Check every file inside against its checksum"),
-  ];
+  // Two groups: what to do with the package in your library, and tools that
+  // look inside it. Labels show when the hero is wide enough.
+  const library = [pkgIconAct("favorite", "star", fav ? "Remove from favorites" : "Add to favorites", { on: fav, label: "Favorite" })];
+  library.push(pkgIconAct("explorer", "folder_open", "Show the file in Explorer", { label: "Show file" }));
   if (item.__lib) {
     if (!item.offloaded && primaryAct !== "enable") {
-      icons.push(
+      library.push(
         pkgIconAct(item.disabled ? "enable" : "disable", "power_settings_new", item.disabled ? "Enable: let VaM load it again" : "Disable: VaM stops loading it; nothing is moved", {
           on: item.disabled,
+          label: item.disabled ? "Enable" : "Disable",
         }),
       );
     }
     if (primaryAct !== "restore") {
-      icons.push(
+      library.push(
         pkgIconAct(
           item.offloaded ? "restore" : "offload",
           item.offloaded ? "unarchive" : "archive",
           item.offloaded ? "Restore: move it back into AddonPackages" : "Offload: move it out of AddonPackages so VaM stops loading it",
+          { label: item.offloaded ? "Restore" : "Offload" },
         ),
       );
     }
   }
-  if (item.hub_resource_id) icons.push(pkgIconAct("view-hub", "explore", "View on the Hub"));
-  return `${primary}<div class="pkg-tools">${icons.join("")}</div>
+  if (item.hub_resource_id) library.push(pkgIconAct("view-hub", "explore", "View on the Hub", { label: "Hub" }));
+  const tools = [
+    pkgIconAct("scan-deps", "account_tree", "Scan dependencies: see where each one is; download, move, offload or delete them", { label: "Scan deps" }),
+    ...(extractable ? [pkgIconAct("extract", "person_add", "Extract presets: save clothing, hair, morphs or looks of its people", { label: "Extract" })] : []),
+    pkgIconAct("verify", "verified", "Check every file inside against its checksum", { label: "Check" }),
+  ];
+  return `${primary}<div class="pkg-tools" role="group" aria-label="Library">${library.join("")}</div>
+    <div class="pkg-tools" role="group" aria-label="Tools">${tools.join("")}</div>
     <button type="button" class="pkg-act pkg-act-more" data-pkg-act="more" title="More: VAR Details, images, send to, delete…">
       <span class="material-symbols-outlined">more_horiz</span><span>More</span></button>`;
 }
@@ -6682,26 +6697,28 @@ function pkgRenderComposition() {
   } else {
     const content = d?.content ?? [];
     const cats = LIB_CATEGORIES.map((cat) => ({ ...cat, n: content.filter((c) => c.category === cat.key).length })).filter((c) => c.n);
-    const max = Math.max(1, ...cats.map((c) => c.n));
     // Morphs count in the hundreds next to a handful of scenes: they get their
-    // own line, not a bar on the same scale.
+    // own line, not a tile on the same footing.
     const morphs = Number(d?.morph_count || 0);
-    const rows = cats.map((c) => ({ key: c.key, label: c.label, n: c.n, icon: PKG_CAT_ICONS[c.key], color: `hsl(${LIB_TYPE_HUE[c.key] ?? 200} 70% 60%)` }));
-    const top = max;
-    contentCard = `<div class="pkg-card">
+    // A picture tile per category (its first item with a picture) fills the
+    // card instead of two thin bars and empty space.
+    const tiles = cats
+      .map((c) => {
+        const first = content.find((x) => x.category === c.key && x.thumb);
+        const hue = LIB_TYPE_HUE[c.key] ?? 200;
+        const bg = libContentGradient(c.label, c.key);
+        return `<button type="button" class="pkg-cat-tile" data-pkg-cat="${c.key}" style="--c:hsl(${hue} 70% 60%)" title="Show the ${escapeAttribute(c.label.toLowerCase())}">
+            ${first ? `${libThumbHtml(PKG.item.file_path, bg, "pkg-cat-thumb", first.thumb)}</div>` : `<div class="pkg-cat-thumb" style="--lib-thumb-bg:${escapeAttribute(bg)}"></div>`}
+            <span class="pkg-cat-label"><span class="material-symbols-outlined">${PKG_CAT_ICONS[c.key]}</span>${escapeHtml(c.label)}</span>
+            <span class="pkg-cat-count">${c.n.toLocaleString()}</span>
+          </button>`;
+      })
+      .join("");
+    contentCard = `<div class="pkg-card pkg-content-card">
         <h3>Content <small>${Number(d?.item_count || 0).toLocaleString()} items</small></h3>
         ${
-          rows.length
-            ? `<div class="pkg-bars">${rows
-                .map(
-                  (r) => `<button type="button" class="pkg-bar-row" ${r.key ? `data-pkg-cat="${r.key}"` : "disabled"} title="${r.key ? `Show the ${escapeAttribute(r.label.toLowerCase())}` : ""}">
-                    <span class="pkg-bar-icon" style="color:${r.color}"><span class="material-symbols-outlined">${r.icon}</span></span>
-                    <span class="pkg-bar-label">${escapeHtml(r.label)}</span>
-                    <span class="pkg-bar-track"><span class="pkg-bar-fill" style="width:${Math.max(3, (r.n / top) * 100).toFixed(1)}%;background:${r.color}"></span></span>
-                    <span class="pkg-bar-val">${r.n.toLocaleString()}</span>
-                  </button>`,
-                )
-                .join("")}</div>${
+          cats.length
+            ? `<div class="pkg-cat-tiles">${tiles}</div>${
                 morphs ? `<p class="pkg-content-more"><span class="material-symbols-outlined">blur_on</span>Plus ${pkgCount(morphs, "morph", "morphs")}</p>` : ""
               }`
             : morphs
@@ -6713,6 +6730,7 @@ function pkgRenderComposition() {
       </div>`;
   }
   host.innerHTML = sizeCard + contentCard;
+  libThumbWatch(host);
 }
 
 // ---- Content gallery ------------------------------------------------------------------
@@ -7228,6 +7246,7 @@ function pkgRenderFiles() {
   host.classList.remove("hidden");
   if (view === "tree") {
     const focus = PKG.treeJustOpened;
+    if (!PKG.treeView) PKG.treeFitWidth = true;
     host.innerHTML = pkgTreeHtml();
     pkgTreeSetup(focus);
     if (PKG.treeFitWidth) {
@@ -8448,6 +8467,18 @@ function setupPackageExplorer() {
   const view = pkgView();
   if (!view) return;
   view.addEventListener("click", pkgOnClick);
+  // The mouse's back button and Alt+Left step back through explored packages,
+  // as in a browser.
+  window.addEventListener("mouseup", (e) => {
+    if (e.button !== 3 || !pkgVisible() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
+    e.preventDefault();
+    pkgBack();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (!e.altKey || e.key !== "ArrowLeft" || !pkgVisible() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
+    e.preventDefault();
+    pkgBack();
+  });
   view.addEventListener(
     "scroll",
     (e) => {
