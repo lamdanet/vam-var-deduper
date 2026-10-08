@@ -12,6 +12,48 @@ It needs the WebView2 runtime, which Windows 10 and 11 already include.
 
 Always release from `main`.
 
+## Quick release: one command
+
+From the repo root, on `main`, with your changes committed:
+
+```sh
+npm run release -- 0.2.0     # release an exact version
+npm run release -- patch     # 0.1.0 -> 0.1.1
+npm run release -- minor     # 0.1.0 -> 0.2.0
+npm run release -- major     # 0.1.0 -> 1.0.0
+npm run release -- 0.2.0-beta.1   # anything with "-" becomes a pre-release
+```
+
+It does steps 1 and 2B below for you
+([scripts/release.mjs](../scripts/release.mjs)):
+
+1. Checks that you're on `main`, have nothing uncommitted, aren't behind
+   GitHub, and that the new version is higher and not already tagged.
+2. Sets the version in `src-tauri/Cargo.toml`.
+3. Runs `cargo check`. This updates `Cargo.lock` and makes sure the app still
+   builds. If the check fails, the version change is undone.
+4. Commits `Release vX.Y.Z`, tags `vX.Y.Z`, and pushes `main` and the tag
+   together. Either both reach GitHub or neither does.
+5. The tag push starts the release workflow on GitHub.
+
+Options (put them after the version):
+
+| Option | What it does |
+| --- | --- |
+| `--dry-run` | Run every check and show the plan, but change nothing |
+| `--no-push` | Bump, commit and tag only on your PC. Push later with the command it prints |
+| `--remote <name or URL>` | Push somewhere other than `origin` |
+
+Your SSH key has a passphrase, so `git` asks for it when the command
+contacts GitHub (once to check, once to push).
+
+The `--` after `release` is how npm passes arguments on to the script.
+Without it, npm keeps options like `--dry-run` for itself. To make commands
+like this one, see [CUSTOM-COMMANDS.md](CUSTOM-COMMANDS.md).
+
+The sections below are the same steps done by hand, plus what to do when
+something goes wrong.
+
 ## 1. Bump the version
 
 The version lives in one place: `version = "X.Y.Z"` under `[package]` in
