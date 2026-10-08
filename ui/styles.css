@@ -9268,7 +9268,7 @@ tr.is-selected td {
 }
 
 /* ===========================================================================
-   VAR Details — Scan Dependencies modal.
+   Scan Dependencies modal.
    Clones the .vp-plan-* layout; reuses .dialog-*, .progress-*, .chip,
    .mode-button. Tokens only.
    =========================================================================== */
@@ -9344,7 +9344,7 @@ tr.is-selected td {
 
 .dep-scan-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
@@ -9431,130 +9431,41 @@ tr.is-selected td {
   align-self: flex-start;
 }
 
-/* ===========================================================================
-   VAR Packages — Collect Dependencies modal.
-   Rides on .dep-scan-card / .dep-scan-list / .dep-scan-row and the
-   .additional-dir-* folder rows; only what differs lives here. Tokens only.
-   =========================================================================== */
-
-.dep-collect-intro {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.dep-collect-small {
-  flex: 0 0 auto;
-  height: 30px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-/* A scroll container, so — like .dep-scan-root-list — it must not shrink to a
-   sliver when the window is short; the dependency list absorbs that instead. */
-.dep-collect-dirs {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex-shrink: 0;
-  max-height: 140px;
-  overflow-y: auto;
-}
-
-.dep-collect-dirs-empty {
-  padding: 8px 10px;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.dep-collect-options {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.dep-collect-dest {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 10px;
-  flex-shrink: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  font-size: 12px;
-}
-
-.dep-collect-dest:empty {
-  display: none;
-}
-
-.dep-collect-dest-label {
-  color: var(--text-muted);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.dep-collect-dest-path {
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-.dep-collect-dest-error,
-.dep-collect-dest-warn {
-  grid-column: 1 / -1;
-  color: var(--accent-warn);
-}
-
-.dep-collect-dest-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-#dep-collect-summary {
-  margin: 0;
-}
-
-#dep-collect-summary:empty {
-  display: none;
-}
-
-.dep-collect-notes {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--text-dim);
-  font-size: 11px;
-}
-
-.dep-collect-notes:empty {
-  display: none;
-}
-
-.dep-collect-path {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.dep-collect-note {
-  color: var(--accent-warn);
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-/* "Found" here means "found in YOUR folders, ready to copy" — the actionable
-   state, so it takes the primary color rather than the library-green. */
-.chip.dep-collect-found {
+/* Scan Dependencies: where a package is when VaM doesn't load it. */
+.chip.dep-scan-offloaded {
   color: var(--primary);
   border-color: color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
+.chip.dep-scan-elsewhere {
+  color: var(--accent-warn);
+  border-color: color-mix(in srgb, var(--accent-warn) 45%, transparent);
+}
+
+/* Select all + the actions for every ticked row, above the list. */
+.dep-scan-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.dep-scan-bulk.hidden {
+  display: none;
+}
+
+.dep-scan-check-all {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dep-scan-bulk-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
 /* Toast notifications — transient, auto-dismissing, bottom-right. */
 .toast-host {
@@ -12188,7 +12099,7 @@ button.lib-dep-ref:hover {
   color: var(--primary);
 }
 
-/* Package cards in Download Dependencies / Find Dependencies Locally rows:
+/* Package cards in Scan Dependencies rows:
    thumbnail, title + version, author · size, Hub chips, raw id. */
 .dep-card {
   display: flex;
@@ -12286,7 +12197,7 @@ button.lib-dep-ref:hover {
   user-select: text;
 }
 
-/* Download Dependencies: extra folders the scan checks. */
+/* Scan Dependencies: extra folders the scan checks. */
 .dep-scan-extra {
   display: flex;
   flex-direction: column;
@@ -14422,7 +14333,7 @@ button.lib-dep-ref:hover {
   flex: 1 1 auto;
 }
 
-/* Download Dependencies: "No source" with its Add link button beside it. */
+/* Scan Dependencies: "No source" with its Add link button beside it. */
 .dep-scan-act-note + .dep-scan-action {
   margin-left: 8px;
 }

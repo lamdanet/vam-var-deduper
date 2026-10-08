@@ -514,7 +514,7 @@
           </div>
           <div class="build-db-card-body">
             <p class="reclaim-help">
-              Import community Pixeldrain / MediaFire mirror lists so Find Dependencies / Download Dependencies
+              Import community Pixeldrain / MediaFire mirror lists so Find Dependencies / Scan Dependencies
               can find sources for packages that aren't on the VaM Hub. Point at a <code>_Download_Links</code> folder (one
               <code>.txt</code> per creator) or a single text file of
               <code>Creator.Package.N.var&nbsp;&nbsp;https://…</code> lines.
@@ -1308,7 +1308,7 @@
                 </button>
                 <button id="var-details-scan-deps-button" class="var-details-scan-button is-secondary" type="button">
                   <span class="material-symbols-outlined">account_tree</span>
-                  <span id="var-details-scan-deps-label">Download Dependencies</span>
+                  <span id="var-details-scan-deps-label">Scan Dependencies</span>
                 </button>
               </div>
             </div>
@@ -2387,7 +2387,7 @@
           <p class="settings-subtitle">
             Paste a forum post or a few links — Pixeldrain files and lists, MEGA files and folders, MediaFire,
             or links straight to a .var or .zip. Every .var they hold is listed, including the ones inside
-            (password-protected) zips, ready to save as download sources — which Download Dependencies,
+            (password-protected) zips, ready to save as download sources — which Scan Dependencies,
             VAR Details and the Hub then download from.
           </p>
         </header>
@@ -3102,22 +3102,17 @@
             placeholder="e.g.&#10;Creator.Package.1:/Custom/Atom/Person/Morphs/female/morph.vmi&#10;AnotherCreator.HairPack.latest"></textarea>
           <button id="dep-scan-analyze-text" class="primary-button dep-scan-analyze" type="button">Analyze</button>
         </div>
-        <div class="dep-scan-root-row">
-          <span class="dep-scan-root-label" id="dep-scan-root-label">Downloads folder</span>
-          <button class="dep-scan-root-settings" id="dep-scan-root-settings" type="button">Change in Settings</button>
-        </div>
-        <div class="dep-scan-root-list" id="dep-scan-root-list"></div>
-        <label class="check-row dep-scan-organize" for="dep-scan-organize">
-          <input type="checkbox" id="dep-scan-organize" />
-          <span>Organize downloads into creator subfolders</span>
-        </label>
-        <!-- Extra folders the scan checks besides AddonPackages. Same list as
-             Settings → Additional VAR folders (shared stateKey "downloadVars"). -->
+        <!-- Folders the scan checks besides AddonPackages and the offload folder
+             (both always, set in Settings). Same list as Settings → Additional
+             VAR folders (shared stateKey "downloadVars"). -->
         <div class="dep-scan-extra">
-          <span class="dep-scan-root-label">Also check these folders</span>
+          <div class="dep-scan-root-row">
+            <span class="dep-scan-root-label">Also scan these folders</span>
+            <button class="dep-scan-root-settings" id="dep-scan-root-settings" type="button">Settings</button>
+          </div>
           <div id="dep-scan-extra-dirs" class="additional-dirs-list"></div>
           <button id="dep-scan-add-folder" class="ghost-button" type="button"></button>
-          <p class="dep-scan-extra-hint">Dependencies are checked against AddonPackages and these folders. Adding or removing one re-runs the scan.</p>
+          <p class="dep-scan-extra-hint">AddonPackages and the offload folder are always scanned. Adding or removing a folder re-runs the scan.</p>
         </div>
         <p id="dep-scan-summary"></p>
         <div id="dep-scan-progress" class="progress-card dep-scan-progress hidden">
@@ -3127,62 +3122,28 @@
         <div id="dep-scan-filter" class="dep-scan-filter mode-switch" role="tablist" aria-label="Filter dependencies">
           <button data-dep-filter="all" class="mode-button active" type="button" role="tab" aria-selected="true">All</button>
           <button data-dep-filter="missing" class="mode-button" type="button" role="tab" aria-selected="false">Missing</button>
+          <button data-dep-filter="elsewhere" class="mode-button" type="button" role="tab" aria-selected="false"
+                  title="Offloaded, or only in another folder — VaM doesn't load them">Not in AddonPackages</button>
+        </div>
+        <div id="dep-scan-bulk" class="dep-scan-bulk hidden">
+          <label class="check-row dep-scan-check-all">
+            <input type="checkbox" id="dep-scan-check-all" />
+            <span id="dep-scan-check-label">Select all</span>
+          </label>
+          <span class="dep-scan-bulk-acts">
+            <button class="ghost-button dep-scan-action" type="button" data-dep-bulk="download">Download</button>
+            <button class="ghost-button dep-scan-action" type="button" data-dep-bulk="activate"
+                    title="Move the ticked packages from the offload folder or another folder into AddonPackages">Move to AddonPackages</button>
+            <button class="ghost-button dep-scan-action" type="button" data-dep-bulk="offload"
+                    title="Move the ticked packages out of AddonPackages into the offload folder">Offload</button>
+            <button class="ghost-button dep-scan-action dep-scan-act-danger" type="button" data-dep-bulk="delete"
+                    title="Send the ticked packages to the Recycle Bin">Delete</button>
+          </span>
         </div>
         <div id="dep-scan-list" class="dep-scan-list"></div>
         <div class="dialog-actions">
           <button id="dep-scan-download-all" class="primary-button" type="button">Download All Missing</button>
           <button id="dep-scan-close" class="ghost-button" type="button">Close</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- "Find Dependencies Locally" (internally: collect deps): finds a package's dependencies in
-         folders outside the library and copies them into <Creator>\deps\. Sits
-         AFTER #dep-scan-backdrop so it stacks above it (Download Dependencies opens
-         it over itself), and BEFORE #vp-delete-backdrop and #dialog-backdrop
-         like every modal here: all .dialog-backdrops share z-index 1400, so DOM
-         order decides stacking. (The Escape chain runs in the reverse order.) -->
-    <div id="dep-collect-backdrop" class="dialog-backdrop hidden">
-      <div class="dialog-card dep-scan-card" role="dialog" aria-modal="true" aria-labelledby="dep-collect-title">
-        <h3 id="dep-collect-title">Find Dependencies Locally</h3>
-        <p class="dep-collect-intro">
-          Finds this package's dependencies in folders outside your VaM library and copies them into
-          <strong>AddonPackages</strong> in your VaM directory &mdash; into <code>AddonPackages\&lt;Creator&gt;\deps</code>,
-          moving the package and its preview image into <code>AddonPackages\&lt;Creator&gt;</code> too.
-        </p>
-        <div class="dep-scan-root-row">
-          <span class="dep-scan-root-label">Search folders</span>
-          <button id="dep-collect-browse" class="ghost-button dep-collect-small" type="button">
-            <span class="material-symbols-outlined">folder_open</span>
-            <span>Browse…</span>
-          </button>
-        </div>
-        <div id="dep-collect-dirs" class="dep-collect-dirs"></div>
-        <div class="dep-collect-options">
-          <label class="check-row" for="dep-collect-remember">
-            <input type="checkbox" id="dep-collect-remember" />
-            <span>Remember these folders</span>
-          </label>
-          <button id="dep-collect-rescan" class="ghost-button dep-collect-small" type="button">
-            <span class="material-symbols-outlined">sync</span>
-            <span>Scan again</span>
-          </button>
-        </div>
-        <div id="dep-collect-dest" class="dep-collect-dest"></div>
-        <p id="dep-collect-summary"></p>
-        <div id="dep-collect-notes" class="dep-collect-notes"></div>
-        <div id="dep-collect-progress" class="progress-card dep-scan-progress hidden">
-          <div class="progress-track"><div class="progress-bar" id="dep-collect-bar"></div></div>
-          <p id="dep-collect-progress-message" class="panel-subtitle"></p>
-        </div>
-        <div id="dep-collect-filter" class="dep-scan-filter mode-switch" role="tablist" aria-label="Filter dependencies">
-          <button data-dc-filter="all" class="mode-button active" type="button" role="tab" aria-selected="true">All</button>
-          <button data-dc-filter="copy" class="mode-button" type="button" role="tab" aria-selected="false">To copy</button>
-        </div>
-        <div id="dep-collect-list" class="dep-scan-list"></div>
-        <div class="dialog-actions">
-          <button id="dep-collect-copy-all" class="primary-button" type="button">Copy All</button>
-          <button id="dep-collect-close" class="ghost-button" type="button">Close</button>
         </div>
       </div>
     </div>
@@ -3310,7 +3271,7 @@
 
     <!-- Add download source: a Pixeldrain / MediaFire / direct link for one
          package, saved with the imported mirror links. After the dialogs it
-         can open from (Download Dependencies) so it stacks above them. -->
+         can open from (Scan Dependencies) so it stacks above them. -->
     <div id="src-backdrop" class="dialog-backdrop hidden">
       <div class="dialog-card hub-dl-card src-card" role="dialog" aria-modal="true" aria-labelledby="src-title">
         <div class="hub-dl-headtext">

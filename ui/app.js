@@ -731,7 +731,7 @@ Object.assign(I18N.en_US, {
   // navigating actions are listed first and separated from the two that leave
   // the modal (and the pending delete) intact.
   varPackagesRowOpenDetails: "Open Details",
-  varPackagesRowScanDeps: "Download Dependencies",
+  varPackagesRowScanDeps: "Scan Dependencies",
   varPackagesRowShowInExplorer: "Show in Explorer",
   varPackagesRowCopyPath: "Copy file path",
   // Hover info card on a VAR Packages card/row. The two extra status labels
@@ -3727,6 +3727,18 @@ function libDepRank(status) {
   return { missing: 95, indexed: 80, other_version: 72, found: 0 }[status] ?? 50;
 }
 
+// A dependency row as the listing item the Offload dialog takes.
+function libDepItem(dep) {
+  const fileName = String(dep.file_path).split(/[\\/]/).pop();
+  return {
+    file_path: dep.file_path,
+    file_name: fileName,
+    package_id: dep.resolved_id || fileName.replace(/\.var$/i, ""),
+    size_bytes: Number(dep.size_bytes) || 0,
+    offloaded: Boolean(dep.offloaded),
+  };
+}
+
 function libDepPill(dep) {
   if (dep.offloaded && (dep.status === "found" || dep.status === "other_version")) {
     return `<span class="lib-pill lib-pill-info" title="In the offload folder — VaM can't load it until it is restored">Offloaded</span>`;
@@ -3763,8 +3775,14 @@ function libDepsSectionHtml(item, details) {
     (a, b) => libDepRank(b.status) - libDepRank(a.status) || a.id.localeCompare(b.id),
   );
   const missing = deps.filter((d) => d.status === "missing");
+  const offloaded = deps.filter((d) => d.offloaded && d.file_path && (d.status === "found" || d.status === "other_version"));
+  const restoreAll =
+    offloaded.length > 1
+      ? `<button type="button" class="lib-small-link" data-lib-action="restore-deps" title="Move the offloaded dependencies back into AddonPackages so VaM loads them">
+           <span class="material-symbols-outlined">unarchive</span>Restore ${offloaded.length}…</button>`
+      : "";
   const issue = missing.length
-    ? `<button type="button" class="lib-issue lib-small-link" data-lib-action="find-deps" title="${missing.length} dependencies are not in the scanned folders — look them up on the Hub">
+    ? `<button type="button" class="lib-issue lib-small-link" data-lib-action="find-deps" title="${missing.length} dependencies are not in the scanned folders — find them in your folders or download them">
          <span class="material-symbols-outlined">warning</span>${missing.length} missing</button>`
     : "";
   const fallback = deps.filter((d) => d.status === "other_version").length;
@@ -3781,7 +3799,13 @@ function libDepsSectionHtml(item, details) {
       dep.status === "missing" || dep.status === "indexed"
         ? `<button type="button" class="lib-icon-btn lib-icon-btn-sm" data-lib-add-source="${escapeAttribute(dep.id)}" title="Add a download link for it"><span class="material-symbols-outlined">add_link</span></button>`
         : "";
-    return `<div class="lib-dep-row">${ref}${size}${libDepPill(dep)}${addSource}</div>`;
+    const restore =
+      resolved && dep.offloaded && dep.file_path
+        ? `<button type="button" class="lib-icon-btn lib-icon-btn-sm" data-lib-offload="restore" data-offload-path="${escapeAttribute(dep.file_path)}"
+             data-offload-id="${escapeAttribute(dep.resolved_id ?? dep.id)}" data-offload-size="${Number(dep.size_bytes) || 0}"
+             title="Move it back into AddonPackages so VaM loads it"><span class="material-symbols-outlined">unarchive</span></button>`
+        : "";
+    return `<div class="lib-dep-row">${ref}${size}${libDepPill(dep)}${addSource}${restore}</div>`;
   });
   const body = rows.length
     ? `<div class="lib-box">${libCollapsible(rows, `deps:${item.file_path}`, rows.length)}</div>`
@@ -3790,10 +3814,10 @@ function libDepsSectionHtml(item, details) {
     <section class="lib-ds">
       <div class="lib-group-head">
         <span class="lib-group-title">Dependencies <small>(${deps.length})</small></span>
-        <span class="lib-group-tools">${fallbackChip}${issue}${
-          deps.some((d) => d.status === "found" || d.status === "other_version")
-            ? `<button type="button" class="lib-small-link" data-lib-action="remove-deps" title="Pick dependencies of this package to send to the Recycle Bin">
-                 <span class="material-symbols-outlined">delete_sweep</span>Remove…</button>`
+        <span class="lib-group-tools">${fallbackChip}${issue}${restoreAll}${
+          deps.length
+            ? `<button type="button" class="lib-small-link" data-lib-action="scan-deps" title="See where each dependency is, then download, move, offload or delete them">
+                 <span class="material-symbols-outlined">account_tree</span>Scan…</button>`
             : ""
         }</span>
       </div>
@@ -4272,15 +4296,8 @@ async function vpRefreshAfterMutation() {
 // packages and everything they need (plan_offload). For Offload, a dependency
 // that a package staying in AddonPackages still uses starts unticked; Restore
 // ticks every offloaded dependency.
-//
-// The same dialog runs Remove Dependencies ("remove" mode): it deletes the
-// dependencies you tick (Recycle Bin) and keeps the picked package. Nothing
-// starts ticked there; Select all and the type buttons only take dependencies
-// nothing else uses.
 
 const OFFLOAD = {
-  // "offload" | "restore" | "remove"
-  mode: "offload",
   restore: false,
   items: [],
   targets: [],
@@ -4289,8 +4306,6 @@ const OFFLOAD = {
   token: 0,
   running: false,
   taskId: null,
-  // Remove mode: set by Stop to end the delete loop after the current file.
-  stop: false,
   // Rows (`kind:file_path`) whose dependents list is shown.
   openUsers: new Set(),
 };
@@ -4309,16 +4324,12 @@ function offloadListText(ids, limit = 2) {
   return `${ids.slice(0, limit).join(", ")}${ids.length > limit ? ` +${ids.length - limit}` : ""}`;
 }
 
-function offloadIsRemove() {
-  return OFFLOAD.mode === "remove";
-}
-
-// Plan members that stay (unticked) yet need this one. For Offload only those
-// in AddonPackages matter; a deletion breaks any of them.
+// Plan members that stay (unticked) yet need this one. Only those in
+// AddonPackages matter.
 function offloadStayingRequesters(e) {
   return (e.required_by ?? []).filter((fp) => {
     const dep = OFFLOAD.deps.find((d) => d.file_path === fp);
-    return dep && !dep.checked && (offloadIsRemove() || dep.location === "active");
+    return dep && !dep.checked && dep.location === "active";
   });
 }
 
@@ -4358,7 +4369,7 @@ function offloadDependentsHtml(e, kind) {
   const open = OFFLOAD.openUsers.has(key);
   return `<span class="offload-dependents${e.checked ? " is-warn" : ""}">
       <span class="material-symbols-outlined">warning</span>
-      <span>Dependency of ${ids.length} other package${ids.length === 1 ? "" : "s"}${offloadIsRemove() ? "" : " in AddonPackages"}</span>
+      <span>Dependency of ${ids.length} other package${ids.length === 1 ? "" : "s"} in AddonPackages</span>
       <button type="button" class="offload-dependents-toggle" data-offload-users="${escapeAttribute(key)}"
               aria-expanded="${open}">${open ? "Hide" : "Show"}</button>
     </span>
@@ -4372,25 +4383,6 @@ function offloadChip(e) {
   if (e.location === "other") return `<span class="lib-pill">Other folder</span>`;
   if (e.location === "offloaded") return `<span class="lib-pill lib-pill-info">Offloaded</span>`;
   return `<span class="lib-pill lib-pill-ok">In AddonPackages</span>`;
-}
-
-// Remove mode: one button per content type that ticks (or unticks) that
-// type's unshared dependencies — e.g. every look a scene pulled in.
-function offloadTypeButtonsHtml() {
-  const counts = new Map();
-  for (const d of OFFLOAD.deps) {
-    if (!d.safe) continue;
-    const key = LIB_TYPE_BY_KEY[d.pkg_type] ? d.pkg_type : "other";
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  const buttons = LIB_TYPES.filter((t) => counts.has(t.key)).map((t) => {
-    const of = OFFLOAD.deps.filter((d) => d.safe && (LIB_TYPE_BY_KEY[d.pkg_type] ? d.pkg_type : "other") === t.key);
-    const on = of.every((d) => d.checked);
-    return `<button type="button" class="lib-type-chip offload-type-btn${on ? " is-on" : ""}" style="--dot:${t.color}"
-              data-offload-type="${t.key}" aria-pressed="${on}" title="${on ? "Untick" : "Tick"} the unshared ${escapeAttribute(t.label.toLowerCase())}">
-              ${escapeHtml(t.label)} (${of.length})</button>`;
-  });
-  return buttons.length ? `<div class="offload-types"><span class="offload-types-label">Select:</span>${buttons.join("")}</div>` : "";
 }
 
 function offloadRowHtml(kind, i, e) {
@@ -4410,7 +4402,7 @@ function offloadRowHtml(kind, i, e) {
 function offloadRenderHead() {
   const items = OFFLOAD.items;
   const one = items.length === 1 ? items[0] : null;
-  const verb = offloadIsRemove() ? "Remove dependencies of" : OFFLOAD.restore ? "Restore" : "Offload";
+  const verb = OFFLOAD.restore ? "Restore" : "Offload";
   const title = one ? `${verb} ${libTitle(one)}` : `${verb} ${items.length} packages`;
   vpSetText("offload-title", title);
   $("offload-title").title = title;
@@ -4427,14 +4419,10 @@ function offloadRenderHead() {
   }
   vpSetText(
     "offload-intro",
-    offloadIsRemove()
-      ? `Sends the dependencies you tick to the Recycle Bin. ${
-          one ? "The package itself stays" : "The packages themselves stay"
-        } and will list them as missing. Select all and the type buttons only take dependencies nothing else uses.`
-      : OFFLOAD.restore
-        ? "Moves the package and the dependencies you tick back into AddonPackages, so VaM loads them again."
-        : "Moves the package and the dependencies you tick out of AddonPackages, so VaM stops loading them. " +
-            "Dependencies that packages staying in AddonPackages still use start unticked.",
+    OFFLOAD.restore
+      ? "Moves the package and the dependencies you tick back into AddonPackages, so VaM loads them again."
+      : "Moves the package and the dependencies you tick out of AddonPackages, so VaM stops loading them. " +
+          "Dependencies that packages staying in AddonPackages still use start unticked.",
   );
 }
 
@@ -4442,7 +4430,6 @@ function offloadRenderBody() {
   const body = $("offload-body");
   if (!body) return;
   const scroll = body.scrollTop;
-  const remove = offloadIsRemove();
   const movable = offloadSelectAllSet();
   const targetRows = OFFLOAD.targets.map((e, i) => offloadRowHtml("target", i, e)).join("");
   const depRows = OFFLOAD.deps.map((e, i) => offloadRowHtml("dep", i, e)).join("");
@@ -4451,9 +4438,7 @@ function offloadRenderBody() {
         OFFLOAD.missing.length === 1 ? "dependency isn't" : "dependencies aren't"
       } in your library: ${escapeHtml(offloadListText(OFFLOAD.missing, 4))}</p>`
     : "";
-  const targets = remove
-    ? ""
-    : `<div class="hub-dl-group">
+  const targets = `<div class="hub-dl-group">
       <div class="hub-dl-group-head"><span class="hub-dl-group-title">${
         OFFLOAD.targets.length === 1 ? "Package" : "Packages"
       } <small>(${OFFLOAD.targets.length})</small></span></div>
@@ -4466,23 +4451,19 @@ function offloadRenderBody() {
         <span class="hub-dl-group-title">Dependencies <small>(${OFFLOAD.deps.length})</small></span>
         ${
           movable.length
-            ? `<label class="check-row hub-dl-all"><input type="checkbox" id="offload-all" /><span>${
-                remove ? "Select all unshared" : "Select all"
-              } (${movable.length})</span></label>`
+            ? `<label class="check-row hub-dl-all"><input type="checkbox" id="offload-all" /><span>Select all (${movable.length})</span></label>`
             : ""
         }
       </div>
-      ${remove ? offloadTypeButtonsHtml() : ""}
       ${depRows ? `<div class="hub-dl-list">${depRows}</div>` : `<p class="hub-dl-empty">No dependencies in your library</p>`}
       ${missing}
     </div>`;
   body.scrollTop = scroll;
 }
 
-// What Select all ticks: every movable dependency, or for Remove only the
-// unshared ones (deleting a shared one is a deliberate, one-by-one choice).
+// What Select all ticks: every movable dependency.
 function offloadSelectAllSet() {
-  return OFFLOAD.deps.filter((d) => d.movable && (!offloadIsRemove() || d.safe));
+  return OFFLOAD.deps.filter((d) => d.movable);
 }
 
 // Select-all state, the selection total and the confirm button.
@@ -4502,17 +4483,13 @@ function offloadSync() {
       ? `${picked.length} package${picked.length === 1 ? "" : "s"} · ${formatBytesLocal(size)}`
       : "Nothing selected",
   );
-  const remove = offloadIsRemove();
-  const verb = remove ? "Move to Recycle Bin" : OFFLOAD.restore ? "Restore" : "Offload";
+  const verb = OFFLOAD.restore ? "Restore" : "Offload";
   const confirm = $("offload-confirm");
   if (confirm) {
-    const dest = remove ? "-" : ($("offload-dest-input")?.value || "").trim();
+    const dest = ($("offload-dest-input")?.value || "").trim();
     confirm.disabled = OFFLOAD.running || !picked.length || !dest;
-    confirm.classList.toggle("vp-bulk-danger", remove);
     confirm.textContent = OFFLOAD.running
-      ? remove
-        ? "Deleting…"
-        : `${verb}ing…`
+      ? `${verb}ing…`
       : picked.length > 1
         ? `${verb} (${picked.length})`
         : verb;
@@ -4526,7 +4503,6 @@ function offloadSync() {
 }
 
 function offloadRenderDest() {
-  document.querySelector("#offload-backdrop .offload-dest")?.classList.toggle("hidden", offloadIsRemove());
   const restore = OFFLOAD.restore;
   vpSetText("offload-dest-label", restore ? "Restore to" : "Offload to");
   const input = $("offload-dest-input");
@@ -4546,19 +4522,9 @@ function offloadRenderDest() {
   if (box) box.checked = state.offloadByCreator !== false;
 }
 
-function offloadOpen(items, restore) {
-  return offloadOpenMode(items, restore ? "restore" : "offload");
-}
-
-function removeDepsOpen(items) {
-  return offloadOpenMode(items, "remove");
-}
-
-async function offloadOpenMode(items, mode) {
-  const restore = mode === "restore";
-  const picked = (items ?? []).filter(
-    (it) => it?.file_path && (mode === "remove" || Boolean(it.offloaded) === restore),
-  );
+async function offloadOpen(items, restore) {
+  const mode = restore ? "restore" : "offload";
+  const picked = (items ?? []).filter((it) => it?.file_path && Boolean(it.offloaded) === restore);
   if (!invoke || !picked.length || OFFLOAD.running) return;
   if (!vamAddonPackagesDir()) {
     showToast("Set your VaM directory in Settings first.", "error");
@@ -4566,7 +4532,7 @@ async function offloadOpenMode(items, mode) {
     return;
   }
   const token = ++OFFLOAD.token;
-  Object.assign(OFFLOAD, { mode, restore, items: picked, targets: [], deps: [], missing: [] });
+  Object.assign(OFFLOAD, { restore, items: picked, targets: [], deps: [], missing: [] });
   OFFLOAD.openUsers.clear();
   offloadRenderHead();
   offloadRenderDest();
@@ -4601,49 +4567,8 @@ function offloadProgress(fraction, message) {
   vpSetText("offload-progress-message", message ?? "");
 }
 
-// Remove mode: each ticked dependency to the Recycle Bin, one by one.
-async function removeDepsConfirm() {
-  const picked = OFFLOAD.deps.filter((e) => e.checked && e.movable);
-  if (!picked.length) return;
-  OFFLOAD.running = true;
-  OFFLOAD.stop = false;
-  $("offload-progress")?.classList.remove("hidden");
-  offloadSync();
-  let removed = 0;
-  let freed = 0;
-  const failed = [];
-  for (const [n, dep] of picked.entries()) {
-    if (OFFLOAD.stop) break;
-    offloadProgress(n / picked.length, `Deleting ${dep.package_id} (${n + 1}/${picked.length})`);
-    try {
-      freed += Number(await invoke("delete_var_package", { filePath: dep.file_path, roots: vpPruneRoots() })) || 0;
-      removed += 1;
-    } catch (e) {
-      failed.push(dep);
-      addLog(`Remove dependency ${dep.package_id}: ${String(e)}`);
-    }
-  }
-  OFFLOAD.running = false;
-  offloadClose();
-  if (removed) {
-    showToast(
-      `Moved ${removed} dependenc${removed === 1 ? "y" : "ies"} to the Recycle Bin · ${formatBytesLocal(freed)}${
-        failed.length ? ` — ${failed.length} failed, see Console` : ""
-      }`,
-      failed.length ? "error" : "success",
-      failed.length ? 6000 : 3200,
-    );
-  } else if (failed.length) {
-    showToast("Nothing was deleted — see Console", "error", 6000);
-  }
-  // Stay on the package whose dependencies were removed.
-  if (OFFLOAD.items.length === 1) state.vpRevealPath = OFFLOAD.items[0].file_path;
-  await vpRefreshAfterMutation();
-}
-
 async function offloadConfirm() {
   if (OFFLOAD.running || !invoke) return;
-  if (offloadIsRemove()) return removeDepsConfirm();
   const restore = OFFLOAD.restore;
   const paths = [...OFFLOAD.targets, ...OFFLOAD.deps].filter((e) => e.checked && e.movable).map((e) => e.file_path);
   if (!paths.length) return;
@@ -4807,7 +4732,6 @@ function setupOffload() {
   });
   $("offload-cancel")?.addEventListener("click", () => {
     if (OFFLOAD.running) {
-      OFFLOAD.stop = true;
       if (OFFLOAD.taskId != null) invoke("cancel_task", { taskId: OFFLOAD.taskId }).catch(() => {});
       return;
     }
@@ -4830,16 +4754,6 @@ function setupOffload() {
   });
   $("offload-dest-input")?.addEventListener("input", offloadSync);
   $("offload-body")?.addEventListener("click", (e) => {
-    const typeBtn = e.target.closest?.("[data-offload-type]");
-    if (typeBtn && !OFFLOAD.running) {
-      const key = typeBtn.getAttribute("data-offload-type");
-      const of = OFFLOAD.deps.filter((d) => d.safe && (LIB_TYPE_BY_KEY[d.pkg_type] ? d.pkg_type : "other") === key);
-      const on = !of.every((d) => d.checked);
-      for (const d of of) d.checked = on;
-      offloadRenderBody();
-      offloadSync();
-      return;
-    }
     const toggle = e.target.closest?.("[data-offload-users]");
     if (!toggle) return;
     // Inside the row's <label>: don't let the click tick the checkbox.
@@ -4871,7 +4785,7 @@ function setupOffload() {
 
 // ---- Download sources ------------------------------------------------------------
 // A Pixeldrain (or MediaFire, or direct) link the user found for a package,
-// saved with the imported mirror links, so Download Dependencies, Find
+// saved with the imported mirror links, so Scan Dependencies, Find
 // Dependencies and the Hub fallback all use it. The Hub stays the first
 // choice; among stored links one for the exact version asked for wins.
 
@@ -5130,7 +5044,7 @@ function srcInspectSoon() {
 }
 
 // Opens the dialog for one package. `onSaved(row)` runs after a link is saved
-// (Download Dependencies uses it to make the row downloadable at once).
+// (Scan Dependencies uses it to make the row downloadable at once).
 async function sourceOpen({ packageId, fileName = "", onSaved = null }) {
   if (!invoke) return;
   const id = String(packageId || "").trim().replace(/\.var$/i, "");
@@ -5366,7 +5280,7 @@ function setupSources() {
 }
 
 // ---- Sources page ----------------------------------------------------------------
-// Saving only: downloads happen from Download Dependencies, VAR Details and
+// Saving only: downloads happen from Scan Dependencies, VAR Details and
 // the Hub, which use these sources. A saved file leaves the list.
 //
 // Paste a forum post or links; start_scan_source_links_task follows every
@@ -6331,20 +6245,43 @@ function libRunAction(action, trigger) {
     case "images":
       if (item) vpImagesOpen(item.file_path);
       break;
-    case "find-deps": {
+    case "find-deps":
+      if (item) {
+        depStartScan({ filePath: item.file_path, packageId: item.package_id }, { filter: "missing" }).catch((e) =>
+          addLog(`Scan Dependencies: ${String(e)}`),
+        );
+      }
+      break;
+    case "scan-deps":
+      if (item) {
+        depStartScan({ filePath: item.file_path, packageId: item.package_id }).catch((e) =>
+          addLog(`Scan Dependencies: ${String(e)}`),
+        );
+      }
+      break;
+    case "restore-deps": {
+      // Every offloaded dependency of the package, into one Restore dialog.
       const details = item ? LIB_DETAILS.cache.get(libDetailsKey(item)) : null;
-      libFindMissing((details?.dependencies ?? []).filter((d) => d.status === "missing").map((d) => d.id));
+      const deps = (details?.dependencies ?? []).filter((d) => d.offloaded && d.file_path);
+      const seen = new Set();
+      const picked = deps
+        .filter((d) => !seen.has(d.file_path.toLowerCase()) && seen.add(d.file_path.toLowerCase()))
+        .map((d) => libDepItem(d));
+      if (picked.length) offloadOpen(picked, true);
       break;
     }
     case "bulk-delete":
       vpBulkDelete().catch((e) => addLog(`Bulk delete: ${String(e)}`));
       break;
-    case "remove-deps":
-      if (item) removeDepsOpen([item]);
+    case "bulk-scan-deps": {
+      const snaps = libSelectedSnaps();
+      if (snaps.length) {
+        depStartScan({ filePaths: snaps.map((sn) => sn.file_path), label: `${snaps.length} packages` }).catch((e) =>
+          addLog(`Scan Dependencies: ${String(e)}`),
+        );
+      }
       break;
-    case "bulk-remove-deps":
-      removeDepsOpen(libSelectedSnaps());
-      break;
+    }
     case "bulk-offload":
       offloadOpen(libSelectedSnaps().filter((s) => !s.offloaded), false);
       break;
@@ -6410,7 +6347,7 @@ function libContextMenu(event, item) {
     ? [
         { label: "Offload selected…", action: () => libRunAction("bulk-offload") },
         { label: "Restore selected…", action: () => libRunAction("bulk-restore") },
-        { label: "Remove dependencies of selected…", action: () => libRunAction("bulk-remove-deps") },
+        { label: "Scan dependencies of selected…", action: () => libRunAction("bulk-scan-deps") },
         { label: "Add to favorites", action: () => libRunAction("bulk-favorite") },
         { separator: true },
         { label: "Clean Duplicates of selected…", action: () => libRunAction("bulk-clean") },
@@ -6441,16 +6378,12 @@ function libContextMenu(event, item) {
           label: item.offloaded ? "Restore to AddonPackages…" : "Offload…",
           action: () => offloadOpen([item], Boolean(item.offloaded)),
         },
-        ...(Number(item.dep_count) > 0
-          ? [{ label: "Remove dependencies…", action: () => removeDepsOpen([item]) }]
-          : []),
         { separator: true },
         {
-          label: "Download Dependencies…",
+          label: "Scan Dependencies…",
           action: () =>
-            depStartScan({ filePath, packageId }).catch((e) => addLog(`Download Dependencies: ${String(e)}`)),
+            depStartScan({ filePath, packageId }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`)),
         },
-        { label: "Find Dependencies Locally…", action: () => dcOpen({ filePath, packageId }) },
         {
           label: "Add download source…",
           action: () => sourceOpen({ packageId, fileName: item.file_name || `${packageId}.var` }),
@@ -6535,7 +6468,14 @@ function libHandleSharedClick(event) {
   if (offload) {
     event.stopPropagation();
     const fp = offload.getAttribute("data-offload-path");
-    const item = libFindItem(fp) ?? state.vpSelected.get(fp);
+    // A dependency row names its package by id and path; it may not be on screen.
+    const id = offload.getAttribute("data-offload-id");
+    const item =
+      libFindItem(fp) ??
+      state.vpSelected.get(fp) ??
+      (id
+        ? libDepItem({ file_path: fp, resolved_id: id, size_bytes: offload.getAttribute("data-offload-size"), offloaded: true })
+        : null);
     if (item) offloadOpen([item], offload.getAttribute("data-lib-offload") === "restore");
     return true;
   }
@@ -7774,7 +7714,7 @@ function vpDdepRefreshEffective() {
 /// this one) on demand. The Recycle Bin is what makes a wrong click recoverable.
 ///
 /// Resolves the paths actually recycled (empty when cancelled or failed). The
-/// grid callers ignore it; the Download Dependencies modal needs it to know which
+/// grid callers ignore it; the Scan Dependencies modal needs it to know which
 /// rows to flip, and can't re-derive the list because the modal may also recycle
 /// the dependencies the user ticked.
 async function vpDeleteOne(filePath, trigger) {
@@ -8587,7 +8527,7 @@ function vpDeleteRowMenuItems(packageId, filePath) {
         if (VP_DELETE.running) return;
         vpDeleteModalClose(false);
         depStartScan({ filePath: path, packageId: pkg }).catch((e) =>
-          addLog(`Download Dependencies: ${String(e)}`),
+          addLog(`Scan Dependencies: ${String(e)}`),
         );
       },
     },
@@ -8970,22 +8910,31 @@ function openCandidatePackageInVarDetails(packageId, packageFile) {
 // cached on state. Never auto-fetches resources — the user must trigger a
 // scan explicitly. View toggling is handled by index.html's switch.
 // ===========================================================================
-// VAR Details — Download Dependencies.
+// Scan Dependencies (VAR Details, VAR Packages, the top bar's paste mode).
 //
-// Reads the current VAR's recursive meta.json dependency tree, checks each dep
-// against the VAR library folder (Settings), and lists them all in a modal
-// (found / missing / unknown). Missing deps get a one-click download.
+// Reads the packages' recursive meta.json dependency tree, checks each dep
+// against AddonPackages, the offload folder and the folders added here, and
+// lists them all in a modal with where each one is. Each row (or every ticked
+// row at once) can be downloaded when missing, moved into AddonPackages from
+// the offload folder or another folder, offloaded, or deleted.
 //
 // Reuses the backend dependency-analysis commands and the central queueDownload
 // manager. Own `dep-`/`DEP_SCAN` prefix so nothing collides with the VAR
 // Packages maintenance modal (vp-/VP_PLAN) in this single global scope.
 // ===========================================================================
 
-// `target` is the .var a file-mode scan read ({ filePath, packageId }); null in
-// text mode. "Find Dependencies Locally…" hands it to the collect-deps modal.
-const DEP_SCAN = { items: [], response: null, taskId: null, running: false, filter: "all", target: null };
+// `target` is what a file-mode scan read ({ filePaths, label }); null in text
+// mode. `checked` holds the ticked rows' package ids.
+const DEP_SCAN = {
+  items: [],
+  response: null,
+  taskId: null,
+  running: false,
+  filter: "all",
+  target: null,
+  checked: new Set(),
+};
 
-const DEP_STATUS_LABEL = { found: "Found", missing: "Missing", unknown: "Unknown" };
 
 function depScanSetText(id, v) {
   const el = $(id);
@@ -8997,13 +8946,16 @@ function depFileName(p) {
   return String(p || "").split(/[\\/]/).pop() || String(p || "");
 }
 
-/// The VAR library folder (Settings), read from the DOM. Falls back to the VAR
-/// Details folder so the scan is not "everything unknown" when it is unset.
+/// The folders a scan checks, in the order a dependency's copy is picked from:
+/// AddonPackages (the VAR library folder), the offload folder, then the folders
+/// added here and a custom downloads folder. Falls back to the VAR Details
+/// folder so the scan is not "everything unknown" when nothing is set.
 function depLibraryDirs() {
-  const dl = [
+  const dl = depUniqueDirs([
     ($("settings-library-folder")?.value || "").trim(),
-    ...getAdditionalDirs("downloadVars"),
-  ].filter(Boolean);
+    offloadScanDir(),
+    ...depExtraDirs(),
+  ]);
   if (dl.length) return dl;
   return [
     ($("var-details-folder-input")?.value || "").trim(),
@@ -9011,12 +8963,27 @@ function depLibraryDirs() {
   ].filter(Boolean);
 }
 
-// Re-runs the open Download Dependencies scan after its folder list changed.
+// The scan folders besides AddonPackages and the offload folder (either may
+// also sit in the list, or be the downloads folder).
+function depExtraDirs() {
+  const fixed = [vamAddonPackagesDir(), ($("settings-library-folder")?.value || "").trim(), offloadDir()]
+    .filter(Boolean)
+    .map((d) => d.replace(/[\\/]+$/, "").toLowerCase());
+  return depUniqueDirs([...getUserAdditionalDirs("downloadVars"), ($("settings-downloads-folder")?.value || "").trim()]).filter(
+    (d) => !fixed.includes(d.replace(/[\\/]+$/, "").toLowerCase()),
+  );
+}
+
+function depUniqueDirs(dirs) {
+  return [...new Map(dirs.filter(Boolean).map((d) => [d.toLowerCase(), d])).values()];
+}
+
+// Re-runs the open Scan Dependencies scan after its folder list changed.
 function depRescanAfterFolderChange() {
   const backdrop = $("dep-scan-backdrop");
   if (!backdrop || backdrop.classList.contains("hidden") || DEP_SCAN.running) return;
   if (DEP_SCAN.target) {
-    depStartScan(DEP_SCAN.target).catch((e) => addLog(`Download Dependencies: ${String(e)}`));
+    depStartScan(DEP_SCAN.target, { filter: DEP_SCAN.filter }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
   } else if (($("dep-scan-text-input")?.value || "").trim()) {
     depAnalyzeText().catch((e) => addLog(`Find Dependencies: ${String(e)}`));
   }
@@ -9026,12 +8993,16 @@ function depScanBusy(busy) {
   DEP_SCAN.running = busy;
   // Every entry point into this modal is disabled while a task runs, so a second
   // one can't start mid-flight.
-  for (const id of ["var-details-scan-deps-button", "find-deps-toggle", "dep-scan-analyze-text", "dep-scan-organize", "dep-scan-text-input", "dep-scan-root-settings", "dep-scan-add-folder"]) {
+  for (const id of ["var-details-scan-deps-button", "find-deps-toggle", "dep-scan-analyze-text", "dep-scan-text-input", "dep-scan-root-settings", "dep-scan-add-folder"]) {
     const el = $(id);
     if (el) el.disabled = busy;
   }
+  document.querySelectorAll("#dep-scan-extra-dirs .additional-dir-remove").forEach((el) => {
+    el.disabled = busy;
+  });
   const all = $("dep-scan-download-all");
   if (all) all.disabled = busy || depMissingDownloadable().length === 0;
+  depBulkSync();
   // While a scan runs, Close becomes Cancel: hiding the modal would leave the
   // worker running behind it.
   depScanSetText("dep-scan-close", busy ? "Cancel" : "Close");
@@ -9041,7 +9012,7 @@ function depScanBusy(busy) {
 // Clone of vpRunTask: that one hardcodes #vp-plan-bar and returns
 // package_op_result, so it can't be shared. get_task_progress ERRORS (never
 // returns null) with "task not found", so the try/catch is the real exit.
-async function depRunTask(command, args) {
+async function depRunTask(command, args, resultKey = "analyze_var_deps_result") {
   const handle = await invoke(command, args);
   DEP_SCAN.taskId = handle?.id ?? null;
   if (DEP_SCAN.taskId == null) throw new Error("task did not start");
@@ -9055,7 +9026,7 @@ async function depRunTask(command, args) {
       if (bar) bar.style.width = `${pct}%`;
       depScanSetText("dep-scan-progress-message", payload.message ?? "");
       if (payload.error) throw new Error(String(payload.error));
-      if (payload.done) return payload.analyze_var_deps_result ?? null;
+      if (payload.done) return payload[resultKey] ?? null;
     }
     return null;
   } finally {
@@ -9070,6 +9041,9 @@ async function depRunTask(command, args) {
 }
 
 function depScanOpen() {
+  // The hidden folders depend on the VaM and offload folders, which may have
+  // changed since the list was last drawn.
+  renderAdditionalDirs("depScan");
   $("dep-scan-backdrop")?.classList.remove("hidden");
 }
 
@@ -9079,13 +9053,11 @@ function depScanClose() {
   DEP_SCAN.items = [];
   DEP_SCAN.response = null;
   DEP_SCAN.target = null;
+  DEP_SCAN.checked.clear();
 }
 
-// `target` names the .var to scan: { filePath, packageId }. Omitted (the VAR
-// Details button) → the package currently open in VAR Details. Passing it lets
-// the VAR Packages grid right-click menu scan any card without opening it first.
 // Both entry points (a .var scan and a pasted-text analyze) return the same
-// AnalyzeVarDepsResponse, so they share this mapping and this scope line.
+// AnalyzeVarDepsResponse, so they share this mapping.
 function depMapItems(res) {
   return (res?.dependencies || []).map((d) => ({
     pkg: d.package_id,
@@ -9100,70 +9072,59 @@ function depMapItems(res) {
   }));
 }
 
-// The dialog's folder row: where its downloads are saved (Settings → Downloads
-// folder, else AddonPackages), with the organize-by-creator switch beside it.
-// The folders a dependency is CHECKED against (AddonPackages + extra folders)
-// are an implementation detail and no longer listed here.
-function depScanRenderScope() {
-  const listEl = $("dep-scan-root-list");
-  if (listEl) {
-    const dir = configuredDownloadsDir();
-    const custom = Boolean(($("settings-downloads-folder")?.value || "").trim());
-    listEl.innerHTML = dir
-      ? `<div class="dep-scan-root-item" title="${escapeAttribute(dir)}">${escapeHtml(dir)}${
-          custom ? "" : ' <span class="dep-scan-root-note">(default)</span>'
-        }</div>`
-      : '<div class="dep-scan-root-empty">No downloads folder — set your VaM directory in Settings, or you will be asked to pick a folder on the first download.</div>';
-  }
-  const organize = $("dep-scan-organize");
-  if (organize) organize.checked = Boolean($("settings-organize-by-creator")?.checked);
-}
-
-// `target` names the .var to scan: { filePath, packageId }. Omitted (the VAR
-// Details button) → the package currently open in VAR Details. Passing it lets
-// the VAR Packages grid right-click menu scan any card without opening it first.
-async function depStartScan(target) {
+// `target` names the packages to scan: { filePath, packageId } for one, or
+// { filePaths, label } for several. Omitted (the VAR Details button) → the
+// package currently open in VAR Details. `filter` picks the tab it opens on.
+async function depStartScan(target, { filter = "all" } = {}) {
   if (!invoke || DEP_SCAN.running) return;
   depHubResetFailures();
-  const filePath = target?.filePath || state.varDetails?.item?.file_path || "";
-  const packageId = target?.packageId || state.varDetails?.item?.package_id || "";
-  if (!filePath) {
-    addLog("Download Dependencies: no .var file on disk to scan.");
+  const filePaths = (
+    target?.filePaths ?? [target?.filePath || state.varDetails?.item?.file_path || ""]
+  ).filter(Boolean);
+  const label =
+    target?.label ||
+    target?.packageId ||
+    (filePaths.length === 1 ? state.varDetails?.item?.package_id || depFileName(filePaths[0]) : "");
+  if (!filePaths.length) {
+    addLog("Scan Dependencies: no .var file on disk to scan.");
     return;
   }
 
   // File mode: the paste box belongs to the text entry point only.
   $("dep-scan-text-region")?.classList.add("hidden");
-  DEP_SCAN.target = { filePath, packageId };
+  DEP_SCAN.target = { filePaths, label };
 
   DEP_SCAN.items = [];
   DEP_SCAN.response = null;
-  DEP_SCAN.filter = "all";
+  DEP_SCAN.checked.clear();
+  DEP_SCAN.filter = filter;
   depApplyFilterUi();
-  depScanSetText("dep-scan-title", `Download Dependencies · ${packageId || depFileName(filePath)}`);
+  depScanSetText(
+    "dep-scan-title",
+    `Scan Dependencies · ${filePaths.length === 1 ? label : `${filePaths.length} packages`}`,
+  );
   depScanSetText("dep-scan-summary", "");
   $("dep-scan-list").innerHTML = "";
 
   const libraryDirs = depLibraryDirs();
-  depScanRenderScope();
 
   depScanOpen();
   depScanBusy(true);
   try {
     const res = await depRunTask("start_analyze_var_dependencies_task", {
-      varPaths: [filePath],
+      varPaths: filePaths,
       libraryDirs,
     });
     DEP_SCAN.response = res;
     DEP_SCAN.items = depMapItems(res);
     // Surface per-file problems (bad archive, no meta.json).
-    (res?.sources || []).forEach((s) => {
-      if (s && s.error) addLog(`Download Dependencies: ${depFileName(s.file_path)} — ${s.error}`);
+    (res?.sources || []).forEach((src) => {
+      if (src && src.error) addLog(`Scan Dependencies: ${depFileName(src.file_path)} — ${src.error}`);
     });
     depRenderList();
   } catch (err) {
     depScanSetText("dep-scan-summary", `Failed: ${String(err)}`);
-    addLog(`Download Dependencies: ${String(err)}`);
+    addLog(`Scan Dependencies: ${String(err)}`);
   } finally {
     depScanBusy(false);
   }
@@ -9176,6 +9137,7 @@ function depStartTextScan() {
   if (!invoke || DEP_SCAN.running) return;
   $("dep-scan-text-region")?.classList.remove("hidden");
   DEP_SCAN.target = null;
+  DEP_SCAN.checked.clear();
 
   DEP_SCAN.items = [];
   DEP_SCAN.response = null;
@@ -9183,7 +9145,6 @@ function depStartTextScan() {
   depApplyFilterUi();
   depScanSetText("dep-scan-title", "Find Dependencies");
   $("dep-scan-list").innerHTML = "";
-  depScanRenderScope();
   depRenderList(); // reset the Download-All button label/state
   // After depRenderList: with no items and no response it blanks the summary,
   // which used to swallow this hint before it was ever painted.
@@ -9205,8 +9166,8 @@ async function depAnalyzeText() {
   }
 
   const libraryDirs = depLibraryDirs();
-  depScanRenderScope();
   DEP_SCAN.filter = "all";
+  DEP_SCAN.checked.clear();
   depApplyFilterUi();
 
   depScanBusy(true);
@@ -9243,7 +9204,7 @@ function depApplyFilterUi() {
 // ============================================================
 // Package cards in dependency lists
 //
-// Rows in Download Dependencies and Find Dependencies Locally show a
+// Rows in Scan Dependencies show a
 // thumbnail, title, author, size, license and type: read from the .var when
 // it is on disk (get_var_image, the library's thumbnail loader), else looked
 // up on the VaM Hub (get_hub_package_meta, cached per package family).
@@ -9260,17 +9221,8 @@ function depFamilyKey(pkg) {
     .toLowerCase();
 }
 
-// What a card needs, from either list's item shape.
+// What a card needs from a row.
 function depCardItem(list, it) {
-  if (list === "collect") {
-    return {
-      pkg: it.package_id,
-      creator: it.creator,
-      version: it.version,
-      size: it.size,
-      localPath: it.path || "",
-    };
-  }
   return { pkg: it.pkg, creator: it.creator, version: it.version, size: it.size, localPath: it.localPath || "" };
 }
 
@@ -9354,10 +9306,9 @@ function depCardsRefresh(key) {
     const row = cardEl.closest(".dep-scan-row");
     const list = row.getAttribute("data-dep-list");
     const idx = Number(row.getAttribute("data-dep-idx"));
-    const it = (list === "collect" ? DEP_COLLECT.items : DEP_SCAN.items)[idx];
+    const it = DEP_SCAN.items[idx];
     if (!it) return;
-    const extra = list === "collect" ? dcRowExtraLines(it) : "";
-    cardEl.outerHTML = depCardHtml(list, it, extra);
+    cardEl.outerHTML = depCardHtml(list, it);
   });
 }
 
@@ -9366,66 +9317,133 @@ function depHubResetFailures() {
   DEP_HUB.failed.clear();
 }
 
+function depPathUnder(path, dir) {
+  const norm = (p) => String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const d = norm(dir);
+  return Boolean(d) && norm(path).startsWith(`${d}\\`);
+}
+
+/// Where a row's package is: "addon" (VaM loads it), "offload", "other" (one of
+/// the added folders), or the scan status ("missing" / "unknown") without a copy.
+function depLocation(it) {
+  if (it.deleted) return "deleted";
+  if (it.status !== "found" || !it.localPath) return it.status;
+  if (depPathUnder(it.localPath, vamAddonPackagesDir())) return "addon";
+  if (depPathUnder(it.localPath, offloadDir())) return "offload";
+  return "other";
+}
+
+function depLocationChip(it) {
+  const where = depLocation(it);
+  switch (where) {
+    case "addon":
+      return `<span class="chip dep-scan-found" title="In AddonPackages — VaM loads it">AddonPackages</span>`;
+    case "offload":
+      return `<span class="chip dep-scan-offloaded" title="In the offload folder — VaM doesn't load it">Offloaded</span>`;
+    case "other": {
+      const dir = depExtraDirs().find((d) => depPathUnder(it.localPath, d));
+      const name = dir ? depFileName(dir) : "another folder";
+      return `<span class="chip dep-scan-elsewhere" title="${escapeAttribute(dir || it.localPath)} — VaM doesn't load it">In ${escapeHtml(name)}</span>`;
+    }
+    case "missing":
+      return `<span class="chip dep-scan-missing">Missing</span>`;
+    case "deleted":
+      return `<span class="chip dep-scan-unknown">Deleted</span>`;
+    default:
+      return `<span class="chip dep-scan-unknown">Unknown</span>`;
+  }
+}
+
+/// What the bulk buttons can do to a row: "download", "activate" (move into
+/// AddonPackages), "offload", "delete".
+function depRowActions(it) {
+  const where = depLocation(it);
+  if (where === "missing") return it.url && !findDownloadJob(it.pkg) ? ["download"] : [];
+  if (where === "addon") return ["offload", "delete"];
+  if (where === "offload" || where === "other") return ["activate", "delete"];
+  return [];
+}
+
+function depVisibleItems() {
+  return DEP_SCAN.items.filter((it) => {
+    if (DEP_SCAN.filter === "missing") return it.status === "missing";
+    if (DEP_SCAN.filter === "elsewhere") return ["offload", "other"].includes(depLocation(it));
+    return true;
+  });
+}
+
 function depRenderList() {
   const res = DEP_SCAN.response;
   const total = DEP_SCAN.items.length;
-  const missing = DEP_SCAN.items.filter((it) => it.status === "missing").length;
+  const count = (where) => DEP_SCAN.items.filter((it) => depLocation(it) === where).length;
 
   if (!total) {
-    depScanSetText("dep-scan-summary", res ? "This package declares no dependencies." : "");
+    depScanSetText("dep-scan-summary", res ? "No dependencies declared." : "");
   } else if (res?.library_used) {
-    depScanSetText(
-      "dep-scan-summary",
-      `${total} dependencies · ${missing} missing · checked against ${res.library_var_count} VAR(s) in your library`,
-    );
+    const parts = [`${total} ${total === 1 ? "dependency" : "dependencies"}`, `${count("addon")} in AddonPackages`];
+    if (count("offload")) parts.push(`${count("offload")} offloaded`);
+    if (count("other")) parts.push(`${count("other")} in other folders`);
+    parts.push(`${count("missing")} missing`);
+    depScanSetText("dep-scan-summary", parts.join(" · "));
   } else {
-    depScanSetText(
-      "dep-scan-summary",
-      `${total} dependencies · no library set, so availability is unknown`,
-    );
+    depScanSetText("dep-scan-summary", `${total} dependencies · no library set, so availability is unknown`);
   }
 
-  const rows = DEP_SCAN.items
-    .filter((it) => DEP_SCAN.filter !== "missing" || it.status === "missing")
+  // Ticks only stay on rows that still have something to do.
+  for (const pkg of [...DEP_SCAN.checked]) {
+    const it = DEP_SCAN.items.find((x) => x.pkg === pkg);
+    if (!it || !depRowActions(it).length) DEP_SCAN.checked.delete(pkg);
+  }
+
+  const rows = depVisibleItems()
     .map((it) => {
       const i = DEP_SCAN.items.indexOf(it);
+      const where = depLocation(it);
+      const pkgAttr = escapeAttribute(it.pkg);
       let action = "";
       const activeJob = it.status === "missing" ? findDownloadJob(it.pkg) : null;
       if (it.deleted) {
-        // Recycled from this modal — see depDeleteOne for why the status is
-        // "unknown" rather than "missing".
+        // Recycled from this modal — see depDeleteOne for why it isn't "missing".
         action = `<span class="dep-scan-act-note">Deleted — re-scan</span>`;
       } else if (activeJob) {
-        action = `<button class="ghost-button dep-scan-action dep-scan-action-busy" type="button" disabled data-dep-job="${escapeAttribute(it.pkg)}">${escapeHtml(depJobButtonLabel(activeJob))}</button>`;
+        action = `<button class="ghost-button dep-scan-action dep-scan-action-busy" type="button" disabled data-dep-job="${pkgAttr}">${escapeHtml(depJobButtonLabel(activeJob))}</button>`;
       } else if (it.status === "missing" && it.url) {
-        action = `<button class="ghost-button dep-scan-action" type="button" data-dep-download="${escapeAttribute(it.pkg)}">Download</button>`;
+        action = `<button class="ghost-button dep-scan-action" type="button" data-dep-download="${pkgAttr}">Download</button>`;
       } else if (it.status === "found" && it.localPath) {
-        // localPath is the highest-version file of the dep's FAMILY (the backend
-        // matches on the version-stripped base), so a row reading Creator.Pkg.3
-        // can point at Creator.Pkg.7.var — name the delete after the real file.
+        // localPath is a file of the dep's FAMILY (the backend matches on the
+        // version-stripped base), so a row reading Creator.Pkg.3 can point at
+        // Creator.Pkg.7.var — name the delete after the real file.
         const localName = it.filename || depFileName(it.localPath);
-        // Deliberately never `disabled` here: the row-producing depRenderList()
-        // runs INSIDE the scan's try block, while DEP_SCAN.running is still true
-        // (it clears in the finally), so a busy-stamp would render every button
-        // permanently dead. The click handlers hold the DEP_SCAN.running guard.
+        // Never `disabled` here: depRenderList runs while DEP_SCAN.running is
+        // still true (it clears in the scan's finally), so a busy-stamp would
+        // leave every button dead. The click handlers hold the running guard.
+        const move =
+          where === "addon"
+            ? `<button class="ghost-button dep-scan-action" type="button" data-dep-move="offload" data-dep-pkg="${pkgAttr}" title="Move it out of AddonPackages into the offload folder">Offload</button>`
+            : `<button class="ghost-button dep-scan-action" type="button" data-dep-move="activate" data-dep-pkg="${pkgAttr}" title="Move it into AddonPackages so VaM loads it">Move to AddonPackages</button>`;
         action =
-          `<button class="icon-button" type="button" data-dep-details="${escapeAttribute(it.pkg)}" title="Open this package in VAR Details"><span class="material-symbols-outlined">description</span></button>` +
-          `<button class="icon-button" type="button" data-dep-reveal="${escapeAttribute(it.pkg)}" title="Show in Explorer"><span class="material-symbols-outlined">folder_open</span></button>` +
-          `<button class="icon-button dep-scan-act-danger" type="button" data-dep-delete="${escapeAttribute(it.pkg)}" title="Send ${escapeAttribute(localName)} to the Recycle Bin" aria-label="Send ${escapeAttribute(localName)} to the Recycle Bin"><span class="material-symbols-outlined">delete</span></button>`;
+          move +
+          `<button class="icon-button" type="button" data-dep-details="${pkgAttr}" title="Open this package in VAR Details"><span class="material-symbols-outlined">description</span></button>` +
+          `<button class="icon-button" type="button" data-dep-reveal="${pkgAttr}" title="Show in Explorer"><span class="material-symbols-outlined">folder_open</span></button>` +
+          `<button class="icon-button dep-scan-act-danger" type="button" data-dep-delete="${pkgAttr}" title="Send ${escapeAttribute(localName)} to the Recycle Bin" aria-label="Send ${escapeAttribute(localName)} to the Recycle Bin"><span class="material-symbols-outlined">delete</span></button>`;
       } else if (it.status === "missing" && !it.url) {
         // Neither the Hub nor a stored mirror link resolved a source for it:
         // offer to add one.
-        action = `<span class="dep-scan-act-note">No source</span><button class="ghost-button dep-scan-action" type="button" data-dep-add-source="${escapeAttribute(it.pkg)}" title="Add a Pixeldrain, MEGA, MediaFire or direct link for it">Add link</button>`;
+        action = `<span class="dep-scan-act-note">No source</span><button class="ghost-button dep-scan-action" type="button" data-dep-add-source="${pkgAttr}" title="Add a Pixeldrain, MEGA, MediaFire or direct link for it">Add link</button>`;
       }
+      const checkable = depRowActions(it).length > 0;
       return `<div class="dep-scan-row" data-dep-idx="${i}" data-dep-list="scan">
+  <input type="checkbox" class="dep-scan-check" data-dep-check="${pkgAttr}"${
+        DEP_SCAN.checked.has(it.pkg) ? " checked" : ""
+      }${checkable ? "" : " disabled"} aria-label="Select ${pkgAttr}" />
   ${depCardHtml("scan", it)}
-  <span class="chip dep-scan-${escapeHtml(it.status)}">${escapeHtml(DEP_STATUS_LABEL[it.status] ?? it.status)}</span>
+  ${depLocationChip(it)}
   <span class="dep-scan-act">${action}</span>
 </div>`;
     })
     .join("");
-  $("dep-scan-list").innerHTML =
-    rows || `<div class="dep-scan-empty">${escapeHtml(DEP_SCAN.filter === "missing" ? "No missing dependencies." : "Nothing to show.")}</div>`;
+  const empty = { missing: "No missing dependencies.", elsewhere: "Every dependency on disk is in AddonPackages." };
+  $("dep-scan-list").innerHTML = rows || `<div class="dep-scan-empty">${escapeHtml(empty[DEP_SCAN.filter] ?? "Nothing to show.")}</div>`;
   depCardsActivate($("dep-scan-list"), "scan", DEP_SCAN.items);
 
   const all = $("dep-scan-download-all");
@@ -9441,6 +9459,141 @@ function depRenderList() {
       : pending
         ? `Download All Missing (${pending})`
         : "Download All Missing";
+  }
+  depBulkSync();
+}
+
+// The ticked rows a bulk action applies to.
+function depCheckedFor(action) {
+  return DEP_SCAN.items.filter((it) => DEP_SCAN.checked.has(it.pkg) && depRowActions(it).includes(action));
+}
+
+// Unique files behind some rows: two rows can share one file (Pkg.3 and
+// Pkg.latest when only one version is on disk).
+function depUniquePaths(items) {
+  return [...new Map(items.filter((it) => it.localPath).map((it) => [it.localPath.toLowerCase(), it.localPath])).values()];
+}
+
+// Select-all box and bulk buttons: counts of what each would act on.
+function depBulkSync() {
+  const bar = $("dep-scan-bulk");
+  if (!bar) return;
+  const visible = depVisibleItems().filter((it) => depRowActions(it).length);
+  bar.classList.toggle("hidden", visible.length === 0);
+  const on = visible.filter((it) => DEP_SCAN.checked.has(it.pkg)).length;
+  const box = $("dep-scan-check-all");
+  if (box) {
+    box.checked = on > 0 && on === visible.length;
+    box.indeterminate = on > 0 && on < visible.length;
+    box.disabled = DEP_SCAN.running;
+  }
+  depScanSetText("dep-scan-check-label", on ? `${DEP_SCAN.checked.size} selected` : `Select all (${visible.length})`);
+  const labels = { download: "Download", activate: "Move to AddonPackages", offload: "Offload", delete: "Delete" };
+  bar.querySelectorAll("[data-dep-bulk]").forEach((btn) => {
+    const action = btn.getAttribute("data-dep-bulk");
+    const n = depCheckedFor(action).length;
+    btn.disabled = DEP_SCAN.running || n === 0;
+    btn.textContent = n ? `${labels[action]} (${n})` : labels[action];
+  });
+}
+
+/// Moves packages into AddonPackages (`activate`) or out to the offload folder,
+/// with the Offload task; the rows follow their files to the new paths.
+async function depMovePackages(paths, activate) {
+  if (!invoke || DEP_SCAN.running || !paths.length) return;
+  const addonDir = vamAddonPackagesDir();
+  if (!addonDir) {
+    showToast("Set your VaM directory in Settings first.", "error");
+    return;
+  }
+  const verb = activate ? "Move to AddonPackages" : "Offload";
+  depScanBusy(true);
+  let result = null;
+  try {
+    result = await depRunTask(
+      "start_offload_task",
+      {
+        filePaths: paths,
+        restore: activate,
+        addonDir,
+        offloadDir: offloadDir(),
+        byCreator: state.offloadByCreator !== false,
+        sourceDirs: depExtraDirs(),
+      },
+      "offload_result",
+    );
+  } catch (e) {
+    showToast(`${verb} failed: ${String(e?.message || e)}`, "error", 6000);
+    addLog(`Scan Dependencies: ${String(e)}`);
+  } finally {
+    depScanBusy(false);
+  }
+  if (!result) return;
+
+  const moved = result.moved ?? [];
+  const failed = result.failed ?? [];
+  for (const f of failed) addLog(`${verb} ${f.package_id}: ${f.error}`);
+  for (const note of result.notes ?? []) addLog(`${verb}: ${note}`);
+  const to = new Map(moved.map((m) => [String(m.from).toLowerCase(), m.to]));
+  for (const it of DEP_SCAN.items) {
+    const dest = it.localPath && to.get(it.localPath.toLowerCase());
+    if (!dest) continue;
+    varPackageThumbCache.delete(it.localPath);
+    it.localPath = dest;
+    DEP_SCAN.checked.delete(it.pkg);
+  }
+  if (moved.length) {
+    showToast(
+      `${activate ? "Moved" : "Offloaded"} ${moved.length} package${moved.length === 1 ? "" : "s"}${
+        activate ? " into AddonPackages" : ""
+      } · ${formatBytesLocal(result.moved_bytes || 0)}${failed.length ? ` — ${failed.length} failed, see Console` : ""}`,
+      failed.length ? "error" : "success",
+      failed.length ? 6000 : 3200,
+    );
+  } else if (failed.length) {
+    showToast(`Nothing was moved: ${failed[0].error}${failed.length > 1 ? " (see Console)" : ""}`, "error", 6000);
+  }
+  depRenderList();
+  if (moved.length) {
+    vpPruneSelection(moved.map((m) => m.from));
+    await refreshOffloadExists({ refresh: false });
+    vpRefreshAfterMutation().catch((e) => addLog(`VAR Packages: ${String(e)}`));
+  }
+}
+
+/// Recycles every ticked package, one confirm up front.
+async function depBulkDelete() {
+  if (!invoke || DEP_SCAN.running) return;
+  const paths = depUniquePaths(depCheckedFor("delete"));
+  if (!paths.length) return;
+  const ok = await showAppConfirm(
+    `Send ${paths.length} package${paths.length === 1 ? "" : "s"} to the Recycle Bin?\n\n` +
+      "Packages that depend on them will list them as missing.",
+  );
+  if (!ok) return;
+  depScanBusy(true);
+  let outcome = { removed: [], failures: [], freed: 0 };
+  try {
+    outcome = await vpDeleteFilesSequential(
+      paths.map((p) => ({ file_path: p, file_name: depFileName(p) })),
+      (i, n) => depScanSetText("dep-scan-progress-message", `Deleting ${i}/${n}`),
+    );
+  } finally {
+    depScanBusy(false);
+  }
+  const { removed, failures, freed } = outcome;
+  for (const f of failures) addLog(`Delete: ${f.name} — ${f.err}`);
+  depMarkDeleted(removed.map((r) => r.file_path));
+  showToast(
+    failures.length
+      ? `Deleted ${removed.length}, ${failures.length} failed — see Console`
+      : `Moved ${removed.length} package${removed.length === 1 ? "" : "s"} to the Recycle Bin · ${formatBytesLocal(freed)}`,
+    failures.length ? "error" : "success",
+    failures.length ? 6000 : 3200,
+  );
+  if (removed.length) {
+    vpPruneSelection(removed.map((r) => r.file_path));
+    vpRefreshAfterMutation().catch((e) => addLog(`VAR Packages: ${String(e)}`));
   }
 }
 
@@ -9470,7 +9623,7 @@ async function depDownloadOne(pkg, dest) {
   if (findDownloadJob(pkg)) return; // already queued/downloading
   const destDir = dest || (await ensureDownloadsDir());
   if (!destDir) {
-    addLog("Download Dependencies: no downloads folder selected.");
+    addLog("Scan Dependencies: no downloads folder selected.");
     return;
   }
   queueDownload({
@@ -9517,33 +9670,32 @@ async function depDeleteOne(pkg) {
   const removed = (await vpDeleteOne(it.localPath, null)) || [];
   if (removed.length === 0) return;
 
-  // Re-look-up by path, never through the captured row: DEP_SCAN.items is
-  // replaced wholesale by a re-scan. Several rows can share one localPath
-  // (family-base matching), so every match has to flip or they'd keep claiming
-  // "Found" — with a Show in Explorer that no longer resolves.
-  //
-  // "unknown", not "missing": the backend resolves a dependency against the
-  // highest-version file of its FAMILY, so recycling that file can still leave
-  // an older version on disk that satisfies the dep. Only a re-scan knows —
-  // until then the row says so rather than claiming a package is gone.
-  const gone = new Set(removed.map((p) => String(p).toLowerCase()));
-  let flipped = 0;
+  depMarkDeleted(removed);
+}
+
+/// Flips the rows whose file was recycled. By path, never through a captured
+/// row: DEP_SCAN.items is replaced wholesale by a re-scan. Several rows can
+/// share one localPath (family-base matching), so every match has to flip or
+/// they'd keep claiming the file — with a Show in Explorer that no longer
+/// resolves.
+///
+/// "Deleted", not "missing": the backend resolves a dependency against a file
+/// of its FAMILY, so recycling that file can still leave another version on
+/// disk that satisfies the dep. Only a re-scan knows — until then the row says
+/// so rather than claiming a package is gone.
+function depMarkDeleted(paths) {
+  if (!paths.length) return;
+  const gone = new Set(paths.map((p) => String(p).toLowerCase()));
   for (const row of DEP_SCAN.items) {
     if (row.localPath && gone.has(String(row.localPath).toLowerCase())) {
       row.status = "unknown";
       row.localPath = "";
       row.deleted = true;
-      flipped += 1;
+      DEP_SCAN.checked.delete(row.pkg);
     }
   }
-  for (const p of removed) varPackageThumbCache.delete(p);
-  // The backend counts the library once per scan and never recomputes it; keep
-  // the summary honest per deleted FILE, not per flipped row.
-  const res = DEP_SCAN.response;
-  if (res && Number.isFinite(Number(res.library_var_count))) {
-    res.library_var_count = Math.max(0, Number(res.library_var_count) - removed.length);
-  }
-  if (flipped) depRenderList();
+  for (const p of paths) varPackageThumbCache.delete(p);
+  depRenderList();
 }
 
 // Active download jobs for this modal's dependencies.
@@ -9561,12 +9713,12 @@ function depCancelDownloads() {
 async function depDownloadAllMissing() {
   const queue = depMissingDownloadable().filter((it) => !findDownloadJob(it.pkg));
   if (queue.length === 0) {
-    addLog("Download Dependencies: nothing to auto-download (Hub/Pixeldrain only; MediaFire is manual).");
+    addLog("Scan Dependencies: nothing to auto-download (Hub/Pixeldrain only; MediaFire is manual).");
     return;
   }
   const dest = await ensureDownloadsDir();
   if (!dest) {
-    addLog("Download Dependencies: no downloads folder selected.");
+    addLog("Scan Dependencies: no downloads folder selected.");
     return;
   }
   for (const it of queue) await depDownloadOne(it.pkg, dest);
@@ -9574,7 +9726,7 @@ async function depDownloadAllMissing() {
 
 function setupVarDetailsDeps() {
   $("var-details-scan-deps-button")?.addEventListener("click", () => {
-    depStartScan().catch((e) => addLog(`Download Dependencies: ${String(e)}`));
+    depStartScan().catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
   });
 
   $("dep-scan-analyze-text")?.addEventListener("click", () => {
@@ -9583,25 +9735,55 @@ function setupVarDetailsDeps() {
 
   $("dep-scan-download-all")?.addEventListener("click", (event) => {
     if (event.currentTarget.dataset.mode === "cancel") return depCancelDownloads();
-    depDownloadAllMissing().catch((e) => addLog(`Download Dependencies: ${String(e)}`));
+    depDownloadAllMissing().catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
   });
 
-  // "Change in Settings" — close the modal and jump to the Settings page to edit
-  // the VAR library folders. Blocked while a scan runs (Close is Cancel then).
-  // Same setting as Settings → "Organize downloads into creator subfolders".
-  $("dep-scan-organize")?.addEventListener("change", (event) => {
-    const settingsBox = $("settings-organize-by-creator");
-    if (settingsBox) settingsBox.checked = event.target.checked;
-    persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
+  $("dep-scan-list")?.addEventListener("change", (event) => {
+    const box = event.target.closest?.("[data-dep-check]");
+    if (!box) return;
+    const pkg = box.getAttribute("data-dep-check");
+    if (box.checked) DEP_SCAN.checked.add(pkg);
+    else DEP_SCAN.checked.delete(pkg);
+    depBulkSync();
   });
-  for (const id of ["dep-scan-list", "dep-collect-list"]) {
-    $(id)?.addEventListener("click", (event) => {
-      const link = event.target.closest?.("[data-dep-hub-url]");
-      if (!link || !invoke) return;
-      event.stopPropagation();
-      invoke("open_url", { url: link.getAttribute("data-dep-hub-url") }).catch((e) => addLog(`Open link: ${String(e)}`));
-    });
-  }
+  $("dep-scan-check-all")?.addEventListener("change", (event) => {
+    const visible = depVisibleItems().filter((it) => depRowActions(it).length);
+    for (const it of visible) {
+      if (event.target.checked) DEP_SCAN.checked.add(it.pkg);
+      else DEP_SCAN.checked.delete(it.pkg);
+    }
+    depRenderList();
+  });
+  $("dep-scan-bulk")?.addEventListener("click", (event) => {
+    const btn = event.target.closest?.("[data-dep-bulk]");
+    if (!btn || DEP_SCAN.running) return;
+    const action = btn.getAttribute("data-dep-bulk");
+    const log = (e) => addLog(`Scan Dependencies: ${String(e)}`);
+    if (action === "download") {
+      (async () => {
+        const dest = await ensureDownloadsDir();
+        if (!dest) return;
+        for (const it of depCheckedFor("download")) {
+          DEP_SCAN.checked.delete(it.pkg);
+          await depDownloadOne(it.pkg, dest);
+        }
+      })().catch(log);
+    } else if (action === "activate" || action === "offload") {
+      depMovePackages(depUniquePaths(depCheckedFor(action)), action === "activate").catch(log);
+    } else if (action === "delete") {
+      depBulkDelete().catch(log);
+    }
+  });
+
+  $("dep-scan-list")?.addEventListener("click", (event) => {
+    const link = event.target.closest?.("[data-dep-hub-url]");
+    if (!link || !invoke) return;
+    event.stopPropagation();
+    invoke("open_url", { url: link.getAttribute("data-dep-hub-url") }).catch((e) => addLog(`Open link: ${String(e)}`));
+  });
+  // "Settings" — close the modal and jump to the Settings page (VaM directory,
+  // offload folder, the same folder list). Blocked while a scan runs (Close is
+  // Cancel then).
   $("dep-scan-root-settings")?.addEventListener("click", () => {
     if (DEP_SCAN.running) return;
     depScanClose();
@@ -9614,7 +9796,7 @@ function setupVarDetailsDeps() {
       // task registers one. Keep the modal open until the poll reports done.
       if (DEP_SCAN.taskId != null) {
         invoke("cancel_task", { taskId: DEP_SCAN.taskId }).catch((e) =>
-          addLog(`Download Dependencies: ${String(e)}`),
+          addLog(`Scan Dependencies: ${String(e)}`),
         );
       }
       return;
@@ -9647,23 +9829,34 @@ function setupVarDetailsDeps() {
       }
       return;
     }
+    const move = event.target.closest?.("[data-dep-move]");
+    if (move) {
+      if (DEP_SCAN.running) return;
+      const it = DEP_SCAN.items.find((x) => x.pkg === move.getAttribute("data-dep-pkg"));
+      if (it?.localPath) {
+        depMovePackages([it.localPath], move.getAttribute("data-dep-move") === "activate").catch((e) =>
+          addLog(`Scan Dependencies: ${String(e)}`),
+        );
+      }
+      return;
+    }
     const dl = event.target.closest?.("[data-dep-download]");
     if (dl) {
       depDownloadOne(dl.getAttribute("data-dep-download")).catch((e) =>
-        addLog(`Download Dependencies: ${String(e)}`),
+        addLog(`Scan Dependencies: ${String(e)}`),
       );
       return;
     }
     const reveal = event.target.closest?.("[data-dep-reveal]");
     if (reveal) {
       const it = DEP_SCAN.items.find((x) => x.pkg === reveal.getAttribute("data-dep-reveal"));
-      if (it?.localPath) invoke("show_in_explorer", { path: it.localPath }).catch((e) => addLog(`Download Dependencies: ${String(e)}`));
+      if (it?.localPath) invoke("show_in_explorer", { path: it.localPath }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
       return;
     }
     const del = event.target.closest?.("[data-dep-delete]");
     if (del) {
       depDeleteOne(del.getAttribute("data-dep-delete")).catch((e) =>
-        addLog(`Download Dependencies: ${String(e)}`),
+        addLog(`Scan Dependencies: ${String(e)}`),
       );
       return;
     }
@@ -9682,575 +9875,6 @@ function setupVarDetailsDeps() {
       // re-render the previously selected package for a frame.
       depScanClose();
       openCandidatePackageInVarDetails(pkg, path);
-    }
-  });
-}
-
-// ===========================================================================
-// VAR Packages — Collect Dependencies.
-//
-// Download Dependencies only looks in the VAM library, so a dependency sitting in a
-// download folder elsewhere shows up there as "missing" with a Hub link. This
-// modal searches folders the user picks (subfolders included) and copies what
-// it finds into <library>\<Creator>\deps\, moving the package itself and its
-// preview image into <library>\<Creator>\ — the folder "Move to creator folder"
-// uses, under the Settings VAR library folder.
-//
-// The search folders last for the session; with "Remember these folders"
-// ticked they are also saved in config (dep_source_dirs, null = not
-// remembered). Own `dc-`/DEP_COLLECT prefix, like dep-/DEP_SCAN and vp-/VP_PLAN.
-// ===========================================================================
-
-const DEP_COLLECT = {
-  target: null, // { filePath, packageId } — filePath follows the package when a copy moves it
-  dirs: [],
-  remember: false,
-  items: [],
-  response: null,
-  taskId: null,
-  running: false, // false | "scan" | "copy"
-  copying: null, // lowercased source paths in the running copy
-  filter: "all",
-  fromDepScan: false, // opened over the Download Dependencies modal
-  changed: false, // something was moved or copied since the modal opened
-};
-
-const DC_CHIP = {
-  found: { label: "Found", cls: "dep-collect-found" },
-  in_library: { label: "In library", cls: "dep-scan-found" },
-  missing: { label: "Not found", cls: "dep-scan-missing" },
-  copied: { label: "Copied", cls: "dep-scan-found" },
-  exists: { label: "Already in deps", cls: "dep-scan-found" },
-  failed: { label: "Failed", cls: "dep-scan-missing" },
-  skipped: { label: "Skipped", cls: "dep-scan-unknown" },
-};
-
-const DC_PICK_HINT = "Click Browse… and pick the folders where you keep downloaded VARs.";
-
-// Collect Dependencies always copies into AddonPackages of the VaM directory.
-function dcLibraryRoot() {
-  return vamAddonPackagesDir() || ($("settings-library-folder")?.value || "").trim();
-}
-
-/// What a row shows: what the last copy did to it, else what the scan found. A
-/// cancelled copy leaves nothing behind, so its row is simply copyable again.
-function dcRowState(it) {
-  const copied = it.copy?.status;
-  return copied && copied !== "cancelled" ? copied : it.status;
-}
-
-function dcCanCopyRow(it) {
-  const st = dcRowState(it);
-  return Boolean(it.path) && (st === "found" || st === "failed");
-}
-
-/// Where the row's file is now: its copy in deps\ once copied, else where the
-/// scan found it (the search folder, or the library).
-function dcRowWhere(it) {
-  const st = dcRowState(it);
-  return it.copy && (st === "copied" || st === "exists") ? it.copy.dest : it.path;
-}
-
-/// Unique source paths still waiting to be copied. Two rows can share one file
-/// (Pkg.3 and Pkg.latest when only one version is on disk).
-function dcCopyablePaths() {
-  const seen = new Map();
-  for (const it of DEP_COLLECT.items) {
-    if (dcCanCopyRow(it)) seen.set(String(it.path).toLowerCase(), String(it.path));
-  }
-  return [...seen.values()];
-}
-
-// Same poll loop as depRunTask, against this modal's bar and with the result
-// slot passed in. get_task_progress ERRORS (never returns null) once the task
-// is gone, so the try/catch is the real exit.
-async function dcRunTask(command, args, resultKey) {
-  const handle = await invoke(command, args);
-  DEP_COLLECT.taskId = handle?.id ?? null;
-  if (DEP_COLLECT.taskId == null) throw new Error("task did not start");
-  try {
-    for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      const payload = await invoke("get_task_progress", { taskId: DEP_COLLECT.taskId });
-      if (!payload) break;
-      const pct = Math.round(Math.max(0, Math.min(1, Number(payload.progress ?? 0))) * 100);
-      const bar = $("dep-collect-bar");
-      if (bar) bar.style.width = `${pct}%`;
-      depScanSetText("dep-collect-progress-message", payload.message ?? "");
-      if (payload.error) throw new Error(String(payload.error));
-      if (payload.done) return payload[resultKey] ?? null;
-    }
-    return null;
-  } finally {
-    const id = DEP_COLLECT.taskId;
-    DEP_COLLECT.taskId = null;
-    try {
-      await invoke("clear_task", { taskId: id });
-    } catch (_e) {
-      /* task may already be gone */
-    }
-  }
-}
-
-function dcBusy(kind) {
-  DEP_COLLECT.running = kind || false;
-  const busy = Boolean(kind);
-  const browse = $("dep-collect-browse");
-  if (browse) browse.disabled = busy;
-  // While a task runs, Close becomes Cancel: hiding the modal would leave the
-  // worker running behind it.
-  depScanSetText("dep-collect-close", busy ? "Cancel" : "Close");
-  $("dep-collect-progress")?.classList.toggle("hidden", !busy);
-  if (busy) {
-    const bar = $("dep-collect-bar");
-    if (bar) bar.style.width = "0%";
-    depScanSetText("dep-collect-progress-message", "");
-  }
-  dcRenderDirs();
-  dcRenderList();
-}
-
-function dcApplyFilterUi() {
-  document.querySelectorAll("#dep-collect-filter [data-dc-filter]").forEach((btn) => {
-    const on = btn.getAttribute("data-dc-filter") === DEP_COLLECT.filter;
-    btn.classList.toggle("active", on);
-    btn.setAttribute("aria-selected", String(on));
-  });
-}
-
-function dcRenderDirs() {
-  const busy = Boolean(DEP_COLLECT.running);
-  const rescan = $("dep-collect-rescan");
-  if (rescan) rescan.disabled = busy || DEP_COLLECT.dirs.length === 0;
-  const el = $("dep-collect-dirs");
-  if (!el) return;
-  if (!DEP_COLLECT.dirs.length) {
-    el.innerHTML =
-      '<div class="dep-collect-dirs-empty">No folders yet. Browse… lets you pick several at once; their subfolders are searched too.</div>';
-    return;
-  }
-  el.innerHTML = DEP_COLLECT.dirs
-    .map(
-      (dir, i) => `<div class="additional-dir-row">
-  <span class="additional-dir-path" title="${escapeAttribute(dir)}">${escapeHtml(dir)}</span>
-  <button type="button" class="ghost-button additional-dir-remove" data-dc-remove="${i}" aria-label="${escapeAttribute(t("removeFolder"))}"${busy ? " disabled" : ""}>✕</button>
-</div>`,
-    )
-    .join("");
-}
-
-/// Where a copy will put things — or why it can't yet. The missing-library case
-/// is known before any scan, so it shows from the moment the modal opens.
-function dcRenderDest() {
-  const el = $("dep-collect-dest");
-  if (!el) return;
-  const res = DEP_COLLECT.response;
-  const error =
-    res?.destination_error ||
-    (dcLibraryRoot() ? "" : "Set your VAR library (AddonPackages root) folder in Settings first.");
-  if (error) {
-    el.innerHTML = `<div class="dep-collect-dest-error"><span>${escapeHtml(error)}</span><button class="dep-scan-root-settings" type="button" data-dc-settings="1">Change in Settings</button></div>`;
-    return;
-  }
-  if (!res) {
-    el.innerHTML = "";
-    return;
-  }
-  const pkg = depFileName(DEP_COLLECT.target?.filePath || res.var_path);
-  const packageLine = res.package_in_place
-    ? `${pkg} is already there: ${res.creator_dir}`
-    : `Copying moves ${pkg} and its preview image to ${res.creator_dir}`;
-  el.innerHTML =
-    `<span class="dep-collect-dest-label">Dependencies</span><span class="dep-collect-dest-path">${escapeHtml(res.deps_dir || "")}</span>` +
-    `<span class="dep-collect-dest-label">Package</span><span class="dep-collect-dest-path">${escapeHtml(packageLine)}</span>` +
-    (res.destination_warning
-      ? `<div class="dep-collect-dest-warn">${escapeHtml(res.destination_warning)}</div>`
-      : "");
-}
-
-function dcRenderNotes(notes) {
-  const el = $("dep-collect-notes");
-  if (el) el.innerHTML = (notes || []).map((n) => `<span>${escapeHtml(n)}</span>`).join("");
-}
-
-function dcRenderSummary() {
-  const res = DEP_COLLECT.response;
-  if (!res) return;
-  const total = DEP_COLLECT.items.length;
-  if (!total) {
-    depScanSetText("dep-collect-summary", "This package declares no dependencies.");
-    return;
-  }
-  const counts = {};
-  for (const it of DEP_COLLECT.items) {
-    const st = dcRowState(it);
-    counts[st] = (counts[st] || 0) + 1;
-  }
-  const toCopy = (counts.found || 0) + (counts.failed || 0);
-  const parts = [`${total} ${total === 1 ? "dependency" : "dependencies"}`];
-  if (toCopy) parts.push(`${toCopy} to copy`);
-  if (counts.copied) parts.push(`${counts.copied} copied`);
-  if (counts.exists) parts.push(`${counts.exists} already in deps`);
-  if (counts.in_library) parts.push(`${counts.in_library} already in your library`);
-  if (counts.missing) parts.push(`${counts.missing} not found`);
-  if (counts.skipped) parts.push(`${counts.skipped} skipped`);
-  const vars = Number(res.search_var_count) || 0;
-  const folders = (res.search_dirs || []).length;
-  parts.push(
-    `searched ${vars.toLocaleString()} VAR${vars === 1 ? "" : "s"} in ${folders} folder${folders === 1 ? "" : "s"}`,
-  );
-  depScanSetText("dep-collect-summary", parts.join(" · "));
-}
-
-// The lines under a Find Dependencies Locally card: who needs it, where the
-// file is, and what the last copy (or the scan) had to say about it.
-function dcRowExtraLines(it) {
-  const st = dcRowState(it);
-  const where = dcRowWhere(it);
-  const detail = it.copy && (st === "failed" || st === "skipped") ? it.copy.detail : it.note;
-  return [
-    it.via ? `<span class="dep-scan-meta">needed by ${escapeHtml(it.via)}</span>` : "",
-    where
-      ? `<span class="dep-scan-meta dep-collect-path" title="${escapeAttribute(where)}">${escapeHtml(where)}</span>`
-      : "",
-    detail ? `<span class="dep-collect-note">${escapeHtml(detail)}</span>` : "",
-  ].join("");
-}
-
-function dcRenderList() {
-  const listEl = $("dep-collect-list");
-  if (!listEl) return;
-  const res = DEP_COLLECT.response;
-  const canCopy = Boolean(res) && !res.destination_error && !DEP_COLLECT.running;
-  const copying = DEP_COLLECT.copying;
-  const rows = DEP_COLLECT.items
-    .map((it, i) => ({ it, i, st: dcRowState(it) }))
-    .filter(({ it }) => DEP_COLLECT.filter !== "copy" || dcCanCopyRow(it))
-    .map(({ it, i, st }) => {
-      const chip = DC_CHIP[st] || { label: st, cls: "dep-scan-unknown" };
-      const where = dcRowWhere(it);
-      let action = "";
-      if (copying && it.path && copying.has(String(it.path).toLowerCase())) {
-        action = `<button class="ghost-button dep-scan-action" type="button" disabled>Copying…</button>`;
-      } else if (dcCanCopyRow(it)) {
-        action = `<button class="ghost-button dep-scan-action" type="button" data-dc-copy="${i}"${canCopy ? "" : " disabled"}>${st === "failed" ? "Retry" : "Copy"}</button>`;
-      }
-      if (where) {
-        action += `<button class="icon-button" type="button" data-dc-reveal="${i}" title="Show in Explorer"><span class="material-symbols-outlined">folder_open</span></button>`;
-      }
-      return `<div class="dep-scan-row" data-dep-idx="${i}" data-dep-list="collect">
-  ${depCardHtml("collect", it, dcRowExtraLines(it))}
-  <span class="chip ${chip.cls}">${escapeHtml(chip.label)}</span>
-  <span class="dep-scan-act">${action}</span>
-</div>`;
-    })
-    .join("");
-  listEl.innerHTML =
-    rows ||
-    (res && DEP_COLLECT.items.length
-      ? `<div class="dep-scan-empty">Nothing left to copy.</div>`
-      : "");
-  depCardsActivate(listEl, "collect", DEP_COLLECT.items);
-
-  const all = $("dep-collect-copy-all");
-  const pending = dcCopyablePaths().length;
-  if (all) {
-    all.disabled = !canCopy || pending === 0;
-    all.textContent = pending ? `Copy All (${pending})` : "Copy All";
-  }
-  dcRenderSummary();
-}
-
-/// Opens the modal for one package. `fromDepScan` means it was opened over the
-/// Download Dependencies modal, which gets re-run on close if anything changed.
-function dcOpen(target, { fromDepScan = false } = {}) {
-  if (!invoke || !target?.filePath) return;
-  depHubResetFailures();
-  // One modal, one package: re-targeting it mid-task would orphan the task.
-  if (DEP_COLLECT.running) return;
-  const filePath = String(target.filePath);
-  DEP_COLLECT.target = {
-    filePath,
-    packageId: target.packageId || depFileName(filePath).replace(/\.var$/i, ""),
-  };
-  DEP_COLLECT.fromDepScan = fromDepScan;
-  DEP_COLLECT.changed = false;
-  DEP_COLLECT.items = [];
-  DEP_COLLECT.response = null;
-  DEP_COLLECT.filter = "all";
-  dcApplyFilterUi();
-  depScanSetText("dep-collect-title", `Find Dependencies Locally · ${DEP_COLLECT.target.packageId}`);
-  const remember = $("dep-collect-remember");
-  if (remember) remember.checked = DEP_COLLECT.remember;
-  depScanSetText("dep-collect-summary", "");
-  dcRenderNotes([]);
-  dcRenderDirs();
-  dcRenderDest();
-  dcRenderList();
-  $("dep-collect-backdrop")?.classList.remove("hidden");
-  // Remembered (or earlier-this-session) folders: search straight away.
-  if (DEP_COLLECT.dirs.length) {
-    dcScan().catch((e) => addLog(`Find Dependencies Locally: ${String(e)}`));
-  } else {
-    depScanSetText("dep-collect-summary", DC_PICK_HINT);
-  }
-}
-
-function dcClose() {
-  if (DEP_COLLECT.running) return; // Cancel first — see dcBusy.
-  $("dep-collect-backdrop")?.classList.add("hidden");
-  const { changed, fromDepScan, target } = DEP_COLLECT;
-  DEP_COLLECT.items = [];
-  DEP_COLLECT.response = null;
-  // The Download Dependencies modal underneath still shows the statuses (and maybe
-  // the package path) from before the copy, so re-run it to tell the truth.
-  if (
-    changed &&
-    fromDepScan &&
-    target &&
-    !$("dep-scan-backdrop")?.classList.contains("hidden") &&
-    !DEP_SCAN.running
-  ) {
-    depStartScan({ filePath: target.filePath, packageId: target.packageId }).catch((e) =>
-      addLog(`Download Dependencies: ${String(e)}`),
-    );
-  }
-}
-
-async function dcScan() {
-  if (!invoke || DEP_COLLECT.running || !DEP_COLLECT.target || !DEP_COLLECT.dirs.length) return;
-  DEP_COLLECT.items = [];
-  DEP_COLLECT.response = null;
-  depScanSetText("dep-collect-summary", "");
-  dcRenderNotes([]);
-  dcBusy("scan");
-  try {
-    const res = await dcRunTask(
-      "start_collect_deps_scan_task",
-      {
-        varPath: DEP_COLLECT.target.filePath,
-        searchDirs: [...DEP_COLLECT.dirs],
-        libraryDirs: depLibraryDirs(),
-        rootDir: dcLibraryRoot(),
-      },
-      "collect_deps_scan_result",
-    );
-    if (!res || res.was_cancelled) {
-      depScanSetText("dep-collect-summary", "Scan cancelled.");
-      return;
-    }
-    DEP_COLLECT.response = res;
-    DEP_COLLECT.items = (res.items || []).map((it) => ({ ...it, copy: null }));
-    dcRenderNotes(res.notes);
-  } catch (err) {
-    depScanSetText("dep-collect-summary", `Failed: ${String(err)}`);
-    addLog(`Find Dependencies Locally: ${String(err)}`);
-  } finally {
-    dcBusy(false);
-    dcRenderDest();
-  }
-}
-
-async function dcCopy(paths) {
-  if (!invoke || DEP_COLLECT.running || !DEP_COLLECT.target) return;
-  const res = DEP_COLLECT.response;
-  if (!res || res.destination_error) return;
-  const unique = [
-    ...new Map(
-      (paths || []).filter(Boolean).map((p) => [String(p).toLowerCase(), String(p)]),
-    ).values(),
-  ];
-  if (!unique.length) return;
-  const fromPath = DEP_COLLECT.target.filePath;
-  DEP_COLLECT.copying = new Set(unique.map((p) => p.toLowerCase()));
-  dcBusy("copy");
-  let out = null;
-  try {
-    out = await dcRunTask(
-      "start_collect_deps_copy_task",
-      { varPath: fromPath, rootDir: dcLibraryRoot(), depPaths: unique },
-      "collect_deps_copy_result",
-    );
-  } catch (err) {
-    showToast(`Copy failed: ${String(err)}`, "error", 6000);
-    addLog(`Find Dependencies Locally: ${String(err)}`);
-  } finally {
-    DEP_COLLECT.copying = null;
-    dcBusy(false);
-  }
-  if (out) dcApplyCopyResult(out, fromPath);
-}
-
-function dcApplyCopyResult(out, fromPath) {
-  const results = out.results || [];
-  const bySource = new Map(results.map((r) => [String(r.source_path).toLowerCase(), r]));
-  for (const it of DEP_COLLECT.items) {
-    const r = it.path ? bySource.get(String(it.path).toLowerCase()) : null;
-    if (r) it.copy = { status: r.status, detail: r.detail, dest: r.dest_path };
-  }
-
-  const moved = Boolean(out.var_moved);
-  if (moved) {
-    DEP_COLLECT.target.filePath = out.var_path;
-    if (DEP_COLLECT.response) DEP_COLLECT.response.package_in_place = true;
-    // VAR Details may be showing this very package; keep its path live.
-    const vdItem = state.varDetails?.item;
-    if (vdItem && vdItem.file_path === fromPath) vdItem.file_path = out.var_path;
-    vpPruneSelection([fromPath]);
-    addLog(`Moved ${depFileName(fromPath)} → ${out.var_path}`);
-  }
-  for (const r of results) {
-    if (r.status === "copied") addLog(`Copied ${depFileName(r.source_path)} → ${r.dest_path}`);
-    else if (r.status === "failed" || r.status === "skipped") {
-      addLog(`Find Dependencies Locally: ${depFileName(r.source_path)} — ${r.detail}`);
-    }
-  }
-  // Set without a move means the move itself failed; with one, a sidecar stayed.
-  const moveFailed = !moved && Boolean(out.var_note);
-  if (out.var_note) addLog(`Find Dependencies Locally: ${depFileName(fromPath)} — ${out.var_note}`);
-
-  const failed = results.filter((r) => r.status === "failed").length;
-  const already = results.filter((r) => r.status === "exists").length;
-  const bits = [];
-  if (out.was_cancelled) bits.push("Cancelled");
-  if (out.copied) {
-    bits.push(
-      `Copied ${out.copied} ${out.copied === 1 ? "dependency" : "dependencies"} (${formatBytesLocal(out.bytes_copied)})`,
-    );
-  } else if (already) {
-    bits.push(`${already} already in deps`);
-  }
-  if (moved) bits.push(`moved ${depFileName(out.var_path)} into ${depFileName(out.creator_dir)}`);
-  if (moveFailed) bits.push(`couldn't move ${depFileName(fromPath)}: ${out.var_note}`);
-  if (failed) bits.push(`${failed} failed — see the console`);
-  const kind = failed || moveFailed ? "error" : out.was_cancelled ? "info" : "success";
-  showToast(bits.join(" · ") || "Nothing was copied.", kind, 7000);
-
-  dcRenderDest();
-  dcRenderList();
-  if (out.copied > 0 || moved) {
-    DEP_COLLECT.changed = true;
-    dcRefreshVarPackages();
-  }
-}
-
-/// The library changed under the VAR Packages listing: a moved package, new
-/// files in deps\. Same refresh vpMoveToCreatorFolder does, but only for a
-/// folder listing that exists — this modal is also reachable from VAR Details.
-function dcRefreshVarPackages() {
-  vpRefreshAfterMutation().catch((e) => addLog(`VAR Packages: ${String(e)}`));
-}
-
-async function dcPersistDirs() {
-  if (!DEP_COLLECT.remember) return;
-  try {
-    await persistAllConfig();
-  } catch (error) {
-    addLog(String(error));
-  }
-}
-
-async function dcBrowse() {
-  if (!invoke || DEP_COLLECT.running) return;
-  const picked = await invoke("pick_folders");
-  let added = 0;
-  for (const raw of Array.isArray(picked) ? picked : []) {
-    const dir = String(raw ?? "").trim();
-    if (!dir || DEP_COLLECT.dirs.some((d) => d.toLowerCase() === dir.toLowerCase())) continue;
-    DEP_COLLECT.dirs.push(dir);
-    added += 1;
-  }
-  if (!added) return;
-  dcRenderDirs();
-  await dcPersistDirs();
-  await dcScan();
-}
-
-async function dcRemoveDir(index) {
-  if (DEP_COLLECT.running || !(index >= 0 && index < DEP_COLLECT.dirs.length)) return;
-  DEP_COLLECT.dirs.splice(index, 1);
-  dcRenderDirs();
-  await dcPersistDirs();
-  if (DEP_COLLECT.dirs.length) {
-    await dcScan();
-    return;
-  }
-  DEP_COLLECT.items = [];
-  DEP_COLLECT.response = null;
-  dcRenderNotes([]);
-  dcRenderDest();
-  dcRenderList();
-  depScanSetText("dep-collect-summary", DC_PICK_HINT);
-}
-
-function setupDepCollect() {
-  const log = (e) => addLog(`Find Dependencies Locally: ${String(e)}`);
-
-  $("dep-collect-browse")?.addEventListener("click", () => {
-    dcBrowse().catch(log);
-  });
-
-  $("dep-collect-rescan")?.addEventListener("click", () => {
-    dcScan().catch(log);
-  });
-
-  // Unticking saves dep_source_dirs as null, which is what forgets them.
-  $("dep-collect-remember")?.addEventListener("change", (event) => {
-    DEP_COLLECT.remember = Boolean(event.target.checked);
-    persistAllConfig().catch((e) => addLog(String(e)));
-  });
-
-  $("dep-collect-dirs")?.addEventListener("click", (event) => {
-    const btn = event.target.closest?.("[data-dc-remove]");
-    if (btn) dcRemoveDir(Number(btn.getAttribute("data-dc-remove"))).catch(log);
-  });
-
-  $("dep-collect-copy-all")?.addEventListener("click", () => {
-    dcCopy(dcCopyablePaths()).catch(log);
-  });
-
-  $("dep-collect-close")?.addEventListener("click", () => {
-    if (DEP_COLLECT.running) {
-      // Both tasks register a cancel flag. Keep the modal open until the poll
-      // reports done — a copy in flight finishes its current chunk first.
-      if (DEP_COLLECT.taskId != null) {
-        invoke("cancel_task", { taskId: DEP_COLLECT.taskId }).catch(log);
-      }
-      return;
-    }
-    dcClose();
-  });
-
-  document.querySelectorAll("#dep-collect-filter [data-dc-filter]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      DEP_COLLECT.filter = btn.getAttribute("data-dc-filter") || "all";
-      dcApplyFilterUi();
-      dcRenderList();
-    });
-  });
-
-  // "Change in Settings". Close Download Dependencies too when it's underneath —
-  // first, so dcClose doesn't re-run its scan — or Settings opens behind it.
-  $("dep-collect-dest")?.addEventListener("click", (event) => {
-    if (!event.target.closest?.("[data-dc-settings]") || DEP_COLLECT.running) return;
-    if (!$("dep-scan-backdrop")?.classList.contains("hidden")) depScanClose();
-    dcClose();
-    document.querySelector('[data-sidebar-link="settings"]')?.click();
-  });
-
-  // Delegated, because rows are re-rendered on every scan and copy.
-  $("dep-collect-list")?.addEventListener("click", (event) => {
-    const copyBtn = event.target.closest?.("[data-dc-copy]");
-    if (copyBtn) {
-      const it = DEP_COLLECT.items[Number(copyBtn.getAttribute("data-dc-copy"))];
-      if (it?.path) dcCopy([it.path]).catch(log);
-      return;
-    }
-    const reveal = event.target.closest?.("[data-dc-reveal]");
-    if (reveal) {
-      const it = DEP_COLLECT.items[Number(reveal.getAttribute("data-dc-reveal"))];
-      const path = it ? dcRowWhere(it) : "";
-      if (path) invoke("show_in_explorer", { path }).catch(log);
     }
   });
 }
@@ -15166,14 +14790,15 @@ function applyConfigToInputs(config) {
     const el = $("settings-organize-by-creator");
     if (el) el.checked = config.download_vars_organize_by_creator;
   }
-  // Collect Dependencies search folders: saved (even as an empty list) only
-  // while its "Remember these folders" box is ticked. Not remembered leaves this
-  // session's folders alone — a Settings reset must not wipe them.
+  // Folders remembered by the old Find Dependencies Locally dialog join the
+  // folders Scan Dependencies checks; the next save drops dep_source_dirs.
   if (Array.isArray(config.dep_source_dirs)) {
-    DEP_COLLECT.dirs = config.dep_source_dirs.filter((d) => typeof d === "string" && d.trim());
-    DEP_COLLECT.remember = true;
-  } else {
-    DEP_COLLECT.remember = false;
+    const dirs = additionalDirsState("downloadVars");
+    for (const raw of config.dep_source_dirs) {
+      const dir = typeof raw === "string" ? raw.trim() : "";
+      if (dir && !dirs.some((d) => String(d).trim().toLowerCase() === dir.toLowerCase())) dirs.push(dir);
+    }
+    renderAllAdditionalDirs();
   }
   if (typeof config.var_packages_deep_scan === "boolean") {
     state.varPackagesDeepScan = config.var_packages_deep_scan;
@@ -15304,7 +14929,7 @@ function buildCurrentConfig() {
       $("internalize-backup")?.checked !== undefined
         ? !!$("internalize-backup").checked
         : (state.internalize?.backup ?? true),
-    dep_source_dirs: DEP_COLLECT.remember ? [...DEP_COLLECT.dirs] : null,
+    dep_source_dirs: null,
     offload_dir: state.offloadDirSetting || null,
     offload_by_creator: state.offloadByCreator !== false,
   };
@@ -15690,13 +15315,16 @@ const ADDITIONAL_DIR_SECTIONS = {
     primaryInputId: "settings-library-folder",
     onChange: persistAllConfig,
   },
-  // Download Dependencies dialog: the same list as Settings (downloadVars),
-  // edited in place; a change re-runs the open scan.
+  // Scan Dependencies dialog: the same list as Settings (downloadVars),
+  // edited in place; a change re-runs the open scan. AddonPackages and the
+  // offload folder are always scanned, so they aren't listed here even when
+  // the list holds them.
   depScan: {
     listId: "dep-scan-extra-dirs",
     addBtnId: "dep-scan-add-folder",
     primaryInputId: "settings-library-folder",
     stateKey: "downloadVars",
+    hidden: () => [vamAddonPackagesDir(), offloadDir()],
     onChange: async () => {
       await persistAllConfig();
       depRescanAfterFolderChange();
@@ -15792,7 +15420,10 @@ function renderAdditionalDirs(sectionId) {
   const container = $(cfg.listId);
   if (!container) return;
   container.innerHTML = "";
+  const norm = (d) => String(d ?? "").trim().replace(/[\\/]+$/, "").toLowerCase();
+  const hidden = new Set((cfg.hidden?.() ?? []).filter(Boolean).map(norm));
   additionalDirsState(sectionId).forEach((dir, index) => {
+    if (hidden.has(norm(dir))) return;
     const row = document.createElement("div");
     row.className = "additional-dir-row";
     const label = document.createElement("span");
@@ -18886,11 +18517,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     // while a scan runs, so a stray keypress can't abandon a live scan.
     } else if (event.key === "Escape" && !$("vp-delete-backdrop")?.classList.contains("hidden")) {
       vpDeleteModalClose(false);
-    // Collect Dependencies stacks over Download Dependencies, so it closes first.
-    // dcClose refuses while a scan or copy runs, like depScanClose.
-    } else if (event.key === "Escape" && !$("dep-collect-backdrop")?.classList.contains("hidden")) {
-      dcClose();
-    // Same close-if-idle rule: depScanClose refuses while a scan runs.
+    // Close-if-idle: depScanClose refuses while a scan runs.
     } else if (event.key === "Escape" && !$("dep-scan-backdrop")?.classList.contains("hidden")) {
       depScanClose();
     // Close-if-idle only. vpClosePlan refuses while a task is running, so a
@@ -18913,7 +18540,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVarPackagesDeleteModal();
   setupVarPackagesImagesModal();
   setupVarDetailsDeps();
-  setupDepCollect();
 
   $("dialog-cancel").addEventListener("click", () => {
     closeAppConfirm(false);
