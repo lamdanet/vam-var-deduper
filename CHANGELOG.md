@@ -10,6 +10,22 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Changed
+- **Scan Dependencies** replaces Download Dependencies, Find Dependencies
+  Locally and Remove dependencies. It checks AddonPackages, the offload folder
+  and any folders you add, shows where each dependency is, and lets you
+  download it, move it into AddonPackages, offload it or delete it, one row at
+  a time or for every ticked row. It works on several selected packages at
+  once too. Folders you had saved in Find Dependencies Locally carry over
+- When a dependency is in more than one folder, the copy in AddonPackages is
+  the one shown
+
+### Fixed
+- Offloaded dependencies in the details sidebar can be moved back into
+  AddonPackages, one at a time or all at once
+- Saved sources marked In library open your copy in VAR Details, from a button
+  or the right-click menu
+
 ## [0.1.1] - 2026-10-08
 
 A maintenance release: the libraries the app is built on are updated, and the
