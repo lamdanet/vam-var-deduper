@@ -19,7 +19,7 @@ regex = "1"
 # HttpClient and curl. rustls was getting filtered by the Hub's Cloudflare.
 # "stream" + tokio/futures-util power the async download path (per-chunk idle
 # timeout for stall detection; blocking client lacks a read timeout).
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "default-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "default-tls", "stream"] }
 tokio = { version = "1", features = ["rt", "time"] }
 futures-util = "0.3"
 rfd = "0.15"
