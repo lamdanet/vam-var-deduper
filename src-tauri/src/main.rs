@@ -4,6 +4,7 @@ mod archives;
 mod config;
 mod db;
 mod disable;
+mod dropin;
 mod execute;
 mod extract;
 mod fix_var;
@@ -35,6 +36,7 @@ use crate::{
     integrity::start_verify_packages_task,
     disable::{plan_disable, set_packages_disabled},
     roles::{plan_remove_packages, set_package_roles},
+    dropin::{detect_vam_dir, import_var_files},
     vamprefs::{auto_hide_sync, vam_prefs_carry_over, vam_prefs_get, vam_prefs_set},
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
@@ -101,6 +103,8 @@ fn main() {
             set_packages_disabled,
             plan_remove_packages,
             set_package_roles,
+            detect_vam_dir,
+            import_var_files,
             vam_prefs_get,
             vam_prefs_set,
             auto_hide_sync,
