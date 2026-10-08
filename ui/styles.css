@@ -15620,12 +15620,6 @@ button.lib-dep-ref:hover {
   cursor: default;
 }
 
-.pkg-act.is-primary {
-  background: var(--lib-gradient);
-  color: var(--lib-gradient-fg);
-  border-color: transparent;
-}
-
 .pkg-act.is-on .material-symbols-outlined {
   color: var(--lib-warning);
   font-variation-settings: "FILL" 1;
@@ -15938,9 +15932,25 @@ button.pkg-bar-row:not(:disabled):hover {
   flex-wrap: nowrap;
   gap: 6px;
   margin-bottom: 12px;
-  padding-bottom: 4px;
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+/* No scrollbar: the edge a row continues past fades out instead. */
+.pkg-chips-row::-webkit-scrollbar {
+  display: none;
+}
+
+.pkg-chips-row.fade-r {
+  mask-image: linear-gradient(90deg, #000 calc(100% - 56px), transparent);
+}
+
+.pkg-chips-row.fade-l {
+  mask-image: linear-gradient(90deg, transparent, #000 56px);
+}
+
+.pkg-chips-row.fade-l.fade-r {
+  mask-image: linear-gradient(90deg, transparent, #000 56px, #000 calc(100% - 56px), transparent);
 }
 
 .pkg-chips-row > * {
@@ -17118,9 +17128,25 @@ button.pkg-bar-row:not(:disabled):hover {
   flex-wrap: nowrap;
 }
 
-.pkg-act.is-primary {
-  padding: 9px 16px;
+/* The main button is the app's own (lib-btn-gradient: the theme's call-to-
+   action colours, and the Obsidian themes' glow), at hero size. */
+.pkg-view .pkg-primary {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 9px;
   font-size: 13px;
+  font-weight: 600;
+  gap: 7px;
+}
+
+.pkg-view .pkg-primary .material-symbols-outlined {
+  font-size: 18px;
+}
+
+:root[data-skin="obsidian"] .pkg-drop-icon,
+:root[data-skin="obsidian"] .pkg-recent-badge {
+  background: var(--bs-cta);
+  color: var(--ob-cta-fg);
 }
 
 .pkg-tools {

@@ -6387,7 +6387,7 @@ function pkgActionsHtml(item, details, primaryAct) {
   const extractable = (details?.content ?? []).some((c) => LIB_EXTRACTABLE.has(c.fine));
   const fix = primaryAct ? pkgFixButton(primaryAct, item, details) : null;
   const primary = fix
-    ? `<button type="button" class="pkg-act is-primary" data-pkg-act="${primaryAct}" title="${escapeAttribute(fix[2])}">
+    ? `<button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-pkg-act="${primaryAct}" title="${escapeAttribute(fix[2])}">
          <span class="material-symbols-outlined">${fix[0]}</span><span>${escapeHtml(fix[1])}</span></button>`
     : "";
   const icons = [
@@ -6779,6 +6779,7 @@ function pkgRenderContent() {
           )
           .join("")
       : "";
+    pkgChipsFade(chipsHost);
   }
   if (!content.length) {
     host.innerHTML = `<div class="pkg-empty"><span class="material-symbols-outlined">photo_library</span>
@@ -7851,6 +7852,18 @@ function pkgFileRows() {
   return PKG.fileRows;
 }
 
+// A chip row that runs past its box fades at the edge it continues past.
+function pkgChipsFade(row) {
+  if (!row) return;
+  const max = row.scrollWidth - row.clientWidth;
+  row.classList.toggle("fade-l", row.scrollLeft > 2);
+  row.classList.toggle("fade-r", max > 2 && row.scrollLeft < max - 2);
+}
+
+function pkgChipsFadeAll() {
+  pkgView()?.querySelectorAll(".pkg-chips-row").forEach(pkgChipsFade);
+}
+
 function pkgRenderFileCats() {
   const host = $("pkg-file-cats");
   if (!host) return;
@@ -7880,6 +7893,7 @@ function pkgRenderFileCats() {
           ${c.icon ? `<span class="material-symbols-outlined">${c.icon}</span>` : ""}${escapeHtml(c.label)}<small>${c.n.toLocaleString()} · ${escapeHtml(formatBytesLocal(c.bytes))}</small></button>`,
     )
     .join("");
+  pkgChipsFade(host);
 }
 
 function pkgSetFileCat(key) {
@@ -7964,7 +7978,7 @@ function pkgRenderShared() {
         <span class="pkg-shared-icon"><span class="material-symbols-outlined">join_inner</span></span>
         <div><b>Which of its files are in other packages too?</b>
           <span class="pkg-muted">Compares every file's checksum with the packages in your database index. Copies are what Clean VARs can remove.</span></div>
-        <button type="button" class="pkg-act is-primary" data-pkg-act="shared" ${PKG.resources?.length ? "" : "disabled"}>
+        <button type="button" class="lib-btn lib-btn-gradient pkg-primary" data-pkg-act="shared" ${PKG.resources?.length ? "" : "disabled"}>
           <span class="material-symbols-outlined">compare_arrows</span><span>Compare</span></button>
       </div>`;
     return;
@@ -8417,6 +8431,14 @@ function setupPackageExplorer() {
   if (!view) return;
   view.addEventListener("click", pkgOnClick);
   view.addEventListener(
+    "scroll",
+    (e) => {
+      if (e.target.classList?.contains("pkg-chips-row")) pkgChipsFade(e.target);
+    },
+    true,
+  );
+  window.addEventListener("resize", () => pkgVisible() && pkgChipsFadeAll());
+  view.addEventListener(
     "wheel",
     (e) => {
       const row = e.target.closest?.(".pkg-chips-row");
@@ -8446,6 +8468,8 @@ function setupPackageExplorer() {
     if (fresh) PKG.item = { ...fresh, __lib: true };
     if (!$("pkg-scroll") || !$("pkg-hero")) pkgRender();
     else pkgRenderHero();
+    // Rendered while hidden, the rows measured nothing.
+    requestAnimationFrame(pkgChipsFadeAll);
   };
   const tauriEvent = window.__TAURI__?.event;
   tauriEvent
