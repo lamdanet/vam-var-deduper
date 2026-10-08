@@ -835,11 +835,15 @@ pub(crate) struct AnalyzeVarDepsResponse {
 pub(crate) struct DownloadVarItem {
     /// The requested dependency id (as listed in the results table).
     pub(crate) package_id: String,
-    /// "downloaded" | "exists" | "no_source" | "failed".
+    /// "downloaded" | "exists" | "no_source" | "failed" | "cancelled" | "paused".
     pub(crate) status: String,
     /// Resolved destination filename when known (e.g. "Author.Package.61.var").
     pub(crate) filename: Option<String>,
     pub(crate) error: Option<String>,
+    /// A failure worth retrying later (network trouble); the partial file is
+    /// kept so the retry resumes where it stopped.
+    #[serde(default)]
+    pub(crate) retryable: bool,
 }
 
 /// Result payload for `start_download_vars_task`.
@@ -896,6 +900,9 @@ pub(crate) struct AppState {
     /// here at start; the matching `cancel_task` command flips it. Spawned
     /// threads poll the flag at safe points and bail out gracefully.
     pub(crate) cancellations: Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>,
+    /// Per-download pause flags (`pause_task`): set together with the cancel
+    /// flag, they make a download stop but keep its partial file to resume.
+    pub(crate) pauses: Arc<Mutex<HashMap<u64, Arc<AtomicBool>>>>,
     /// Cached result of the most recent VAR Packages folder scan. Populated
     /// by `list_var_packages` on the initial scan / explicit refresh, then
     /// reused to serve subsequent paginated/filter queries without rescanning
@@ -932,6 +939,7 @@ impl AppState {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             scan_cache: Arc::new(Mutex::new(HashMap::new())),
             cancellations: Arc::new(Mutex::new(HashMap::new())),
+            pauses: Arc::new(Mutex::new(HashMap::new())),
             var_packages_folder_cache: Arc::new(Mutex::new(None)),
             package_plan: Arc::new(Mutex::new(None)),
             var_info_cache: Arc::new(Mutex::new(None)),

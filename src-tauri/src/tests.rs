@@ -6126,7 +6126,8 @@ fn serve_file(body: Vec<u8>) -> String {
                     }
                     if let Some(v) = h.to_ascii_lowercase().strip_prefix("range: bytes=") {
                         let (a, b) = v.trim().split_once('-').unwrap();
-                        range = Some((a.parse().unwrap(), b.parse().unwrap()));
+                        // `bytes=N-` (a resume) runs to the end.
+                        range = Some((a.parse().unwrap(), b.parse().unwrap_or(usize::MAX)));
                     }
                 }
                 let mut out = stream;
@@ -6266,6 +6267,7 @@ fn download_task_extracts_a_var_from_a_password_protected_zip_source() {
         url.clone(),
         "Acid.Look.3.var".to_string(),
         dest.display().to_string(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         db,
     )
@@ -6466,6 +6468,7 @@ fn download_falls_back_to_a_working_link_and_remembers() {
         "Acid.Look.3.var".to_string(),
         dest.display().to_string(),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         db.clone(),
     )
     .expect("task");
@@ -6566,4 +6569,41 @@ fn restore_takes_packages_from_any_scan_folder_but_never_addon_packages() {
     assert_eq!(root(r"e:\downloads\x\A.B.1.var"), Some(roots[2].clone()));
     assert_eq!(root(r"D:\VaM\AddonPackages\Sub\A.B.1.var"), None, "already loaded");
     assert_eq!(root(r"F:\Elsewhere\A.B.1.var"), None);
+}
+
+
+/// A partial download is continued with a Range request (206 + Content-Range)
+/// instead of starting over, and the result is byte-identical.
+#[test]
+fn download_resumes_a_partial_file() {
+    let body: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let url = serve_file(body.clone());
+    let dest = std::env::temp_dir().join(format!("vam_resume_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dest);
+    fs::create_dir_all(&dest).unwrap();
+    let part = dest.join("partial.bin");
+    fs::write(&part, &body[..70_000]).unwrap();
+
+    let mut first_report: Option<u64> = None;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let done = crate::hub::download_to_file(&url, &part, &cancel, &mut |bytes, _total| {
+        first_report.get_or_insert(bytes);
+    })
+    .unwrap();
+    assert!(done);
+    assert_eq!(first_report, Some(70_000), "progress starts at the resumed offset");
+    assert_eq!(fs::read(&part).unwrap(), body);
+    fs::remove_dir_all(&dest).ok();
+}
+
+/// Errors worth an automatic retry versus ones that aren't.
+#[test]
+fn transient_download_errors() {
+    use crate::tasks::is_transient_download_error as t;
+    assert!(t("download request failed: error sending request"));
+    assert!(t("download stalled — no data received for 60s"));
+    assert!(t("download returned HTTP 503 Service Unavailable"));
+    assert!(t("download returned HTTP 429 Too Many Requests"));
+    assert!(!t("download returned HTTP 404 Not Found"));
+    assert!(!t("downloaded file is not a valid .var"));
 }

@@ -428,19 +428,50 @@ async fn download_async(
     use std::sync::atomic::Ordering;
 
     let client = download_client(url.contains("pixeldrain.com"))?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| anyhow!("download request failed: {e}"))?;
+    // A partial from an earlier attempt is continued with a Range request.
+    // Not for MEGA: its decryption has to start at byte 0.
+    let mut offset = if decrypt.is_none() {
+        std::fs::metadata(dest_path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    let resp = loop {
+        let mut req = client.get(url);
+        if offset > 0 {
+            req = req.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+        }
+        let resp = req.send().await.map_err(|e| anyhow!("download request failed: {e}"))?;
+        // The partial is stale or already whole: start over.
+        if offset > 0 && resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            offset = 0;
+            continue;
+        }
+        break resp;
+    };
     if !resp.status().is_success() {
         return Err(anyhow!("download returned HTTP {}", resp.status()));
     }
-    let total = resp.content_length();
-    let mut file = std::fs::File::create(dest_path)
-        .map_err(|e| anyhow!("cannot create {}: {e}", dest_path.display()))?;
+    // Resume only when the server answered with exactly the bytes asked for;
+    // a plain 200 means it sent the whole file again.
+    let resumed = offset > 0
+        && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        && content_range(&resp).is_some_and(|(start, _)| start == offset);
+    let (mut file, mut downloaded, total) = if resumed {
+        let total = content_range(&resp)
+            .and_then(|(_, total)| total)
+            .or_else(|| resp.content_length().map(|len| len + offset));
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dest_path)
+            .map_err(|e| anyhow!("cannot reopen {}: {e}", dest_path.display()))?;
+        (file, offset, total)
+    } else {
+        let file = std::fs::File::create(dest_path)
+            .map_err(|e| anyhow!("cannot create {}: {e}", dest_path.display()))?;
+        (file, 0, resp.content_length())
+    };
+    progress(downloaded, total);
     let mut stream = resp.bytes_stream();
-    let mut downloaded: u64 = 0;
     let tick = Duration::from_secs(1);
     let idle_limit = Duration::from_secs(IDLE_TIMEOUT_SECS);
     let mut idle = Duration::ZERO;
@@ -479,6 +510,16 @@ async fn download_async(
     }
     file.flush().ok();
     Ok(true)
+}
+
+/// `Content-Range: bytes <start>-<end>/<total>` as (start, total); total is
+/// `None` when the server sends `*`.
+fn content_range(resp: &reqwest::Response) -> Option<(u64, Option<u64>)> {
+    let value = resp.headers().get(reqwest::header::CONTENT_RANGE)?.to_str().ok()?;
+    let rest = value.trim().strip_prefix("bytes ")?;
+    let (span, total) = rest.split_once('/')?;
+    let start = span.split_once('-')?.0.trim().parse().ok()?;
+    Some((start, total.trim().parse().ok()))
 }
 
 /// Port of the reference's `IsVarCorruptedOrFake`: a real .var is a readable zip

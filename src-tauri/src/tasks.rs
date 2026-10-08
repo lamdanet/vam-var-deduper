@@ -702,7 +702,20 @@ pub(crate) fn clear_task(task_id: u64, state: State<'_, AppState>) -> Result<(),
     if let Ok(mut cancels) = state.cancellations.lock() {
         cancels.remove(&task_id);
     }
+    if let Ok(mut pauses) = state.pauses.lock() {
+        pauses.remove(&task_id);
+    }
     Ok(())
+}
+
+/// Stop a download but keep its partial file, so starting it again resumes
+/// (status `paused`). For tasks without a pause flag it is a plain cancel.
+#[tauri::command]
+pub(crate) fn pause_task(task_id: u64, state: State<'_, AppState>) -> Result<bool, String> {
+    if let Some(flag) = state.pauses.lock().ok().and_then(|p| p.get(&task_id).cloned()) {
+        flag.store(true, Ordering::SeqCst);
+    }
+    cancel_task(task_id, state)
 }
 
 /// Flip the cancel flag for `task_id` if one was registered. Tasks that opt
@@ -5126,6 +5139,7 @@ pub(crate) fn run_download_one_task(
     filename: String,
     dest_dir: String,
     cancel: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
     db: Db,
 ) -> Result<DownloadVarsResponse> {
     let dest = PathBuf::from(dest_dir.trim());
@@ -5146,12 +5160,13 @@ pub(crate) fn run_download_one_task(
     let final_path = dest.join(&safe_name);
 
     // Builds a single-item response in the shared DownloadVarsResponse shape.
-    let mk = |status: &str, error: Option<String>| DownloadVarsResponse {
+    let mk = |status: &str, error: Option<String>, retryable: bool| DownloadVarsResponse {
         items: vec![DownloadVarItem {
             package_id: package_id.clone(),
             status: status.to_string(),
             filename: Some(safe_name.clone()),
             error,
+            retryable,
         }],
         downloaded: usize::from(status == "downloaded" || status == "exists"),
         failed: usize::from(status == "failed"),
@@ -5163,10 +5178,16 @@ pub(crate) fn run_download_one_task(
         if let Ok(meta) = std::fs::metadata(&final_path) {
             let _ = crate::db::update_download_link_size(&db, &safe_name, meta.len());
         }
-        return Ok(mk("exists", None));
+        return Ok(mk("exists", None, false));
     }
 
     let tmp_path = dest.join(format!(".part-{safe_name}"));
+    // Which link the partial came from: it is resumed only from that link.
+    let src_path = dest.join(format!(".part-{safe_name}.src"));
+    let discard_partial = || {
+        let _ = std::fs::remove_file(&tmp_path);
+        let _ = std::fs::remove_file(&src_path);
+    };
     // Browser-style progress: bytes downloaded / total · current speed. Speed is
     // measured over the interval between emits; updates are throttled to ~150ms
     // to limit lock churn (the read loop fires per 64 KB chunk).
@@ -5227,10 +5248,18 @@ pub(crate) fn run_download_one_task(
                 format!("That link failed — trying another ({} of {})", attempt + 1, links.len()),
             );
         }
+        let archive = crate::db::find_link_archive(&db, &safe_name, url);
+        if archive.is_none() {
+            let from = std::fs::read_to_string(&src_path).ok();
+            if from.as_deref() != Some(url.as_str()) {
+                let _ = std::fs::remove_file(&tmp_path);
+            }
+            let _ = std::fs::write(&src_path, url);
+        }
         // A source inside a .zip: fetch the archive (cached for the session,
         // so several packages from it download it once) and extract the one
         // member.
-        let fetched = match crate::db::find_link_archive(&db, &safe_name, url) {
+        let fetched = match archive {
             Some((entry, password)) => match crate::archives::ensure_cached(url, &cancel, &mut report) {
                 Ok(zip) => {
                     set_task_progress(tasks, task_id, "download_item", 1.0, format!("Extracting {safe_name}"));
@@ -5245,6 +5274,7 @@ pub(crate) fn run_download_one_task(
         };
         let error = match fetched {
             Ok(true) if crate::hub::is_valid_var(&tmp_path) => {
+                let _ = std::fs::remove_file(&src_path);
                 return match std::fs::rename(&tmp_path, &final_path) {
                     Ok(()) => {
                         crate::db::record_link_result(&db, &safe_name, url, None);
@@ -5253,31 +5283,60 @@ pub(crate) fn run_download_one_task(
                         if let Ok(meta) = std::fs::metadata(&final_path) {
                             let _ = crate::db::update_download_link_size(&db, &safe_name, meta.len());
                         }
-                        Ok(mk("downloaded", None))
+                        Ok(mk("downloaded", None, false))
                     }
                     Err(e) => {
-                        let _ = std::fs::remove_file(&tmp_path);
-                        Ok(mk("failed", Some(format!("move failed: {e}"))))
+                        discard_partial();
+                        Ok(mk("failed", Some(format!("move failed: {e}")), false))
                     }
                 };
             }
             Ok(true) => "downloaded file is not a valid .var".to_string(),
+            // Paused: keep the partial for the resume.
+            Ok(false) if pause.load(Ordering::SeqCst) => return Ok(mk("paused", None, false)),
             Ok(false) => {
                 // Cancelled mid-stream — discard the partial file.
-                let _ = std::fs::remove_file(&tmp_path);
-                return Ok(mk("cancelled", None));
+                discard_partial();
+                return Ok(mk("cancelled", None, false));
             }
             Err(e) => e.to_string(),
         };
-        let _ = std::fs::remove_file(&tmp_path);
         crate::db::record_link_result(&db, &safe_name, url, Some(&error));
+        // A network hiccup part-way through: keep what arrived and let the
+        // queue retry this link later, instead of starting over on another.
+        let partial = std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
+        if is_transient_download_error(&error) && partial > 0 {
+            return Ok(mk("failed", Some(error), true));
+        }
+        discard_partial();
         errors.push(error);
     }
+    let retryable = errors.last().is_some_and(|e| is_transient_download_error(e));
     let message = match errors.as_slice() {
         [one] => one.clone(),
         many => format!("all {} links failed — {}", many.len(), many.last().cloned().unwrap_or_default()),
     };
-    Ok(mk("failed", Some(message)))
+    Ok(mk("failed", Some(message), retryable))
+}
+
+/// Network trouble worth retrying later: timeouts, dropped connections,
+/// stalls, server errors and rate limits. A 404 or a bad file is not.
+pub(crate) fn is_transient_download_error(error: &str) -> bool {
+    let lc = error.to_ascii_lowercase();
+    [
+        "request failed",
+        "read error",
+        "stalled",
+        "timed out",
+        "timeout",
+        "connection",
+        "dns",
+        "http 5",
+        "http 429",
+        "http 408",
+    ]
+    .iter()
+    .any(|p| lc.contains(p))
 }
 
 fn finish_download_vars_task(
@@ -5339,11 +5398,15 @@ pub(crate) fn start_download_one_task(
             .map_err(|_| "cancellation state poisoned".to_string())?;
         cancels.insert(task_id, Arc::clone(&cancel_flag));
     }
+    let pause_flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut pauses) = state.pauses.lock() {
+        pauses.insert(task_id, Arc::clone(&pause_flag));
+    }
     let tasks = Arc::clone(&state.tasks);
     let db = db.inner().clone();
     thread::spawn(move || {
         let result = run_download_one_task(
-            &tasks, task_id, package_id, download_url, filename, dest_dir, cancel_flag, db,
+            &tasks, task_id, package_id, download_url, filename, dest_dir, cancel_flag, pause_flag, db,
         );
         finish_download_vars_task(&tasks, task_id, result);
     });
