@@ -411,6 +411,19 @@ fn list_entries(archive: &mut ZipArchive<fs::File>) -> (Vec<String>, Option<usiz
     (names, meta_index, scene_image)
 }
 
+/// The paths of a package's content items (scenes, looks, poses, clothing,
+/// hair — what VaM's browser lists), as VaM keys its hide / favorite flags.
+pub(crate) fn content_paths(var_path: &Path) -> Vec<String> {
+    let Ok(file) = fs::File::open(var_path) else { return Vec::new() };
+    let Ok(mut archive) = ZipArchive::new(file) else { return Vec::new() };
+    let (names, _, _) = list_entries(&mut archive);
+    classify_entries(&names)
+        .into_iter()
+        .filter(|item| item.category.is_some())
+        .map(|item| item.path)
+        .collect()
+}
+
 /// Opens a `.var` once: classifies its central directory and reads
 /// `meta.json`. Never fails — an unreadable archive yields `readable: false`
 /// with an `other` type, so one bad file can't sink a scan.

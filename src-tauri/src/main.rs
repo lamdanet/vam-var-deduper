@@ -25,6 +25,7 @@ mod tasks;
 #[cfg(test)]
 mod tests;
 mod utils;
+mod vamprefs;
 
 use tauri::Manager;
 
@@ -34,6 +35,7 @@ use crate::{
     integrity::start_verify_packages_task,
     disable::{plan_disable, set_packages_disabled},
     roles::{plan_remove_packages, set_package_roles},
+    vamprefs::{auto_hide_sync, vam_prefs_carry_over, vam_prefs_get, vam_prefs_set},
     library::{
         get_hub_package_meta, get_var_image, get_var_package_details, hub_api,
         hub_image, hub_wishlist_list, hub_wishlist_set, list_local_package_ids,
@@ -99,6 +101,10 @@ fn main() {
             set_packages_disabled,
             plan_remove_packages,
             set_package_roles,
+            vam_prefs_get,
+            vam_prefs_set,
+            auto_hide_sync,
+            vam_prefs_carry_over,
             load_config,
             path_exists,
             pick_folder,

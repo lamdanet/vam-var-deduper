@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 19;
+pub(crate) const SCHEMA_VERSION: i32 = 20;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -687,6 +687,19 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         .context("failed to create package_roles")?;
     }
 
+    if current < 20 {
+        // The VaM .hide flags auto-hide made (vamprefs.rs), so turning it off
+        // removes only those, never one the user made.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS auto_hidden (
+                package_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                PRIMARY KEY (package_id, path)
+            );",
+        )
+        .context("failed to create auto_hidden")?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
@@ -755,6 +768,43 @@ pub(crate) fn update_download_link_size(db: &Db, filename: &str, size: u64) -> R
         params![size as i64, filename],
     )?;
     Ok(())
+}
+
+pub(crate) fn auto_hidden_all(db: &Db) -> Result<Vec<(String, String)>> {
+    let handle = db.read()?;
+    let mut stmt = handle.prepare("SELECT package_id, path FROM auto_hidden")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+pub(crate) fn auto_hidden_for(db: &Db, package_id: &str) -> Result<Vec<String>> {
+    let handle = db.read()?;
+    let mut stmt = handle.prepare("SELECT path FROM auto_hidden WHERE package_id = ?1")?;
+    let rows = stmt.query_map([package_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+pub(crate) fn auto_hidden_update(db: &Db, added: &[(String, String)], removed: &[(String, String)]) -> Result<()> {
+    let mut conn = db.conn.lock().map_err(|_| anyhow!("database connection poisoned"))?;
+    let tx = conn.transaction()?;
+    {
+        let mut add = tx.prepare("INSERT OR IGNORE INTO auto_hidden (package_id, path) VALUES (?1, ?2)")?;
+        for (id, path) in added {
+            add.execute(params![id, path])?;
+        }
+        let mut del = tx.prepare("DELETE FROM auto_hidden WHERE package_id = ?1 AND path = ?2")?;
+        for (id, path) in removed {
+            del.execute(params![id, path])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// The user hid or showed these by hand: auto-hide no longer owns them.
+pub(crate) fn auto_hidden_forget(db: &Db, package_id: &str, paths: &[String]) -> Result<()> {
+    let rows: Vec<(String, String)> = paths.iter().map(|p| (package_id.to_string(), p.clone())).collect();
+    auto_hidden_update(db, &[], &rows)
 }
 
 /// Installed (true) / dependency (false) by package family.
