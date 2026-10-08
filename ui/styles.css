@@ -8402,7 +8402,7 @@ input[type="text"]:disabled {
   position: fixed;
   top: calc(var(--header-h) + 8px);
   right: 14px;
-  width: 360px;
+  width: 400px;
   max-width: calc(100vw - 28px);
   max-height: 70vh;
   z-index: 120;
@@ -8424,6 +8424,7 @@ input[type="text"]:disabled {
 }
 .downloads-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -8447,8 +8448,11 @@ input[type="text"]:disabled {
 }
 .downloads-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  margin-left: auto;
 }
 .dl-mini {
   height: 28px;
@@ -8521,6 +8525,20 @@ input[type="text"]:disabled {
 }
 .dl-status-failed {
   color: var(--accent-danger);
+}
+.dl-status-warn {
+  color: var(--accent-warn);
+}
+.downloads-summary {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.icon-button.dl-pause {
+  width: 28px;
+  height: 28px;
 }
 .dl-item-err {
   font-size: 11px;

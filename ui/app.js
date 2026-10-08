@@ -980,17 +980,26 @@ function formatBytesLocal(size) {
 // ============================================================
 let downloadJobSeq = 0;
 const DOWNLOAD_CONCURRENCY = 3;
+// Automatic retries after network trouble: 2s, 4s, 8s, 16s, 32s apart. The
+// backend keeps the partial file, so each retry resumes where it stopped.
+const DOWNLOAD_MAX_RETRIES = 5;
+const DOWNLOAD_RETRY_BASE_MS = 2000;
+// The queue survives a restart (per this machine): unfinished jobs come back
+// waiting for Resume.
+const DOWNLOADS_STORE_KEY = "downloads.queue.v1";
+const DOWNLOADS = { paused: false, wakeTimer: 0, saveTimer: 0, restored: 0, depChain: Promise.resolve() };
 
-function findDownloadJob(packageId) {
-  return state.downloads.find(
-    (j) =>
-      j.packageId === packageId &&
-      (j.status === "queued" || j.status === "downloading" || j.status === "cancelling")
-  );
+// queued and retrying are waiting; downloading/cancelling/pausing are running.
+function downloadJobActive(job) {
+  return ["queued", "retrying", "downloading", "cancelling", "pausing"].includes(job.status);
 }
 
-function downloadJobActive(job) {
-  return job.status === "queued" || job.status === "downloading" || job.status === "cancelling";
+function downloadJobRunning(job) {
+  return job.status === "downloading" || job.status === "cancelling" || job.status === "pausing";
+}
+
+function findDownloadJob(packageId) {
+  return state.downloads.find((j) => j.packageId === packageId && downloadJobActive(j));
 }
 
 // Resolves the downloads destination synchronously: the folder set in Settings,
@@ -1031,9 +1040,13 @@ function nestDestByCreator(destDir, packageId) {
   return destDir.replace(/[\\/]+$/, "") + sep + creator;
 }
 
-// Enqueue a download. opts: { packageId, url, filename, host, destDir, label?, onDone?, nest? }.
+// Enqueue a download. opts: { packageId, url, filename, host, destDir, label?,
+// onDone?, onProgress?, nest?, priority?, autoDeps?, depsDir? }.
 // onDone(status, { destDir, filename, localPath }) fires when the job settles.
 // nest: false saves into destDir as given (no per-creator subfolder).
+// priority: "direct" (what the user asked for, downloaded first) or "dependency".
+// autoDeps: once downloaded, queue the dependencies it still lacks (into depsDir,
+// default its own folder).
 function queueDownload(opts) {
   const o = opts || {};
   if (!o.url || !o.destDir) {
@@ -1044,6 +1057,9 @@ function queueDownload(opts) {
   if (existing) {
     existing.onDone = typeof o.onDone === "function" ? o.onDone : existing.onDone;
     existing.onProgress = typeof o.onProgress === "function" ? o.onProgress : existing.onProgress;
+    // Asked for directly now: it jumps ahead of dependencies.
+    if (o.priority !== "dependency") existing.priority = "direct";
+    if (o.autoDeps) existing.autoDeps = true;
     return existing.id;
   }
   const job = {
@@ -1054,9 +1070,17 @@ function queueDownload(opts) {
     url: o.url,
     host: o.host || "",
     destDir: o.nest === false ? o.destDir : nestDestByCreator(o.destDir, o.packageId || o.filename || ""),
+    depsDir: o.depsDir || "",
+    priority: o.priority === "dependency" ? "dependency" : "direct",
+    autoDeps: Boolean(o.autoDeps),
     status: "queued",
     percent: 0,
     detail: "",
+    bytesDone: 0,
+    bytesTotal: 0,
+    speed: 0,
+    attempts: 0,
+    retryAt: 0,
     error: null,
     taskId: null,
     localPath: null,
@@ -1064,25 +1088,56 @@ function queueDownload(opts) {
     onProgress: typeof o.onProgress === "function" ? o.onProgress : null,
   };
   state.downloads.push(job);
-  renderDownloadsPanel();
-  updateDownloadsBadge();
+  downloadsChanged();
   pumpDownloadQueue();
   return job.id;
 }
 
-// Start queued jobs up to the concurrency cap.
+function downloadsChanged() {
+  renderDownloadsPanel();
+  updateDownloadsBadge();
+  downloadsSaveSoon();
+}
+
+// Start waiting jobs up to the concurrency cap: what the user asked for first,
+// then dependencies, each in the order queued. A retrying job waits out its
+// backoff.
 function pumpDownloadQueue() {
-  const active = state.downloads.filter(
-    (j) => j.status === "downloading" || j.status === "cancelling"
-  ).length;
-  let slots = DOWNLOAD_CONCURRENCY - active;
-  if (slots <= 0) return;
-  for (const job of state.downloads) {
+  clearTimeout(DOWNLOADS.wakeTimer);
+  DOWNLOADS.wakeTimer = 0;
+  if (DOWNLOADS.paused) return;
+  const now = Date.now();
+  let slots = DOWNLOAD_CONCURRENCY - state.downloads.filter(downloadJobRunning).length;
+  const ready = state.downloads
+    .filter((j) => j.status === "queued" || (j.status === "retrying" && j.retryAt <= now))
+    .sort((a, b) => (a.priority === b.priority ? a.id - b.id : a.priority === "direct" ? -1 : 1));
+  for (const job of ready) {
     if (slots <= 0) break;
-    if (job.status === "queued") {
-      slots -= 1;
-      runDownloadJob(job);
-    }
+    slots -= 1;
+    runDownloadJob(job);
+  }
+  const waits = state.downloads.filter((j) => j.status === "retrying" && j.retryAt > now).map((j) => j.retryAt);
+  if (waits.length) DOWNLOADS.wakeTimer = setTimeout(pumpDownloadQueue, Math.max(200, Math.min(...waits) - now));
+}
+
+// "1.2 MB / 5.0 MB · 300.0 KB/s" (the backend's progress line) → numbers.
+function parseDownloadDetail(detail) {
+  const size = (text) => {
+    const m = /([\d.]+)\s*(B|KB|MB|GB)/.exec(text || "");
+    if (!m) return 0;
+    return Number(m[1]) * { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 }[m[2]];
+  };
+  const [amounts, speed] = String(detail || "").split("·");
+  const [done, total] = String(amounts || "").split("/");
+  return { done: size(done), total: total ? size(total) : 0, speed: speed ? size(speed) : 0 };
+}
+
+function downloadSettled(job, status, info = {}) {
+  if (job.onDone) {
+    try { job.onDone(status, { destDir: job.destDir, filename: job.filename, localPath: "", ...info }); } catch (_e) {}
+  } else if (status === "done") {
+    // Restored after a restart: nobody is waiting on it, so refresh the views.
+    downloadsRefreshSoon();
   }
 }
 
@@ -1090,16 +1145,15 @@ async function runDownloadJob(job) {
   if (!invoke) {
     job.status = "failed";
     job.error = "backend unavailable";
-    renderDownloadsPanel();
-    updateDownloadsBadge();
+    downloadsChanged();
     return;
   }
   job.status = "downloading";
   job.percent = 0;
-  job.detail = "";
+  job.detail = job.attempts ? `Resuming (try ${job.attempts + 1})…` : "";
+  job.speed = 0;
   job.error = null;
-  renderDownloadsPanel();
-  updateDownloadsBadge();
+  downloadsChanged();
   if (job.onProgress) { try { job.onProgress(job); } catch (_e) {} }
 
   let result = null;
@@ -1112,10 +1166,12 @@ async function runDownloadJob(job) {
     });
     job.taskId = handle && handle.id != null ? handle.id : null;
     if (job.taskId == null) throw new Error("failed to start download");
-    // Cancel was clicked while the task was still starting (no task id to
-    // signal yet): stop it now.
+    // Cancel or Pause was clicked while the task was still starting (no task
+    // id to signal yet): pass it on now.
     if (job.status === "cancelling") {
       try { await invoke("cancel_task", { taskId: job.taskId }); } catch (_e) {}
+    } else if (job.status === "pausing") {
+      try { await invoke("pause_task", { taskId: job.taskId }); } catch (_e) {}
     }
     while (true) {
       await new Promise((r) => setTimeout(r, 300));
@@ -1129,6 +1185,10 @@ async function runDownloadJob(job) {
       if (job.status === "downloading") {
         job.percent = Math.round(Math.max(0, Math.min(1, Number(payload.progress ?? 0))) * 100);
         job.detail = String(payload.message ?? "");
+        const parsed = parseDownloadDetail(job.detail);
+        job.bytesDone = parsed.done;
+        job.bytesTotal = parsed.total || job.bytesTotal;
+        job.speed = parsed.speed;
         updateDownloadJobUI(job);
         if (job.onProgress) { try { job.onProgress(job); } catch (_e) {} }
       }
@@ -1139,11 +1199,11 @@ async function runDownloadJob(job) {
   } catch (e) {
     job.status = "failed";
     job.error = String(e);
+    job.speed = 0;
     addLog(`Downloads: ${job.label} — ${String(e)}`);
-    renderDownloadsPanel();
-    updateDownloadsBadge();
+    downloadsChanged();
     pumpDownloadQueue();
-    if (job.onDone) { try { job.onDone("failed", { destDir: job.destDir, filename: job.filename, localPath: "" }); } catch (_e) {} }
+    downloadSettled(job, "failed");
     return;
   }
 
@@ -1156,37 +1216,111 @@ async function runDownloadJob(job) {
     const sep = dir.includes("\\") ? "\\" : "/";
     localPath = dir.replace(/[\\/]+$/, "") + sep + fname;
   }
+  job.speed = 0;
   if (status === "downloaded" || status === "exists") {
     job.status = "done";
     job.percent = 100;
     job.localPath = localPath;
+    job.attempts = 0;
     addLog(`Downloads: ${job.label} → ${dir}`);
+  } else if (status === "paused") {
+    // Back in line; the partial file waits for Resume.
+    job.status = "queued";
+    job.detail = "Paused";
   } else if (status === "cancelled") {
     job.status = "cancelled";
+  } else if (it?.retryable && job.attempts < DOWNLOAD_MAX_RETRIES) {
+    job.attempts += 1;
+    const wait = DOWNLOAD_RETRY_BASE_MS * 2 ** (job.attempts - 1);
+    job.status = "retrying";
+    job.detail = "";
+    job.retryAt = Date.now() + wait;
+    job.error = (it && it.error) || "network error";
+    addLog(`Downloads: ${job.label} — ${job.error}; retrying in ${Math.round(wait / 1000)}s (${job.attempts} of ${DOWNLOAD_MAX_RETRIES})`);
   } else {
     job.status = "failed";
     job.error = (it && it.error) || "download failed";
+    if (it?.retryable) job.error = `Network error after ${DOWNLOAD_MAX_RETRIES} retries: ${job.error}`;
   }
-  renderDownloadsPanel();
-  updateDownloadsBadge();
+  downloadsChanged();
   pumpDownloadQueue();
-  if (job.onDone) {
-    try { job.onDone(job.status, { destDir: dir, filename: fname, localPath }); } catch (_e) {}
-  }
+  if (job.status === "retrying" || job.status === "queued") return;
+  if (job.status === "done" && job.autoDeps) downloadQueueMissingDeps(job);
+  downloadSettled(job, job.status, { destDir: dir, filename: fname, localPath });
+}
+
+// After a package arrives, queue the dependencies it still lacks — the same
+// analysis Scan Dependencies runs — as dependency downloads that do the same
+// in turn. One analysis at a time.
+function downloadQueueMissingDeps(job) {
+  DOWNLOADS.depChain = DOWNLOADS.depChain
+    .then(async () => {
+      const handle = await invoke("start_analyze_var_dependencies_task", {
+        varPaths: [job.localPath],
+        libraryDirs: depLibraryDirs(),
+      });
+      const taskId = handle?.id;
+      if (taskId == null) return;
+      let res = null;
+      try {
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 400));
+          const payload = await invoke("get_task_progress", { taskId });
+          if (!payload || payload.error) break;
+          if (payload.done) {
+            res = payload.analyze_var_deps_result ?? null;
+            break;
+          }
+        }
+      } finally {
+        invoke("clear_task", { taskId }).catch(() => {});
+      }
+      const missing = (res?.dependencies || []).filter((d) => d.status === "missing" && d.download_url);
+      let queued = 0;
+      for (const d of missing) {
+        if (findDownloadJob(d.package_id)) continue;
+        const id = queueDownload({
+          packageId: d.package_id,
+          url: d.download_url,
+          filename: d.filename || `${d.package_id}.var`,
+          host: d.source_host || "",
+          destDir: job.depsDir || job.destDir,
+          nest: false,
+          label: d.filename || d.package_id,
+          priority: "dependency",
+          autoDeps: true,
+          depsDir: job.depsDir || job.destDir,
+        });
+        if (id != null) queued += 1;
+      }
+      const unavailable = (res?.dependencies || []).filter((d) => d.status === "missing" && !d.download_url).length;
+      if (queued) addLog(`Downloads: ${job.label} needs ${queued} more dependenc${queued === 1 ? "y" : "ies"} — queued`);
+      if (unavailable) addLog(`Downloads: ${job.label} — ${unavailable} dependenc${unavailable === 1 ? "y has" : "ies have"} no download source`);
+    })
+    .catch((e) => addLog(`Downloads: dependency check for ${job.label} failed — ${String(e)}`));
+}
+
+let downloadsRefreshTimer = 0;
+function downloadsRefreshSoon() {
+  clearTimeout(downloadsRefreshTimer);
+  downloadsRefreshTimer = setTimeout(() => {
+    vpRefreshAfterMutation().catch(() => {});
+  }, 1500);
 }
 
 async function cancelDownload(id) {
   const job = state.downloads.find((j) => j.id === id);
   if (!job) return;
-  if (job.status === "queued") {
+  if (job.status === "queued" || job.status === "retrying") {
     job.status = "cancelled";
-    renderDownloadsPanel();
-    updateDownloadsBadge();
+    downloadsChanged();
     pumpDownloadQueue();
-    if (job.onDone) { try { job.onDone("cancelled", { destDir: job.destDir, filename: job.filename, localPath: "" }); } catch (_e) {} }
+    // A paused or interrupted job may have left a partial; the next start of
+    // the same file reuses or replaces it, and Clear removes nothing on disk.
+    downloadSettled(job, "cancelled");
     return;
   }
-  if (job.status !== "downloading") return;
+  if (job.status !== "downloading" && job.status !== "pausing") return;
   job.status = "cancelling";
   renderDownloadsPanel();
   if (invoke && job.taskId != null) {
@@ -1194,12 +1328,35 @@ async function cancelDownload(id) {
   }
 }
 
-// Queued jobs go first, so finishing cancels can't start them.
+// Waiting jobs go first, so finishing cancels can't start them.
 function cancelAllDownloads() {
-  const queued = state.downloads.filter((j) => j.status === "queued");
-  const running = state.downloads.filter((j) => j.status === "downloading");
-  for (const job of queued) cancelDownload(job.id);
+  const waiting = state.downloads.filter((j) => j.status === "queued" || j.status === "retrying");
+  const running = state.downloads.filter((j) => j.status === "downloading" || j.status === "pausing");
+  for (const job of waiting) cancelDownload(job.id);
   for (const job of running) cancelDownload(job.id);
+}
+
+// Pause: running downloads stop and keep their partial files; nothing new
+// starts until Resume. Remembered across restarts.
+function pauseAllDownloads() {
+  DOWNLOADS.paused = true;
+  for (const job of state.downloads) {
+    if (job.status !== "downloading") continue;
+    job.status = "pausing";
+    if (invoke && job.taskId != null) invoke("pause_task", { taskId: job.taskId }).catch(() => {});
+  }
+  downloadsChanged();
+}
+
+function resumeAllDownloads() {
+  DOWNLOADS.paused = false;
+  DOWNLOADS.restored = 0;
+  for (const job of state.downloads) {
+    if (job.status === "retrying") job.retryAt = 0;
+    if (job.status === "queued" && job.detail === "Paused") job.detail = "";
+  }
+  downloadsChanged();
+  pumpDownloadQueue();
 }
 
 function retryDownload(id) {
@@ -1211,26 +1368,140 @@ function retryDownload(id) {
   job.error = null;
   job.taskId = null;
   job.localPath = null;
-  renderDownloadsPanel();
-  updateDownloadsBadge();
+  job.attempts = 0;
+  job.retryAt = 0;
+  downloadsChanged();
   pumpDownloadQueue();
+}
+
+function retryAllFailedDownloads() {
+  for (const job of state.downloads.filter((j) => j.status === "failed")) retryDownload(job.id);
 }
 
 function clearFinishedDownloads() {
   state.downloads = state.downloads.filter((j) => downloadJobActive(j));
-  renderDownloadsPanel();
-  updateDownloadsBadge();
+  downloadsChanged();
 }
 
+// ---- Persistence ---------------------------------------------------------------
+
+function downloadsSaveSoon() {
+  clearTimeout(DOWNLOADS.saveTimer);
+  DOWNLOADS.saveTimer = setTimeout(downloadsSave, 400);
+}
+
+function downloadsSave() {
+  const keep = state.downloads
+    .filter((j) => downloadJobActive(j) || j.status === "failed")
+    .map((j) => ({
+      packageId: j.packageId,
+      label: j.label,
+      filename: j.filename,
+      url: j.url,
+      host: j.host,
+      destDir: j.destDir,
+      depsDir: j.depsDir,
+      priority: j.priority,
+      autoDeps: j.autoDeps,
+      failed: j.status === "failed",
+      error: j.status === "failed" ? j.error : null,
+    }));
+  try {
+    localStorage.setItem(DOWNLOADS_STORE_KEY, JSON.stringify({ paused: DOWNLOADS.paused, jobs: keep }));
+  } catch (_e) {}
+}
+
+// Unfinished downloads from last time come back waiting: the panel offers
+// Resume instead of starting them behind the user's back.
+function downloadsRestore() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(DOWNLOADS_STORE_KEY) || "null");
+  } catch (_e) {}
+  if (!saved || !Array.isArray(saved.jobs)) return;
+  DOWNLOADS.paused = Boolean(saved.paused);
+  let waiting = 0;
+  for (const s of saved.jobs) {
+    if (!s?.url || !s?.destDir) continue;
+    state.downloads.push({
+      id: ++downloadJobSeq,
+      packageId: s.packageId || "",
+      label: s.label || s.filename || s.packageId || "download",
+      filename: s.filename || "",
+      url: s.url,
+      host: s.host || "",
+      destDir: s.destDir,
+      depsDir: s.depsDir || "",
+      priority: s.priority === "dependency" ? "dependency" : "direct",
+      autoDeps: Boolean(s.autoDeps),
+      status: s.failed ? "failed" : "queued",
+      percent: 0,
+      detail: "",
+      bytesDone: 0,
+      bytesTotal: 0,
+      speed: 0,
+      attempts: 0,
+      retryAt: 0,
+      error: s.failed ? s.error || "download failed" : null,
+      taskId: null,
+      localPath: null,
+      onDone: null,
+      onProgress: null,
+    });
+    if (!s.failed) waiting += 1;
+  }
+  if (waiting) {
+    DOWNLOADS.paused = true;
+    DOWNLOADS.restored = waiting;
+  }
+}
+
+// ---- Panel ---------------------------------------------------------------------------
+
 function syncDownloadsHeadActions() {
-  const active = state.downloads.filter((j) => j.status === "queued" || j.status === "downloading").length;
+  const active = state.downloads.filter(downloadJobActive).length;
+  const failed = state.downloads.filter((j) => j.status === "failed").length;
   const cancelAll = $("downloads-cancel-all");
   if (cancelAll) {
     cancelAll.classList.toggle("hidden", active === 0);
     cancelAll.textContent = active > 1 ? `Cancel all (${active})` : "Cancel all";
   }
+  const pause = $("downloads-pause");
+  if (pause) {
+    pause.classList.toggle("hidden", active === 0 && !DOWNLOADS.paused);
+    pause.querySelector(".material-symbols-outlined").textContent = DOWNLOADS.paused ? "play_arrow" : "pause";
+    pause.title = DOWNLOADS.paused ? "Resume downloads" : "Pause downloads (they continue where they stopped)";
+    pause.setAttribute("aria-label", pause.title);
+  }
+  const retry = $("downloads-retry-all");
+  if (retry) {
+    retry.classList.toggle("hidden", failed < 2);
+    retry.textContent = `Retry all (${failed})`;
+  }
   const clear = $("downloads-clear");
   if (clear) clear.disabled = !state.downloads.some((j) => !downloadJobActive(j));
+  const summary = $("downloads-summary");
+  if (summary) {
+    let text = "";
+    if (DOWNLOADS.paused && DOWNLOADS.restored) {
+      text = `${DOWNLOADS.restored} download${DOWNLOADS.restored === 1 ? "" : "s"} from last time — press Resume to continue`;
+    } else if (DOWNLOADS.paused && active) {
+      text = `Paused · ${active} waiting`;
+    } else if (active) {
+      const running = state.downloads.filter((j) => j.status === "downloading");
+      const speed = running.reduce((sum, j) => sum + (j.speed || 0), 0);
+      const left = state.downloads
+        .filter(downloadJobActive)
+        .reduce((sum, j) => sum + Math.max(0, (j.bytesTotal || 0) - (j.bytesDone || 0)), 0);
+      const parts = [];
+      if (speed > 0) parts.push(`${formatBytesLocal(speed)}/s`);
+      if (left > 0) parts.push(`${formatBytesLocal(left)} left`);
+      parts.push(`${running.length} of ${active} downloading`);
+      text = parts.join(" · ");
+    }
+    summary.textContent = text;
+    summary.classList.toggle("hidden", !text);
+  }
 }
 
 function dlItemInner(job) {
@@ -1246,18 +1517,32 @@ function dlItemInner(job) {
   let statusChip = "";
   switch (job.status) {
     case "queued":
-      statusChip = `<span class="dl-status">Queued</span>`;
+      statusChip = `<span class="dl-status">${
+        DOWNLOADS.paused ? "Paused" : job.priority === "dependency" ? "Queued · dependency" : "Queued"
+      }</span>`;
       actions = `<button class="ghost-button dl-mini" type="button" data-dl-cancel="${job.id}">Cancel</button>`;
       break;
+    case "retrying": {
+      const secs = Math.max(0, Math.round((job.retryAt - Date.now()) / 1000));
+      statusChip = `<span class="dl-status dl-status-warn" title="${escapeAttribute(job.error || "")}">Retrying${
+        DOWNLOADS.paused ? "" : secs ? ` in ${secs}s` : "…"
+      } (${job.attempts}/${DOWNLOAD_MAX_RETRIES})</span>`;
+      actions =
+        `<button class="ghost-button dl-mini" type="button" data-dl-retry="${job.id}">Retry now</button>` +
+        `<button class="ghost-button dl-mini" type="button" data-dl-cancel="${job.id}">Cancel</button>`;
+      break;
+    }
     case "downloading":
-    case "cancelling": {
-      const detail = job.status === "cancelling" ? "" : (job.detail || "");
+    case "cancelling":
+    case "pausing": {
+      const detail = job.status === "downloading" ? (job.detail || "") : "";
       const indeterminate = job.status === "downloading" && !detail.includes(" / ");
       const pct = Math.max(0, Math.min(100, Math.round(job.percent || 0)));
       const fill = indeterminate
         ? `<div class="dv-row-fill dv-row-fill-indeterminate"></div>`
         : `<div class="dv-row-fill" style="width:${pct}%"></div>`;
-      const pctText = job.status === "cancelling" ? "Cancelling…" : (indeterminate ? "" : `${pct}%`);
+      const pctText =
+        job.status === "cancelling" ? "Cancelling…" : job.status === "pausing" ? "Pausing…" : indeterminate ? "" : `${pct}%`;
       body =
         `<div class="dv-row-progress"><div class="dv-row-track">${fill}</div>` +
         `<span class="dv-row-pct">${pctText}</span></div>` +
@@ -1311,11 +1596,12 @@ function renderDownloadsPanel() {
 
 // In-place progress update for one job's row (avoids restarting CSS animations).
 function updateDownloadJobUI(job) {
+  syncDownloadsHeadActions();
   const list = $("downloads-list");
   if (!list) return;
   const el = list.querySelector(`.dl-item[data-dl-id="${job.id}"]`);
   if (!el) { renderDownloadsPanel(); return; }
-  const detailText = job.status === "cancelling" ? "" : (job.detail || "");
+  const detailText = job.status === "downloading" ? (job.detail || "") : "";
   const indeterminate = job.status === "downloading" && !detailText.includes(" / ");
   const fill = el.querySelector(".dv-row-fill");
   const pctEl = el.querySelector(".dv-row-pct");
@@ -1326,7 +1612,7 @@ function updateDownloadJobUI(job) {
   if (!indeterminate) {
     const pct = Math.max(0, Math.min(100, Math.round(job.percent || 0)));
     fill.style.width = `${pct}%`;
-    pctEl.textContent = job.status === "cancelling" ? "Cancelling…" : `${pct}%`;
+    pctEl.textContent = `${pct}%`;
   }
   if (detailEl) detailEl.textContent = detailText;
 }
@@ -1336,7 +1622,7 @@ function updateDownloadsBadge() {
   if (!badge) return;
   const active = state.downloads.filter(downloadJobActive).length;
   if (active > 0) {
-    badge.textContent = String(active);
+    badge.textContent = DOWNLOADS.paused ? "‖" : String(active);
     badge.classList.remove("hidden");
   } else {
     badge.classList.add("hidden");
@@ -1370,6 +1656,25 @@ function setupDownloadsManager() {
   const clearBtn = $("downloads-clear");
   if (clearBtn) clearBtn.addEventListener("click", clearFinishedDownloads);
   $("downloads-cancel-all")?.addEventListener("click", cancelAllDownloads);
+  $("downloads-retry-all")?.addEventListener("click", retryAllFailedDownloads);
+  $("downloads-pause")?.addEventListener("click", () => (DOWNLOADS.paused ? resumeAllDownloads() : pauseAllDownloads()));
+  // Back online: retries waiting out a backoff go now.
+  window.addEventListener("online", () => {
+    let woke = false;
+    for (const job of state.downloads) {
+      if (job.status === "retrying") {
+        job.retryAt = 0;
+        woke = true;
+      }
+    }
+    if (woke) pumpDownloadQueue();
+  });
+  // Keeps "Retrying in Ns" counting down while the panel is open.
+  setInterval(() => {
+    if ($("downloads-popover")?.classList.contains("open") && state.downloads.some((j) => j.status === "retrying")) {
+      renderDownloadsPanel();
+    }
+  }, 1000);
   // Top-bar button: opens the shared dependency modal in paste-text mode
   // (defined in the VAR Details dep-scan block); its downloads land in this panel.
   $("find-deps-toggle")?.addEventListener("click", () => {
@@ -1393,6 +1698,7 @@ function setupDownloadsManager() {
       }
     });
   }
+  downloadsRestore();
   renderDownloadsPanel();
   updateDownloadsBadge();
 }
@@ -9992,6 +10298,8 @@ async function depBulkDelete() {
 // Label for a dep row's action button while its download job is active.
 function depJobButtonLabel(job) {
   if (job.status === "queued") return "Queued…";
+  if (job.status === "retrying") return "Retrying…";
+  if (job.status === "pausing") return "Pausing…";
   if (job.status === "cancelling") return "Cancelling…";
   const pct = Math.max(0, Math.min(100, Math.round(job.percent || 0)));
   return pct > 0 ? `Downloading ${pct}%` : "Downloading…";
@@ -10025,6 +10333,8 @@ async function depDownloadOne(pkg, dest) {
     host: it.host,
     destDir,
     label: it.filename || pkg,
+    priority: "dependency",
+    autoDeps: true,
     onProgress: depScanSyncJob,
     onDone: (status, info) => {
       const row = DEP_SCAN.items.find((x) => x.pkg === pkg);
@@ -10097,7 +10407,7 @@ function depActiveJobs() {
 
 function depCancelDownloads() {
   const jobs = depActiveJobs();
-  for (const job of jobs.filter((j) => j.status === "queued")) cancelDownload(job.id);
+  for (const job of jobs.filter((j) => j.status === "queued" || j.status === "retrying")) cancelDownload(job.id);
   for (const job of jobs.filter((j) => j.status === "downloading")) cancelDownload(job.id);
   depRenderList();
 }
@@ -10916,6 +11226,7 @@ async function downloadVarItself() {
     host: av.host,
     destDir,
     label: filename,
+    autoDeps: true,
     onDone: (status, info) => {
       if (state.varDetails.packageId !== packageId) return; // navigated away
       if (status === "done" || status === "exists") {
@@ -16564,7 +16875,7 @@ function hubMissingDeps(detail) {
 async function hubDownloadAll(rid) {
   try {
     const detail = await hubGetDetail(String(rid));
-    hubDownload(rid, { files: null, depRefs: hubMissingDeps(detail).map((d) => d.ref) });
+    hubDownload(rid, { files: null, depRefs: hubMissingDeps(detail).map((d) => d.ref), autoDeps: true });
   } catch (e) {
     hubToast(`Download failed: ${String(e?.message || e)}`, "error");
   }
@@ -16594,7 +16905,7 @@ function hubResourceDir(rid, baseDir) {
 
 // The resource's own files go to <downloads>\<Creator>, its dependencies to
 // <downloads>\<Creator>\deps.
-function hubQueueFile(rid, { url, filename, label, host = "hub", depRef = null }, baseDir) {
+function hubQueueFile(rid, { url, filename, label, host = "hub", depRef = null, autoDeps = false }, baseDir) {
   const name = hubEnsureVar(filename);
   const stem = hubStem(name);
   if (!url || !name) return null;
@@ -16610,6 +16921,11 @@ function hubQueueFile(rid, { url, filename, label, host = "hub", depRef = null }
     destDir: depRef ? hubJoinPath(dir, "deps") : dir,
     nest: false,
     label: label || stem,
+    priority: depRef ? "dependency" : "direct",
+    // A dependency fetches what it needs in turn; the package itself only
+    // when the user asked for all of its dependencies.
+    autoDeps: Boolean(depRef) || autoDeps,
+    depsDir: hubJoinPath(dir, "deps"),
     onProgress: () => hubOnJobProgress(rid),
     onDone: (status) => hubOnJobDone(rid, stem, status),
   });
@@ -16654,7 +16970,7 @@ function hubOnJobDone(rid, stem, status) {
 // `files` — its own .var file names (null = all of them) — and `depRefs`, the
 // dependencies to fetch (resolved through detail.dependencies, then
 // findPackages). Dependencies already on disk are skipped.
-async function hubDownload(rid, { files = null, depRefs = [] } = {}) {
+async function hubDownload(rid, { files = null, depRefs = [], autoDeps = false } = {}) {
   if (!invoke) return;
   const key = String(rid);
   const existing = HUB.installs.get(key);
@@ -16685,7 +17001,7 @@ async function hubDownload(rid, { files = null, depRefs = [] } = {}) {
         const url = hubFileUrl(f);
         if (!url) continue;
         anyUrl = true;
-        if (hubQueueFile(key, { url, filename: f.filename, label: title }, destDir) != null) queued += 1;
+        if (hubQueueFile(key, { url, filename: f.filename, label: title, autoDeps }, destDir) != null) queued += 1;
       }
       if (!anyUrl) throw new Error("No download URL available");
     }
@@ -16753,7 +17069,7 @@ function hubShowInLibrary(r) {
 // Cancel every download still running or queued for a resource.
 function hubCancelDownloads(rid) {
   const active = hubInstallJobs(rid).filter(downloadJobActive);
-  for (const job of active.filter((j) => j.status === "queued")) cancelDownload(job.id);
+  for (const job of active.filter((j) => j.status === "queued" || j.status === "retrying")) cancelDownload(job.id);
   for (const job of active.filter((j) => j.status === "downloading")) cancelDownload(job.id);
 }
 
@@ -16997,6 +17313,9 @@ async function hubOnPageDownload(event) {
     destDir,
     nest: false,
     label: stem,
+    priority: dep ? "dependency" : "direct",
+    autoDeps: true,
+    depsDir: rid ? hubJoinPath(hubResourceDir(rid, baseDir), "deps") : destDir,
     onDone: (status) => {
       if (status !== "done") return;
       hubLocalAdd(stem);
