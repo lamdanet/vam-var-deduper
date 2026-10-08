@@ -55,15 +55,20 @@ release time, it fills it with the commit messages since the last release.
   files nothing can bring back. Packages with several missing files get a
   header with how many are ready, and the list filters by To do, Ready, Not
   installed or File missing. Replacement Sources stays beside the list with
-  Run Fixes at its top, the one place for it. It puts the best replacement first, lists one
-  row per package (its other copies behind "N more copies"), marks how many
-  other missing files each package covers (Use for all), and only offers
-  Apply to the same package / shown / all where that does something. The
-  missing package's details (why it's missing, Find it / Download, Explore)
-  open on request, or by themselves when there's no copy to use. The
-  database is searched when your folders have no copy, or always if you tick
-  that, putting the packages that cover the most first and offering to
-  download ones you don't have. When nothing in your folders has a file, the
+  Run Fixes at its top, the one place for it; in a narrow window it's a
+  sheet at the bottom that opens when you pick a row. It puts the best
+  replacement first, lists one line per package (its other copies behind
+  "N more copies"), says how many missing files each package covers (Use
+  for all N), and only offers Apply to the same package / shown / all where
+  that does something. The missing package's details (Find it / Download,
+  Explore, the file and what uses it) open on request. The database is
+  searched when your folders have no copy, or always if you tick that,
+  showing the five packages that cover the most first and offering to
+  download ones you don't have. Each missing file says what kind it is
+  (Morph, Script, Texture…), and the list works from the keyboard and with
+  screen readers. Writing a fixed copy no longer asks first; only fixing the
+  original does. The empty page lists the packages you checked lately and
+  the ones with missing dependencies, to start from. When nothing in your folders has a file, the
   page looks up its package's download by itself and leads with it:
   download the package and the file works as it is, with nothing to
   rewrite. The page checks again when the download finishes, keeping what
