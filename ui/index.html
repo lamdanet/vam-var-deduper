@@ -86,6 +86,10 @@
                 <span class="material-symbols-outlined">description</span>
                 <span class="sidebar-label" id="sidebar-var-details-label">VAR Details</span>
               </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="pkg-explorer">
+                <span class="material-symbols-outlined">space_dashboard</span>
+                <span class="sidebar-label">Package Explorer</span>
+              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="resource-list">
                 <span class="material-symbols-outlined">data_object</span>
                 <span class="sidebar-label" id="sidebar-resource-list-label">Resource List</span>
@@ -1561,6 +1565,9 @@
            Scans a folder of local VARs, aggregates their unique CRC set, and ranks DB
            packages by total bytes covered — the user could download those packages and
            rewire local VARs to depend on the shared resources, reclaiming duplicate bytes. -->
+      <!-- Package Explorer: one package, shown visually (setupPackageExplorer in app.js). -->
+      <section id="pkg-view" class="app-main lib-view pkg-view hidden"></section>
+
       <section id="reclaim-space-view" class="app-main reclaim-space-view hidden">
         <header class="var-details-header">
           <h1 class="var-details-title">Reclaim Space</h1>
@@ -3482,6 +3489,8 @@
             if (hubView) hubView.classList.add("hidden");
             var sourcesView = document.getElementById("sources-view");
             if (sourcesView) sourcesView.classList.add("hidden");
+            var pkgView = document.getElementById("pkg-view");
+            if (pkgView) pkgView.classList.add("hidden");
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
@@ -3495,6 +3504,9 @@
             if (route === "hub" && hubView) {
               hubView.classList.remove("hidden");
               if (window.__refreshHubView) window.__refreshHubView();
+            } else if (route === "pkg-explorer" && pkgView) {
+              pkgView.classList.remove("hidden");
+              if (window.__refreshPkgView) window.__refreshPkgView();
             } else if (route === "sources" && sourcesView) {
               sourcesView.classList.remove("hidden");
               if (window.__refreshSourcesView) window.__refreshSourcesView();
