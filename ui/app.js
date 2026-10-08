@@ -5816,11 +5816,10 @@ const PKG = {
   fileFolder: "",
   fileQuery: "",
   fileLimit: 150,
-  // Files tree: built once per listing; open folders, selected folder.
+  // Files tree: built once per listing, and its open folders.
   tree: null,
   treeFor: null,
   treeOpen: new Set(),
-  treeSel: "",
   treeLimit: new Map(),
   treeJustOpened: null,
   treeView: null,
@@ -5968,7 +5967,6 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
     tree: null,
     treeFor: null,
     treeOpen: new Set(),
-    treeSel: "",
     treeLimit: new Map(),
     treeJustOpened: null,
     treeView: null,
@@ -7138,7 +7136,6 @@ function pkgTreeHtml() {
       const hasKids = dir && (n.dirs.size || n.files.length);
       if (n.root) cls.push("is-root");
       if (dir) cls.push(open ? "is-open" : "is-closed");
-      if (PKG.treeSel && PKG.treeSel === n.path) cls.push("is-sel");
       if (n.file && PKG_IMAGE_RE.test(n.path)) cls.push("is-image");
       const label = pkgShortName(n.name, n.root ? 40 : 34);
       const meta = dir ? `${formatBytesLocal(n.bytes)} · ${n.count.toLocaleString()} file${n.count === 1 ? "" : "s"}` : formatBytesLocal(n.bytes);
@@ -7159,7 +7156,7 @@ function pkgTreeHtml() {
   const zoom = Math.round((PKG.treeView?.k ?? 1) * 100);
   return `
     <div class="pkg-tree-tools">
-      <span class="pkg-muted">Drag to move · Ctrl + wheel to zoom · click a folder to open it and list its files below</span>
+      <span class="pkg-muted">Drag to move · Ctrl + wheel to zoom · click a folder to open or close it</span>
       <div class="pkg-zoom">
         <button type="button" data-pkg-tz="out" title="Zoom out"><span class="material-symbols-outlined">remove</span></button>
         <button type="button" class="pkg-zoom-val" id="pkg-tree-zoom-val" data-pkg-tz="reset" title="Back to 100%">${zoom}%</button>
@@ -7400,7 +7397,6 @@ function pkgTreeClick(t) {
       for (const p of pkgTreeAllDirs(pkgBuildTree())) PKG.treeOpen.add(p);
     } else {
       PKG.treeOpen.clear();
-      PKG.treeSel = "";
     }
     pkgRenderFiles();
     return true;
@@ -7410,15 +7406,14 @@ function pkgTreeClick(t) {
   const path = node.getAttribute("data-pkg-tn");
   const kind = node.getAttribute("data-pkg-tn-kind");
   if (kind === "root") {
-    PKG.treeSel = "";
-  } else if (kind === "dir") {
-    if (PKG.treeOpen.has(path) && PKG.treeSel === path) {
+    return true;
+  }
+  if (kind === "dir") {
+    if (PKG.treeOpen.has(path)) {
       PKG.treeOpen.delete(path);
-      PKG.treeSel = "";
     } else {
-      if (!PKG.treeOpen.has(path)) PKG.treeJustOpened = path;
+      PKG.treeJustOpened = path;
       PKG.treeOpen.add(path);
-      PKG.treeSel = path;
     }
   } else {
     if (PKG_IMAGE_RE.test(path)) {
@@ -7442,24 +7437,23 @@ function pkgRenderFileList() {
     return;
   }
   const q = PKG.fileQuery;
-  if (pkgFileView() === "list") {
-    $("pkg-treemap")?.classList.toggle("hidden", Boolean(q));
-    if (!q) {
-      host.innerHTML = "";
-      return;
-    }
+  const fileView = pkgFileView();
+  if (fileView === "list") $("pkg-treemap")?.classList.toggle("hidden", Boolean(q));
+  // Tree and List show the files themselves; the flat list is for searching.
+  if (fileView !== "map" && !q) {
+    host.innerHTML = "";
+    return;
   }
   const rows = PKG.resources
     .filter(
       (r) =>
         (!PKG.fileFolder || pkgFolderOf(r.internal_path) === PKG.fileFolder) &&
-        (!PKG.treeSel || r.internal_path.startsWith(`${PKG.treeSel}/`)) &&
         (!q || r.internal_path.toLowerCase().includes(q)),
     )
     .sort((a, b) => Number(b.size) - Number(a.size));
   const max = Math.max(1, ...rows.slice(0, 1).map((r) => Number(r.size)));
   const visible = rows.slice(0, PKG.fileLimit);
-  const picked = PKG.fileFolder || PKG.treeSel;
+  const picked = PKG.fileFolder;
   const filter = picked
     ? `<button type="button" class="pkg-filter-pill" data-pkg-folder=""><span class="material-symbols-outlined">folder</span>${escapeHtml(picked)}<span class="material-symbols-outlined">close</span></button>`
     : "";
@@ -7764,7 +7758,6 @@ function pkgOnClick(event) {
       localStorage.setItem(PKG_TREE_STORE, fileView.getAttribute("data-pkg-fileview"));
     } catch (_e) {}
     PKG.fileFolder = "";
-    PKG.treeSel = "";
     pkgRenderFiles();
     return;
   }
@@ -7844,7 +7837,6 @@ function pkgOnClick(event) {
   if (folder) {
     const key = folder.getAttribute("data-pkg-folder") || "";
     PKG.fileFolder = PKG.fileFolder === key ? "" : key;
-    if (!key) PKG.treeSel = "";
     PKG.fileLimit = 150;
     pkgRenderFiles();
     return;

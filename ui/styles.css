@@ -16850,14 +16850,6 @@ button.pkg-bar-row:not(:disabled):hover {
   stroke-width: 3.5;
 }
 
-.pkg-tn.is-sel .pkg-tn-label {
-  fill: var(--lib-accent);
-}
-
-.pkg-tn.is-sel .pkg-tn-dot {
-  stroke-width: 4;
-}
-
 .pkg-tn.is-image {
   cursor: zoom-in;
 }
