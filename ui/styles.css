@@ -16825,3 +16825,79 @@ button.pkg-bar-row:not(:disabled):hover {
   font-size: 11px;
   color: var(--lib-text-3);
 }
+
+/* ---- Package Explorer: polish (loading note, size-map hover card, tile arrows) ---- */
+
+.pkg-treemap-skel {
+  display: grid;
+  place-items: center;
+}
+
+.pkg-loading-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lib-base) 70%, transparent);
+  color: var(--lib-text-2);
+  font-size: 12px;
+}
+
+.pkg-loading-note .material-symbols-outlined {
+  color: var(--lib-accent);
+  animation: pkg-spin 1.6s linear infinite;
+}
+
+@keyframes pkg-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pkg-tm-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 340px;
+  padding: 8px 11px;
+  border: 1px solid var(--lib-border-bright);
+  border-radius: 9px;
+  background: var(--lib-elevated);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+  color: var(--lib-text);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.pkg-tm-tip b {
+  word-break: break-all;
+}
+
+.pkg-tm-tip span {
+  color: var(--lib-text-2);
+}
+
+button.pkg-stat::after {
+  content: "arrow_forward";
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  font-family: "Material Symbols Outlined";
+  font-size: 16px;
+  line-height: 1;
+  color: var(--c);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+button.pkg-stat:hover::after,
+button.pkg-stat:focus-visible::after {
+  opacity: 1;
+  transform: none;
+}

@@ -6258,6 +6258,71 @@ function pkgScrollSpy() {
   scroll.querySelectorAll("[data-pkg-goto]").forEach((tab) => {
     tab.classList.toggle("is-active", tab.getAttribute("data-pkg-goto") === current);
   });
+  PKG.currentSec = current;
+}
+
+// Something is open over the page: its own keys win.
+function pkgOverlayOpen() {
+  return Boolean(
+    document.querySelector(".dialog-backdrop:not(.hidden)") ||
+      ($("pkg-vam-modal") && !$("pkg-vam-modal").classList.contains("hidden")) ||
+      ($("image-zoom-backdrop") && !$("image-zoom-backdrop").classList.contains("hidden")) ||
+      ($("context-menu") && !$("context-menu").classList.contains("hidden")),
+  );
+}
+
+function pkgOnKey(e) {
+  if (!pkgVisible() || !PKG.item || e.ctrlKey || e.metaKey || e.altKey || pkgOverlayOpen()) return;
+  const field = e.target.closest?.("input, textarea, select, [contenteditable]");
+  if (e.key === "/" && !field) {
+    // The search box on screen (nearest the middle when several are), else
+    // the content search.
+    const mid = window.innerHeight / 2;
+    const onScreen = ["pkg-content-search", "pkg-dep-search", "pkg-file-search"]
+      .map((id) => $(id))
+      .filter((el) => {
+        const r = el?.getBoundingClientRect();
+        return r && r.width && r.top >= 0 && r.bottom <= window.innerHeight;
+      })
+      .sort((x, y) => Math.abs(x.getBoundingClientRect().top - mid) - Math.abs(y.getBoundingClientRect().top - mid));
+    const input = onScreen[0] ?? $("pkg-content-search");
+    if (!input) return;
+    e.preventDefault();
+    const sec = input.closest("[data-pkg-sec]")?.getAttribute("data-pkg-sec");
+    if (sec && sec !== PKG.currentSec) pkgScrollTo(sec);
+    input.focus();
+    input.select();
+    return;
+  }
+  if (e.key !== "Escape") return;
+  if (field) {
+    if (field.value) {
+      field.value = "";
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    } else {
+      field.blur();
+    }
+    e.preventDefault();
+    return;
+  }
+  // Filters, one press for all of them.
+  let cleared = false;
+  if (PKG.contentCat !== "all") {
+    PKG.contentCat = "all";
+    PKG.contentLimit = 60;
+    pkgRenderContent();
+    cleared = true;
+  }
+  if (PKG.fileCat || PKG.fileFolder) {
+    pkgSetFileCat("");
+    cleared = true;
+  }
+  if (PKG.depFilter) {
+    PKG.depFilter = null;
+    pkgRenderDeps();
+    cleared = true;
+  }
+  if (cleared) e.preventDefault();
 }
 
 function pkgScrollTo(key) {
@@ -7354,7 +7419,9 @@ function pkgRenderFiles() {
   const host = $("pkg-treemap");
   if (!host || !PKG.item) return;
   if (!PKG.resources) {
-    host.innerHTML = `<div class="pkg-treemap pkg-treemap-skel"></div>`;
+    host.innerHTML = `<div class="pkg-treemap pkg-treemap-skel"><span class="pkg-loading-note"><span class="material-symbols-outlined">hourglass_top</span>Reading its files… a big package takes a few seconds</span></div>`;
+    const count = $("pkg-count-files");
+    if (count) count.textContent = "…";
     pkgRenderFileList();
     return;
   }
@@ -7422,7 +7489,9 @@ function pkgRenderFiles() {
           return `<button type="button" class="pkg-tm-tile${PKG.fileFolder && PKG.fileFolder === t.key ? " is-active" : ""}${small ? " is-small" : ""}"
               ${t.rest ? "disabled" : t.file ? `data-pkg-file="${escapeAttribute(t.key)}"` : `data-pkg-folder="${escapeAttribute(t.key)}"`}
               style="left:${(t.x / W) * 100}%;top:${(t.y / H) * 100}%;width:${(t.w / W) * 100}%;height:${(t.h / H) * 100}%;--c:${t.kind.color}"
-              title="${escapeAttribute(`${t.rest ? name : t.key}\n${formatBytesLocal(t.value)}${t.file ? "" : ` · ${t.files.toLocaleString()} files`} · ${pct.toFixed(1)}%`)}">
+              data-tip-title="${escapeAttribute(t.rest ? name : t.key)}"
+              data-tip-meta="${escapeAttribute(`${formatBytesLocal(t.value)}${t.file ? "" : ` · ${t.files.toLocaleString()} files`} · ${pct.toFixed(1)}% of the package`)}"
+              aria-label="${escapeAttribute(`${t.rest ? name : t.key}, ${formatBytesLocal(t.value)}`)}">
               ${
                 t.file && PKG_IMAGE_RE.test(t.key) && !small
                   ? `<span class="pkg-tm-img" data-thumb="${escapeAttribute(PKG.item.file_path)}" data-thumb-entry="${escapeAttribute(t.key)}"></span>`
@@ -7432,8 +7501,26 @@ function pkgRenderFiles() {
               <span class="pkg-tm-size">${escapeHtml(formatBytesLocal(t.value))}</span>
             </button>`;
         })
-        .join("")}</div>`
+        .join("")}<div class="pkg-tm-tip hidden" aria-hidden="true"></div></div>`
     : "";
+  const map = host.querySelector(".pkg-treemap");
+  const tip = map?.querySelector(".pkg-tm-tip");
+  if (map && tip) {
+    map.addEventListener("pointermove", (e) => {
+      const tile = e.target.closest?.(".pkg-tm-tile");
+      if (!tile) {
+        tip.classList.add("hidden");
+        return;
+      }
+      tip.innerHTML = `<b>${escapeHtml(tile.getAttribute("data-tip-title") || "")}</b><span>${escapeHtml(tile.getAttribute("data-tip-meta") || "")}</span>`;
+      tip.classList.remove("hidden");
+      const box = map.getBoundingClientRect();
+      const x = Math.min(e.clientX - box.left + 14, box.width - tip.offsetWidth - 6);
+      const y = e.clientY - box.top + 16 + tip.offsetHeight > box.height ? e.clientY - box.top - tip.offsetHeight - 10 : e.clientY - box.top + 16;
+      tip.style.transform = `translate(${Math.max(6, x)}px, ${Math.max(6, y)}px)`;
+    });
+    map.addEventListener("pointerleave", () => tip.classList.add("hidden"));
+  }
   libThumbWatch(host);
   pkgRenderFileList();
 }
@@ -7571,9 +7658,13 @@ function pkgTreeHtml() {
   walk(root, 0, null);
   const total = Math.max(1, root.bytes);
   const radius = (n) => (n.more ? 4 : n.file ? 3 + 6 * Math.sqrt(n.bytes / total) : 5 + 8 * Math.sqrt(n.bytes / total));
-  const X = (m) => 18 + m.depth * COL;
+  // The package's name and size sit beside its dot: the first column makes
+  // room for them, and its edges leave from the end of the label.
+  const rootLabel = Math.max(pkgShortName(root.name, 40).length * 7.6, 16 * 6.4) + 8;
+  const firstCol = Math.max(COL, Math.round(radius(root) + rootLabel + 70));
+  const X = (m) => 18 + (m.depth ? firstCol + (m.depth - 1) * COL : 0);
   const Y = (m) => 20 + m.y * ROW;
-  const W = 18 + maxDepth * COL + 300;
+  const W = 18 + (maxDepth ? firstCol + (maxDepth - 1) * COL : 0) + 300;
   const H = row * ROW + 16;
   PKG.treeDims = { W, H };
   PKG.treePos = new Map(nodes.filter((m) => !m.n.file && !m.n.more).map((m) => [m.n.path, { x: X(m), y: Y(m) }]));
@@ -7582,7 +7673,7 @@ function pkgTreeHtml() {
   const edgeSvg = edges
     .map((m) => {
       const p = m.parent;
-      const x1 = X(p) + radius(p.n);
+      const x1 = X(p) + radius(p.n) + (p.n.root ? rootLabel + 10 : 0);
       const y1 = Y(p);
       const x2 = X(m) - radius(m.n);
       const y2 = Y(m);
@@ -8932,6 +9023,8 @@ function setupPackageExplorer() {
   const view = pkgView();
   if (!view) return;
   view.addEventListener("click", pkgOnClick);
+  // Capture: it must see Esc before an image viewer's own handler closes it.
+  window.addEventListener("keydown", pkgOnKey, true);
   // The mouse's back button and Alt+Left step back through explored packages,
   // as in a browser.
   window.addEventListener("mouseup", (e) => {
