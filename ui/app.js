@@ -6010,6 +6010,7 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
       if (token !== PKG.token) return;
       PKG.resources = Array.isArray(rows) ? rows : [];
       pkgRenderAll();
+      pkgLoadShared({ auto: true });
     })
     .catch((e) => {
       if (token !== PKG.token) return;
@@ -6088,7 +6089,6 @@ function pkgRender() {
         <div id="pkg-hero"></div>
         <div id="pkg-stats" class="pkg-stats"></div>
         <div id="pkg-composition" class="pkg-two"></div>
-        <div id="pkg-largest" class="pkg-largest"></div>
       </section>
       <section class="pkg-sec" data-pkg-sec="content">
         <div class="pkg-sec-head">
@@ -6154,7 +6154,6 @@ function pkgRenderAll() {
   pkgRenderHero();
   pkgRenderStats();
   pkgRenderComposition();
-  pkgRenderLargest();
   pkgRenderContent();
   pkgRenderDeps();
   pkgRenderFiles();
@@ -6790,9 +6789,22 @@ function pkgRenderContent() {
   const prefs = PKG.prefs;
   const truncated = PKG.details.content_truncated ? `<p class="pkg-muted">Only the first ${content.length.toLocaleString()} items are listed.</p>` : "";
   if (PKG.contentCat === "all" && !q && content.length > PKG_SHELF_AFTER && cats.length > 1) {
+    // A category with one or two items doesn't get a whole row of its own.
+    const tiny = cats.filter((c) => c.n < 3);
+    const shelves = tiny.length > 1 ? [...cats.filter((c) => c.n >= 3), { key: "", label: "Others", n: tiny.reduce((a, c) => a + c.n, 0), keys: tiny.map((c) => c.key), names: tiny.map((c) => c.label) }] : cats;
     host.innerHTML =
-      cats
+      shelves
         .map((cat) => {
+          if (!cat.key) {
+            const rows = content.filter((c) => cat.keys.includes(c.category));
+            return `<div class="pkg-shelf">
+                <div class="pkg-shelf-head" style="--c:var(--lib-text-2)">
+                  <span class="material-symbols-outlined">category</span>
+                  <b>Others</b><small>${escapeHtml(cat.names.join(", "))}</small>
+                </div>
+                <div class="pkg-gallery">${rows.map((c) => pkgTileHtml(c, item, prefs)).join("")}</div>
+              </div>`;
+          }
           const rows = content.filter((c) => c.category === cat.key);
           const hue = LIB_TYPE_HUE[cat.key] ?? 200;
           return `<div class="pkg-shelf">
@@ -6991,6 +7003,17 @@ function pkgRenderDeps() {
             title="${filter === label ? "Show every dependency" : `Show only: ${escapeAttribute(label.toLowerCase())}`}">
             <span class="pkg-legend-dot" style="background:${c.color}"></span>${c.n} ${escapeHtml(label.toLowerCase())}</button>`,
       ),
+      deps.length + users.length > 1
+        ? `<div class="pkg-seg pkg-seg-sm">${[
+            ["map", "hub", "Map"],
+            ["list", "format_list_bulleted", "List"],
+          ]
+            .map(
+              ([key, icon, label]) => `<button type="button" class="pkg-seg-btn${pkgDepView() === key ? " is-active" : ""}" data-pkg-depview="${key}">
+                <span class="material-symbols-outlined">${icon}</span>${label}</button>`,
+            )
+            .join("")}</div>`
+        : "",
       deps.length + users.length > PKG_DEP_CAP
         ? `<div class="pkg-search pkg-search-sm"><span class="material-symbols-outlined">search</span>
              <input id="pkg-dep-search" type="text" placeholder="Find a package" spellcheck="false" value="${escapeAttribute(PKG.depQuery ?? "")}" /></div>`
@@ -7005,6 +7028,57 @@ function pkgRenderDeps() {
     });
   }
   pkgRenderDepGraph();
+}
+
+const PKG_DEP_VIEW_STORE = "pkg.depView";
+
+// Map unless chosen otherwise; a long list starts as a list.
+function pkgDepView() {
+  try {
+    const v = localStorage.getItem(PKG_DEP_VIEW_STORE);
+    if (v === "map" || v === "list") return v;
+  } catch (_e) {}
+  return (PKG.details?.dependencies?.length ?? 0) + (PKG.details?.used_by?.length ?? 0) > 40 ? "list" : "map";
+}
+
+function pkgDepRowHtml(id, { sub = "", color, mark = "", status = "", open = "", openId = "", size = null, missing = "" }) {
+  const p = pkgIdParts(id);
+  const attrs = open
+    ? ` data-pkg-open="${escapeAttribute(open)}" data-pkg-open-id="${escapeAttribute(openId)}" data-pkg-open-size="${Number(size) || 0}"`
+    : missing
+      ? ` data-pkg-missing="${escapeAttribute(missing)}"`
+      : "";
+  return `<div class="pkg-dep-row${open || missing ? " is-link" : ""}" style="--c:${color}"${attrs}${
+    open || missing ? ` tabindex="0" role="button"` : ""
+  } title="${escapeAttribute(id)}">
+      <span class="pkg-dep-mark">${mark}</span>
+      <span class="pkg-dep-name"><b>${escapeHtml(p.name)}</b><small>${escapeHtml([p.creator, p.ver].filter(Boolean).join(" · "))}${escapeHtml(sub)}</small></span>
+      ${status ? `<span class="pkg-dep-status">${escapeHtml(status)}</span>` : ""}
+      <span class="pkg-dep-size">${size ? escapeHtml(formatBytesLocal(Number(size))) : ""}</span>
+      ${missing ? `<span class="material-symbols-outlined pkg-dep-act" title="Add a download link">add_link</span>` : open ? `<span class="material-symbols-outlined pkg-dep-act">chevron_right</span>` : ""}
+    </div>`;
+}
+
+function pkgDepListHtml(deps, users) {
+  const needs = deps
+    .map((d) => {
+      const loadable = d.status === "found" || d.status === "other_version";
+      return pkgDepRowHtml(d.id, {
+        sub: d.status === "other_version" && d.resolved_id ? ` → v${d.resolved_id.split(".").pop()}` : "",
+        color: pkgDepColor(d),
+        mark: d.offloaded && loadable ? "↓" : { found: "✓", other_version: "≈", indexed: "?", missing: "✕" }[d.status] ?? "✕",
+        status: pkgDepLabel(d),
+        open: loadable ? d.file_path : "",
+        openId: d.resolved_id || d.id,
+        size: d.size_bytes,
+        missing: d.status === "missing" || d.status === "indexed" ? d.id : "",
+      });
+    })
+    .join("");
+  const usedBy = users.map((u) => pkgDepRowHtml(u.package_id, { color: PKG_DEP_COLORS.user, open: u.file_path, openId: u.package_id })).join("");
+  return `
+    ${deps.length ? `<div class="pkg-dep-group"><div class="pkg-dep-head">Needs <small>${deps.length}</small></div><div class="pkg-dep-grid">${needs}</div></div>` : ""}
+    ${users.length ? `<div class="pkg-dep-group"><div class="pkg-dep-head">Used by <small>${users.length}</small></div><div class="pkg-dep-grid">${usedBy}</div></div>` : ""}`;
 }
 
 function pkgRenderDepGraph() {
@@ -7026,7 +7100,9 @@ function pkgRenderDepGraph() {
       ${
         empty
           ? `<div class="pkg-empty-mini"><span class="material-symbols-outlined">search_off</span>No package matches.</div>`
-          : pkgDepGraphSvg(deps, users, { left: expand.left ? Infinity : PKG_DEP_CAP, right: expand.right ? Infinity : PKG_DEP_CAP })
+          : pkgDepView() === "list"
+            ? pkgDepListHtml(deps, users)
+            : pkgDepGraphSvg(deps, users, { left: expand.left ? Infinity : PKG_DEP_CAP, right: expand.right ? Infinity : PKG_DEP_CAP })
       }
       ${
         depsBytes
@@ -7135,6 +7211,10 @@ function pkgRenderFiles() {
     const focus = PKG.treeJustOpened;
     host.innerHTML = pkgTreeHtml();
     pkgTreeSetup(focus);
+    if (PKG.treeFitWidth) {
+      PKG.treeFitWidth = false;
+      pkgTreeFitWidth($("pkg-tree-view"));
+    }
     pkgRenderFileList();
     return;
   }
@@ -7501,6 +7581,19 @@ function pkgTreeFit(vp) {
   pkgTreeApply(vp);
 }
 
+// Wide trees shrink to the box's width, never below half size (names stay
+// readable); the top stays in view.
+function pkgTreeFitWidth(vp) {
+  if (!vp || !PKG.treeDims) return;
+  const { W } = PKG.treeDims;
+  if (W <= vp.clientWidth - 20) return;
+  const v = pkgTreeViewState();
+  v.k = Math.max(0.5, (vp.clientWidth - 40) / W);
+  v.tx = 20;
+  v.ty = 20;
+  pkgTreeApply(vp);
+}
+
 function pkgTreeZoomButton(action) {
   const vp = $("pkg-tree-view");
   if (!vp) return;
@@ -7801,50 +7894,9 @@ function pkgSetFileCat(key) {
   if (PKG.fileCat && pkgFileRows().length <= 150) {
     PKG.treeAutoExpand = true;
   }
+  PKG.treeFitWidth = Boolean(PKG.fileCat);
   pkgRenderFileCats();
   pkgRenderFiles();
-}
-
-// ---- Overview: largest files ----------------------------------------------------------
-
-function pkgRenderLargest() {
-  const host = $("pkg-largest");
-  if (!host || !PKG.item) return;
-  const res = PKG.resources;
-  if (!res) {
-    host.innerHTML = `<div class="pkg-card"><h3>Largest files</h3>${pkgSkeleton(3)}</div>`;
-    return;
-  }
-  if (res.length < 2) {
-    host.innerHTML = "";
-    return;
-  }
-  const total = res.reduce((s, r) => s + Number(r.size || 0), 0) || 1;
-  const top = [...res].sort((a, b) => Number(b.size) - Number(a.size)).slice(0, 8);
-  const max = Math.max(1, Number(top[0].size));
-  const share = top.reduce((s, r) => s + Number(r.size), 0) / total;
-  host.innerHTML = `
-    <div class="pkg-card">
-      <div class="pkg-card-head">
-        <h3>Largest files <small>these ${top.length} are ${Math.round(share * 100)}% of its size</small></h3>
-        <button type="button" class="pkg-mini-btn" data-pkg-act="all-by-size"><span class="material-symbols-outlined">sort</span>All files by size</button>
-      </div>
-      <div class="pkg-big-list">${top
-        .map((r) => {
-          const path = r.internal_path;
-          const slash = path.lastIndexOf("/");
-          const cat = pkgFileCatOf(path);
-          const image = PKG_IMAGE_RE.test(path);
-          return `<button type="button" class="pkg-big-row${image ? " is-image" : ""}" data-pkg-bigfile="${escapeAttribute(path)}" title="${escapeAttribute(path)}">
-              <span class="pkg-big-icon" style="--c:${cat.color}"><span class="material-symbols-outlined">${cat.icon}</span></span>
-              <span class="pkg-big-name"><b>${escapeHtml(path.slice(slash + 1))}</b><small>${escapeHtml(slash >= 0 ? path.slice(0, slash) : "")}</small></span>
-              <span class="pkg-big-cat" style="--c:${cat.color}">${escapeHtml(cat.label)}</span>
-              <span class="pkg-bar-track"><span class="pkg-bar-fill" style="width:${Math.max(2, (Number(r.size) / max) * 100).toFixed(1)}%;background:${cat.color}"></span></span>
-              <span class="pkg-big-size">${escapeHtml(formatBytesLocal(Number(r.size)))}</span>
-            </button>`;
-        })
-        .join("")}</div>
-    </div>`;
 }
 
 function pkgRenderFileList() {
@@ -7994,10 +8046,13 @@ function pkgRenderShared() {
   libThumbWatch(host);
 }
 
-async function pkgLoadShared() {
+async function pkgLoadShared({ auto = false } = {}) {
   const item = PKG.item;
   const res = (PKG.resources ?? []).filter((r) => Number(r.size) >= 4096);
   if (!item || !invoke) return;
+  // Only when the index holds packages (an empty one would say "nothing
+  // shared"), and not for thousands of files nobody asked to compare.
+  if (auto && (res.length > 400 || !(state.varPackagesItems ?? []).some((it) => it.indexed))) return;
   const token = PKG.token;
   PKG.shared = { loading: true };
   pkgRenderShared();
@@ -8046,7 +8101,7 @@ async function pkgLoadShared() {
     };
   } catch (e) {
     if (token !== PKG.token) return;
-    PKG.shared = { error: `Couldn't compare: ${String(e?.message || e)}. Build the database first (Database page).` };
+    PKG.shared = auto ? null : { error: `Couldn't compare: ${String(e?.message || e)}. Build the database first (Database page).` };
   }
   pkgRenderShared();
 }
@@ -8139,15 +8194,6 @@ function pkgRunAction(act, event) {
       return;
     case "shared":
       pkgLoadShared();
-      return;
-    case "all-by-size":
-      // The size map lists every file, largest first.
-      try {
-        localStorage.setItem(PKG_TREE_STORE, "map");
-      } catch (_e) {}
-      PKG.fileFolder = "";
-      pkgRenderFiles();
-      pkgScrollTo("files");
       return;
     case "more":
       // The page-wide click handler closes menus: keep this click from it.
@@ -8248,6 +8294,14 @@ function pkgOnClick(event) {
     pkgOpen(id ? { file_path: fp, package_id: id, size_bytes: size } : fp);
     return;
   }
+  const depView = t.closest?.("[data-pkg-depview]");
+  if (depView) {
+    try {
+      localStorage.setItem(PKG_DEP_VIEW_STORE, depView.getAttribute("data-pkg-depview"));
+    } catch (_e) {}
+    pkgRenderDeps();
+    return;
+  }
   const depFilter = t.closest?.("[data-pkg-depfilter]");
   if (depFilter) {
     const label = depFilter.getAttribute("data-pkg-depfilter");
@@ -8258,20 +8312,6 @@ function pkgOnClick(event) {
   const fileCat = t.closest?.("[data-pkg-filecat]");
   if (fileCat) {
     pkgSetFileCat(fileCat.getAttribute("data-pkg-filecat"));
-    return;
-  }
-  const bigFile = t.closest?.("[data-pkg-bigfile]");
-  if (bigFile) {
-    const path = bigFile.getAttribute("data-pkg-bigfile");
-    if (PKG_IMAGE_RE.test(path)) {
-      pkgZoomEntry(path);
-      return;
-    }
-    const input = $("pkg-file-search");
-    if (input) input.value = path;
-    PKG.fileQuery = path.toLowerCase();
-    pkgRenderFileList();
-    pkgScrollTo("files");
     return;
   }
   const group = t.closest?.("[data-pkg-share-group]");
@@ -8376,6 +8416,18 @@ function setupPackageExplorer() {
   const view = pkgView();
   if (!view) return;
   view.addEventListener("click", pkgOnClick);
+  view.addEventListener(
+    "wheel",
+    (e) => {
+      const row = e.target.closest?.(".pkg-chips-row");
+      if (!row || e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || row.scrollWidth <= row.clientWidth) return;
+      const before = row.scrollLeft;
+      row.scrollLeft += e.deltaY;
+      // At either end the page scrolls on.
+      if (row.scrollLeft !== before) e.preventDefault();
+    },
+    { passive: false },
+  );
   // Graph and tree nodes and picture cards act like buttons from the keyboard.
   view.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
