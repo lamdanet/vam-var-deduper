@@ -213,7 +213,7 @@ where
 
             // Emit progress at most once per 0.1% of file consumed (and never
             // more often than every 25k lines on huge manifests).
-            if lines_total % 25_000 == 0 {
+            if lines_total.is_multiple_of(25_000) {
                 let pct = (bytes_consumed as f64 / total_bytes as f64).min(1.0);
                 let bucket = (pct * PROGRESS_BUCKET_RESOLUTION as f64) as i32;
                 if bucket != last_emitted_bucket {

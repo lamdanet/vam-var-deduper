@@ -720,7 +720,7 @@ fn execute_external_target_var_only_changes_that_var() {
     assert!(output_dir.join("changed").join("ExternalDrop.var").exists());
     assert!(!output_dir.join("changed").join("KeepA.var").exists());
     assert_eq!(
-        fs::read(&input_dir.join("DropB.var")).expect("read input DropB"),
+        fs::read(input_dir.join("DropB.var")).expect("read input DropB"),
         fs::read(&external_var_path).expect("read external DropB")
     );
 
@@ -2978,7 +2978,7 @@ fn missing_resources_detects_non_ascii_package_id_ref() {
     let scene = serde_json::json!({
         "atoms": [{
             "id": "ClothingItem",
-            "clothing": "Anonymous.VAMÃ§ÂÂµÃ¦Â¢Â¦-Ã¦ËœÂ¥Ã¥ÂºÂ­Ã©â€ºÂª.1:/Custom/Hair/a.vam"
+            "clothing": "Anonymous.VAMÃ§ÂÂµÃ¦Â¢Â¦-Ã¦ËœÂ¥Ã¥ÂºÂ\u{AD}Ã©â€ºÂª.1:/Custom/Hair/a.vam"
         }]
     });
     let scene_bytes = serde_json::to_vec(&scene).expect("serialize scene");
@@ -2990,7 +2990,7 @@ fn missing_resources_detects_non_ascii_package_id_ref() {
 
     // The CJK-named package is present on disk but does NOT carry the
     // referenced resource (mirrors a post-dedup-redirect state).
-    write_test_var(&input_dir.join("Anonymous.VAMÃ§ÂÂµÃ¦Â¢Â¦-Ã¦ËœÂ¥Ã¥ÂºÂ­Ã©â€ºÂª.1.var"), &[]);
+    write_test_var(&input_dir.join("Anonymous.VAMÃ§ÂÂµÃ¦Â¢Â¦-Ã¦ËœÂ¥Ã¥ÂºÂ\u{AD}Ã©â€ºÂª.1.var"), &[]);
 
     let scanned = scan_directory_with_target_with_progress(&input_dir, &[], None, |_, _| {})
         .expect("scan should succeed");
@@ -3001,7 +3001,7 @@ fn missing_resources_detects_non_ascii_package_id_ref() {
     let cjk_ref = broken
         .iter()
         .find(|b| {
-            b.ref_pkg == "Anonymous.VAMÃ§ÂÂµÃ¦Â¢Â¦-Ã¦ËœÂ¥Ã¥ÂºÂ­Ã©â€ºÂª.1"
+            b.ref_pkg == "Anonymous.VAMÃ§ÂÂµÃ¦Â¢Â¦-Ã¦ËœÂ¥Ã¥ÂºÂ\u{AD}Ã©â€ºÂª.1"
                 && b.ref_path.as_deref() == Some("Custom/Hair/a.vam")
         })
         .expect("CJK-named pkg ref must be collected and surfaced as broken");
@@ -4576,9 +4576,8 @@ fn normal_depth_scopes_organize_to_top_level() {
 
     let (cands, _) = candidates_and_refs_at(&[&dir], ScanDepth::TopLevelOnly);
     let out = cands.iter().filter(|c| !c.in_scope).count();
-    assert_eq!(
+    assert!(
         crate::packages::out_of_scope_note(out).is_some(),
-        true,
         "the skip is disclosed when subfolder packages exist",
     );
     assert!(crate::packages::out_of_scope_note(0).is_none());
@@ -4656,10 +4655,10 @@ fn default_walk_stays_recursive() {
     write_sized_var(&dir.join("sub").join("Nested.Pkg.1.var"), 10);
 
     // The two entry points every non-VAR-Packages caller reaches.
-    let found = crate::utils::collect_var_files_multi(&[dir.clone()]).expect("walk");
+    let found = crate::utils::collect_var_files_multi(std::slice::from_ref(&dir)).expect("walk");
     assert_eq!(found.len(), 2, "collect_var_files_multi still recurses");
 
-    let found = crate::utils::collect_var_files_by_root(&[dir.clone()]).expect("walk");
+    let found = crate::utils::collect_var_files_by_root(std::slice::from_ref(&dir)).expect("walk");
     assert_eq!(found.len(), 2, "collect_var_files_by_root still recurses");
 
     fs::remove_dir_all(&dir).expect("cleanup");

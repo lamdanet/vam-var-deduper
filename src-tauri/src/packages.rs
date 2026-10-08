@@ -1290,7 +1290,7 @@ use tauri::State;
 
 use crate::{
     db::Db,
-    models::{AppState, PackagePlan, ProgressPayload, TaskHandle},
+    models::{AppState, PackagePlan, ProgressPayload, TaskHandle, TaskMap},
     tasks::{load_known_package_ids, new_progress_payload, set_task_progress},
 };
 
@@ -1299,14 +1299,7 @@ pub(crate) fn begin_task(
     state: &AppState,
     phase: &str,
     message: &str,
-) -> Result<
-    (
-        u64,
-        Arc<Mutex<HashMap<u64, ProgressPayload>>>,
-        Arc<AtomicBool>,
-    ),
-    String,
-> {
+) -> Result<(u64, TaskMap, Arc<AtomicBool>), String> {
     let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
     state
         .tasks
@@ -1625,6 +1618,15 @@ fn resolve_roots(input_dir: &str, additional: Option<Vec<String>>) -> Result<Vec
 ///
 /// `read_refs` is only set for Clean Duplicates: Organize needs no archive
 /// reads at all, and a full-library decompress is minutes on a big collection.
+/// What `gather_candidates` found: the packages, each package's references
+/// (or why they couldn't be read), and notes for the user.
+type GatheredCandidates = (
+    Vec<PackageCandidate>,
+    HashMap<PathBuf, Result<VarRefs, String>>,
+    Vec<String>,
+);
+
+#[allow(clippy::too_many_arguments)] // the scan's inputs plus the task's progress/cancel state
 fn gather_candidates(
     roots: &[PathBuf],
     known_ids: &HashSet<String>,
@@ -1634,14 +1636,7 @@ fn gather_candidates(
     task_id: u64,
     phase: &str,
     cancel: &Arc<AtomicBool>,
-) -> Result<
-    (
-        Vec<PackageCandidate>,
-        HashMap<PathBuf, Result<VarRefs, String>>,
-        Vec<String>,
-    ),
-    String,
-> {
+) -> Result<GatheredCandidates, String> {
     // ALWAYS recursive, whatever the depth. Normal mode narrows what may be
     // ACTED ON (`in_scope` below), never what the dependency check can see —
     // VAM loads a subfolder scene regardless of how the user chose to browse, so
@@ -1690,7 +1685,7 @@ fn gather_candidates(
                 }
                 let result = read_var_refs(&entry.path, deep);
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                if n % 25 == 0 || n == total {
+                if n.is_multiple_of(25) || n == total {
                     set_task_progress(
                         tasks,
                         task_id,

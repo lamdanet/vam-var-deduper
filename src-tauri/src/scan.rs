@@ -30,6 +30,9 @@ struct ScanWorkerEvent {
     package: Result<PreparedPackage>,
 }
 
+// Nearly every outcome is Loaded, so boxing it (clippy's suggestion) would add
+// an allocation per package to save space only on the rare Skipped.
+#[allow(clippy::large_enum_variant)]
 enum ScanOutcome {
     Loaded(PreparedPackage),
     Skipped { file_name: String, reason: String },
@@ -97,7 +100,7 @@ fn is_vaj_null_texture_value(raw: &str) -> bool {
         return true;
     }
     let basename = trimmed
-        .rsplit(|c: char| c == '/' || c == '\\')
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or("");
     basename.eq_ignore_ascii_case("NULL")
@@ -602,8 +605,7 @@ where
     // independent. `packages` is a shared &BTreeMap read concurrently by
     // workers (Sync). Output order will differ from serial; the sort_by at
     // the end of this phase canonicalizes it.
-    let resource_index_vec: Vec<((u64, u32), Vec<(String, usize)>)> =
-        resource_index.into_iter().collect();
+    let resource_index_vec: Vec<_> = resource_index.into_iter().collect();
     let mut duplicate_groups: Vec<DuplicateGroup> = {
         use rayon::prelude::*;
         resource_index_vec

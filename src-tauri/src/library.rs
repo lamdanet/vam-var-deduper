@@ -1151,7 +1151,7 @@ pub(crate) fn get_var_package_details(
     }
     details
         .used_by
-        .sort_by(|a, b| a.package_id.to_lowercase().cmp(&b.package_id.to_lowercase()));
+        .sort_by_key(|a| a.package_id.to_lowercase());
 
     // Anything not in the folder may still be known to the database index.
     if !unresolved.is_empty() {

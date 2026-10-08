@@ -285,7 +285,7 @@ pub(crate) fn resolve_pkg_entry<'a>(pkg: &str, scan: &'a ScannedData) -> Option<
         let Some(n) = crate::naming::package_version(id) else {
             continue;
         };
-        if best.map_or(true, |(b, _)| n > b) {
+        if best.is_none_or(|(b, _)| n > b) {
             best = Some((n, prepared));
         }
     }
@@ -431,7 +431,7 @@ fn find_local_candidates(
                 if pkg_id == broken_pkg {
                     continue;
                 }
-                let size_match = expected_size.map_or(true, |want| want == resource.size);
+                let size_match = expected_size.is_none_or(|want| want == resource.size);
                 if size_match {
                     crc_matches.push(resource.clone());
                 }
@@ -449,7 +449,7 @@ fn find_local_candidates(
             }
             let is_crc_match = expected_crc32.is_some()
                 && expected_crc32 == resource.crc32
-                && expected_size.map_or(true, |want| want == resource.size);
+                && expected_size.is_none_or(|want| want == resource.size);
             if is_crc_match {
                 continue;
             }

@@ -112,7 +112,8 @@ pub(crate) fn scan_target_var_for_external_refs(
     // Resolve source-var bytes per group, opening each source archive once.
     // The scan was already partitioned so the same pkg_id with multiple file
     // paths is legitimate; resolve_pkg_entry picks the canonical one.
-    let mut by_pkg: BTreeMap<String, Vec<((String, String), ExternalRef)>> = BTreeMap::new();
+    type RefsByPkg = BTreeMap<String, Vec<((String, String), ExternalRef)>>;
+    let mut by_pkg: RefsByPkg = BTreeMap::new();
     for (key, ext_ref) in refs {
         by_pkg.entry(key.0.clone()).or_default().push((key, ext_ref));
     }

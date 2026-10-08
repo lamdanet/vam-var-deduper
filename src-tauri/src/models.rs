@@ -1535,3 +1535,7 @@ pub(crate) struct OffloadFailure {
     pub(crate) file_path: String,
     pub(crate) error: String,
 }
+
+/// Every running task's progress by task id, shared between the UI's polling
+/// and the task's worker thread.
+pub(crate) type TaskMap = Arc<Mutex<HashMap<u64, ProgressPayload>>>;

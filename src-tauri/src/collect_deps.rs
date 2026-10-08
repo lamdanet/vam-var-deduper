@@ -36,7 +36,7 @@ use walkdir::WalkDir;
 use crate::{
     models::{
         AppState, CollectDepCopyResult, CollectDepItem, CollectDepsCopyResponse,
-        CollectDepsScanResponse, ProgressPayload, TaskHandle, VarPackagesFolderCache,
+        CollectDepsScanResponse, TaskHandle, TaskMap, VarPackagesFolderCache,
     },
     naming,
     packages::{
@@ -134,7 +134,7 @@ fn walk_vars(
         while let Some(next) = walker.next() {
             let Ok(entry) = next else { continue };
             visited += 1;
-            if visited % 512 == 0 {
+            if visited.is_multiple_of(512) {
                 if cancel.load(Ordering::SeqCst) {
                     return None;
                 }
@@ -838,8 +838,6 @@ pub(crate) fn run_collect_deps_copy(
 // ----------------------------------------------------------------------------
 // Tauri commands + task wiring
 // ----------------------------------------------------------------------------
-
-type TaskMap = Arc<Mutex<HashMap<u64, ProgressPayload>>>;
 
 fn finish_scan_task(
     tasks: &TaskMap,
