@@ -5835,7 +5835,7 @@ const PKG_SECTIONS = [
   { key: "content", label: "Content", icon: "photo_library" },
   { key: "deps", label: "Dependencies", icon: "account_tree" },
   { key: "files", label: "Files", icon: "folder_zip" },
-  { key: "shared", label: "Shared", icon: "join_inner" },
+  { key: "shared", label: "Overlap", icon: "join_inner" },
 ];
 
 // What a package's bytes are made of, by file type. First match wins.
@@ -6120,7 +6120,7 @@ function pkgRender() {
       </section>
       <section class="pkg-sec" data-pkg-sec="shared">
         <div class="pkg-sec-head">
-          <h2><span class="material-symbols-outlined">join_inner</span>Shared with other packages</h2>
+          <h2><span class="material-symbols-outlined">join_inner</span>Overlap with other packages</h2>
         </div>
         <div id="pkg-shared"></div>
       </section>
@@ -6621,8 +6621,23 @@ function pkgRenderComposition() {
   } else if (!PKG.resources.length) {
     sizeCard = `<div class="pkg-card"><h3>What's inside</h3><p class="pkg-muted">${escapeHtml(PKG.resError || "No files.")}</p></div>`;
   } else {
-    const kinds = pkgKindTotals();
-    const total = kinds.reduce((s, k) => s + k.value, 0);
+    const all = pkgKindTotals();
+    const total = all.reduce((s, k) => s + k.value, 0);
+    // Slivers under 1% become one "Other" row instead of a list of 0%s.
+    const big = all.filter((k) => k.value >= total * 0.01);
+    const small = all.filter((k) => k.value < total * 0.01);
+    const kinds = small.length > 1 || (small.length === 1 && !big.length)
+      ? [
+          ...big,
+          {
+            ...PKG_KINDS[PKG_KINDS.length - 1],
+            label: small.length === 1 ? small[0].label : `Other (${small.map((k) => k.label.toLowerCase()).join(", ")})`,
+            value: small.reduce((a, k) => a + k.value, 0),
+            files: small.reduce((a, k) => a + k.files, 0),
+          },
+        ]
+      : all;
+    const pct = (v) => (!total ? "0" : v / total < 0.01 ? "<1" : String(Math.round((v / total) * 100)));
     const legend = kinds
       .map(
         (k) => `<div class="pkg-legend-row" title="${k.files.toLocaleString()} files">
@@ -6630,7 +6645,7 @@ function pkgRenderComposition() {
           <span class="material-symbols-outlined" style="color:${k.color}">${k.icon}</span>
           <span class="pkg-legend-label">${escapeHtml(k.label)}</span>
           <span class="pkg-legend-val">${escapeHtml(formatBytesLocal(k.value))}</span>
-          <span class="pkg-legend-pct">${total ? Math.round((k.value / total) * 100) : 0}%</span>
+          <span class="pkg-legend-pct">${pct(k.value)}%</span>
         </div>`,
       )
       .join("");
@@ -6653,12 +6668,11 @@ function pkgRenderComposition() {
     const content = d?.content ?? [];
     const cats = LIB_CATEGORIES.map((cat) => ({ ...cat, n: content.filter((c) => c.category === cat.key).length })).filter((c) => c.n);
     const max = Math.max(1, ...cats.map((c) => c.n));
+    // Morphs count in the hundreds next to a handful of scenes: they get their
+    // own line, not a bar on the same scale.
     const morphs = Number(d?.morph_count || 0);
-    const rows = [
-      ...cats.map((c) => ({ key: c.key, label: c.label, n: c.n, icon: PKG_CAT_ICONS[c.key], color: `hsl(${LIB_TYPE_HUE[c.key] ?? 200} 70% 60%)` })),
-      ...(morphs ? [{ key: "", label: "Morphs", n: morphs, icon: "blur_on", color: "#a78bfa" }] : []),
-    ];
-    const top = Math.max(max, morphs, 1);
+    const rows = cats.map((c) => ({ key: c.key, label: c.label, n: c.n, icon: PKG_CAT_ICONS[c.key], color: `hsl(${LIB_TYPE_HUE[c.key] ?? 200} 70% 60%)` }));
+    const top = max;
     contentCard = `<div class="pkg-card">
         <h3>Content <small>${Number(d?.item_count || 0).toLocaleString()} items</small></h3>
         ${
@@ -6672,10 +6686,14 @@ function pkgRenderComposition() {
                     <span class="pkg-bar-val">${r.n.toLocaleString()}</span>
                   </button>`,
                 )
-                .join("")}</div>`
-            : `<div class="pkg-empty-mini"><span class="material-symbols-outlined">inventory_2</span>No scenes, looks, poses, clothing or hair — it's a ${
-                escapeHtml((LIB_TYPE_BY_KEY[d?.pkg_type] ?? libType(PKG.item)).label.toLowerCase())
-              } package of other files.</div>`
+                .join("")}</div>${
+                morphs ? `<p class="pkg-content-more"><span class="material-symbols-outlined">blur_on</span>Plus ${pkgCount(morphs, "morph", "morphs")}</p>` : ""
+              }`
+            : morphs
+              ? `<div class="pkg-empty-mini"><span class="material-symbols-outlined">blur_on</span>${pkgCount(morphs, "morph", "morphs")}, and no scenes, looks, poses, clothing or hair.</div>`
+              : `<div class="pkg-empty-mini"><span class="material-symbols-outlined">inventory_2</span>No scenes, looks, poses, clothing or hair — it's a ${
+                  escapeHtml((LIB_TYPE_BY_KEY[d?.pkg_type] ?? libType(PKG.item)).label.toLowerCase())
+                } package of other files.</div>`
         }
       </div>`;
   }
@@ -6739,7 +6757,9 @@ function pkgRenderContent() {
             c.category === "scene" ? "scene" : "look"
           }"><span class="material-symbols-outlined">person_add</span></button>`
         : "";
-      return `<div class="pkg-tile${hidden ? " is-hidden" : ""}" title="${escapeAttribute(c.path)}"${c.thumb ? ` data-pkg-zoom-entry="${escapeAttribute(c.thumb)}"` : ""}>
+      return `<div class="pkg-tile${hidden ? " is-hidden" : ""}" title="${escapeAttribute(c.path)}"${
+        c.thumb ? ` data-pkg-zoom-entry="${escapeAttribute(c.thumb)}" tabindex="0" role="button" aria-label="${escapeAttribute(`${c.name}: view picture`)}"` : ""
+      }>
           ${thumb}
             ${c.thumb ? "" : `<span class="pkg-tile-glyph material-symbols-outlined">${PKG_CAT_ICONS[c.category] ?? "draft"}</span>`}
             <span class="pkg-tile-cat" style="--c:hsl(${hue} 70% 60%)"><span class="material-symbols-outlined">${PKG_CAT_ICONS[c.category] ?? "draft"}</span></span>
@@ -6781,35 +6801,63 @@ function pkgShortName(id, max = 30) {
 
 // Used-by packages on the left, this package in the middle, what it needs on
 // the right; curves coloured by where each dependency stands.
+// "Creator.Name_Here.12" -> name "Name Here", creator, "v12"; .latest and
+// .minN references keep their word.
+function pkgIdParts(id) {
+  const parts = String(id ?? "").split(".");
+  const creator = parts.length > 1 ? parts[0] : "";
+  let rest = parts.slice(creator ? 1 : 0);
+  let ver = "";
+  const last = rest[rest.length - 1] ?? "";
+  if (rest.length > 1 && /^(\d+|latest|min\d+)$/i.test(last)) {
+    ver = /^\d+$/.test(last) ? `v${last}` : last.toLowerCase();
+    rest = rest.slice(0, -1);
+  }
+  return { name: rest.join(".").replaceAll("_", " ") || String(id ?? ""), creator, ver };
+}
+
 function pkgDepGraphSvg(deps, users) {
   const CAP = 18;
+  const twoLine = (id) => {
+    const p = pkgIdParts(id);
+    return { name: pkgShortName(p.name, 28), sub: [p.creator, p.ver].filter(Boolean).join(" · ") };
+  };
   const left = users.slice(0, CAP).map((u) => ({
-    label: pkgShortName(u.package_id),
+    ...twoLine(u.package_id),
     title: u.package_id,
     open: u.file_path,
+    openId: u.package_id,
     color: PKG_DEP_COLORS.user,
+    mark: "",
   }));
-  if (users.length > CAP) left.push({ label: `+ ${users.length - CAP} more`, color: "var(--lib-text-3)", more: true });
-  const right = deps.slice(0, CAP).map((d) => ({
-    label: pkgShortName(d.status === "other_version" && d.resolved_id ? `${d.id} → ${d.resolved_id.split(".").pop()}` : d.id),
-    title: `${d.id}\n${pkgDepLabel(d)}${d.resolved_id && d.resolved_id !== d.id ? ` — ${d.resolved_id}` : ""}`,
-    open: d.status === "found" || d.status === "other_version" ? d.file_path : "",
-    openId: d.resolved_id || d.id,
-    size: d.size_bytes,
-    color: pkgDepColor(d),
-    dashed: d.status === "missing" || d.status === "indexed",
-    missingId: d.status === "missing" || d.status === "indexed" ? d.id : "",
-  }));
-  if (deps.length > CAP) right.push({ label: `+ ${deps.length - CAP} more`, color: "var(--lib-text-3)", more: true });
-  const ROW = 34;
-  const W = 980;
+  if (users.length > CAP) left.push({ name: `+ ${users.length - CAP} more`, sub: "show in VAR Packages", color: "var(--lib-text-3)", more: true });
+  const right = deps.slice(0, CAP).map((d) => {
+    const lines = twoLine(d.id);
+    if (d.status === "other_version" && d.resolved_id) lines.sub = `${lines.sub} → v${d.resolved_id.split(".").pop()}`;
+    return {
+      ...lines,
+      title: `${d.id}\n${pkgDepLabel(d)}${d.resolved_id && d.resolved_id !== d.id ? ` — ${d.resolved_id}` : ""}`,
+      open: d.status === "found" || d.status === "other_version" ? d.file_path : "",
+      openId: d.resolved_id || d.id,
+      size: d.size_bytes,
+      color: pkgDepColor(d),
+      // Status is in the shape too, not only the colour.
+      mark: d.offloaded && (d.status === "found" || d.status === "other_version") ? "↓" : { found: "✓", other_version: "≈", indexed: "?", missing: "✕" }[d.status] ?? "✕",
+      dashed: d.status === "missing" || d.status === "indexed",
+      missingId: d.status === "missing" || d.status === "indexed" ? d.id : "",
+    };
+  });
+  if (deps.length > CAP) right.push({ name: `+ ${deps.length - CAP} more`, sub: "show in VAR Packages", color: "var(--lib-text-3)", more: true });
+  const ROW = 44;
   const NODE_W = 250;
-  const rows = Math.max(left.length, right.length, 3);
-  const H = rows * ROW + 24;
   const CENTER_W = 220;
-  // Only one side has nodes: the package moves toward the empty one.
-  const cx = !left.length && right.length ? W * 0.3 : left.length && !right.length ? W * 0.7 : W / 2;
-  const cy = H / 2;
+  const both = left.length && right.length;
+  // One-sided maps are narrower instead of half empty.
+  const W = both ? 980 : 700;
+  const rows = Math.max(left.length, right.length, 2);
+  const H = rows * ROW + 28;
+  const cx = both ? W / 2 : left.length ? W - CENTER_W / 2 - 24 : CENTER_W / 2 + 24;
+  const cy = H / 2 + 6;
   const colY = (list, i) => cy - ((list.length - 1) * ROW) / 2 + i * ROW;
   const leftX = 12;
   const rightX = W - NODE_W - 12;
@@ -6821,17 +6869,20 @@ function pkgDepGraphSvg(deps, users) {
   };
   const node = (n, x, y, side) => {
     const attrs = n.open
-      ? ` data-pkg-open="${escapeAttribute(n.open)}" data-pkg-open-id="${escapeAttribute(n.openId || n.title || "")}" data-pkg-open-size="${Number(n.size) || 0}"`
+      ? ` data-pkg-open="${escapeAttribute(n.open)}" data-pkg-open-id="${escapeAttribute(n.openId || "")}" data-pkg-open-size="${Number(n.size) || 0}"`
       : n.missingId
         ? ` data-pkg-missing="${escapeAttribute(n.missingId)}"`
         : n.more
           ? ` data-pkg-act="${side === "left" ? "users-more" : "deps-more"}"`
           : "";
-    return `<g class="pkg-gnode${n.open || n.missingId || n.more ? " is-link" : ""}"${attrs}>
-        <title>${escapeHtml(n.title || n.label)}</title>
-        <rect x="${x}" y="${y - 13}" width="${NODE_W}" height="26" rx="13" class="pkg-gnode-box" style="stroke:${n.color}"${n.dashed ? ` stroke-dasharray="4 3"` : ""}/>
-        <circle cx="${x + 14}" cy="${y}" r="5" fill="${n.color}"/>
-        <text x="${x + 26}" y="${y + 4}" class="pkg-gnode-text">${escapeHtml(n.label)}</text>
+    const link = n.open || n.missingId || n.more;
+    return `<g class="pkg-gnode${link ? " is-link" : ""}"${attrs}${link ? ` tabindex="0" role="button" aria-label="${escapeAttribute(n.title || n.name)}"` : ""}>
+        <title>${escapeHtml(n.title || n.name)}</title>
+        <rect x="${x}" y="${y - 18}" width="${NODE_W}" height="36" rx="12" class="pkg-gnode-box" style="stroke:${n.color}"${n.dashed ? ` stroke-dasharray="4 3"` : ""}/>
+        <circle cx="${x + 17}" cy="${y}" r="8" fill="${n.color}"/>
+        ${n.mark ? `<text x="${x + 17}" y="${y + 3.5}" text-anchor="middle" class="pkg-gnode-mark">${n.mark}</text>` : ""}
+        <text x="${x + 32}" y="${y - 2}" class="pkg-gnode-text">${escapeHtml(n.name)}</text>
+        ${n.sub ? `<text x="${x + 32}" y="${y + 12}" class="pkg-gnode-sub">${escapeHtml(pkgShortName(n.sub, 36))}</text>` : ""}
       </g>`;
   };
   const edges = [
@@ -6850,10 +6901,11 @@ function pkgDepGraphSvg(deps, users) {
     </g>`;
   const none = [!left.length ? "Nothing in your library uses it" : "", !right.length ? "Needs no other package" : ""].filter(Boolean);
   const labels = `
-    ${left.length ? `<text x="${leftX}" y="10" class="pkg-gcol">USED BY ${users.length}</text>` : ""}
-    ${right.length ? `<text x="${rightX}" y="10" class="pkg-gcol">NEEDS ${deps.length}</text>` : ""}
+    ${left.length ? `<text x="${leftX}" y="12" class="pkg-gcol">USED BY ${users.length}</text>` : ""}
+    ${right.length ? `<text x="${rightX}" y="12" class="pkg-gcol">NEEDS ${deps.length}</text>` : ""}
     ${none.map((t, i) => `<text x="${cx}" y="${cy + 46 + i * 18}" text-anchor="middle" class="pkg-gnone">${t}</text>`).join("")}`;
-  return `<svg class="pkg-graph" viewBox="0 0 ${W} ${H}" width="100%" style="max-height:${H}px">${edges}${labels}${nodes}${center}</svg>`;
+  const tall = Math.max(H, cy + 46 + none.length * 18);
+  return `<svg class="pkg-graph" viewBox="0 0 ${W} ${tall}" width="${W}" style="max-width:100%;height:auto">${edges}${labels}${nodes}${center}</svg>`;
 }
 
 function pkgRenderDeps() {
@@ -7161,7 +7213,7 @@ function pkgTreeAllDirs(n, out = []) {
 function pkgTreeHtml() {
   const root = pkgBuildTree();
   const ROW = 28;
-  const COL = 230;
+  const COL = 260;
   const nodes = [];
   const edges = [];
   let row = 0;
@@ -7233,13 +7285,17 @@ function pkgTreeHtml() {
       const title = n.root
         ? `${n.name}\n${meta}`
         : `${n.path}\n${meta}${dir && hasKids ? `\nClick to ${open ? "close" : "open"}` : ""}`;
-      return `<g class="${cls.join(" ")}" data-pkg-tn="${escapeAttribute(n.path)}" data-pkg-tn-kind="${n.root ? "root" : dir ? "dir" : "file"}"
+      return `<g class="${cls.join(" ")}" data-pkg-tn="${escapeAttribute(n.path)}" data-pkg-tn-kind="${n.root ? "root" : dir ? "dir" : "file"}" tabindex="0" role="button" aria-label="${escapeAttribute(title.split("\n").slice(0, 2).join(", "))}"
             transform="translate(${X(m)},${Y(m)})" style="--c:${n.root ? "var(--lib-accent)" : kind.color}">
           <title>${escapeHtml(title)}</title>
           <circle r="${r + 6}" class="pkg-tn-hit"/>
           <circle r="${r}" class="pkg-tn-dot"/>
           ${dir && hasKids && !n.root ? `<text class="pkg-tn-sign" y="3.5">${open ? "−" : "+"}</text>` : ""}
-          <text x="${r + 8}" y="4" class="pkg-tn-label">${escapeHtml(label)}<tspan class="pkg-tn-size" dx="8">${escapeHtml(meta)}</tspan></text>
+          ${
+            n.root
+              ? `<text x="${r + 8}" y="-2" class="pkg-tn-label">${escapeHtml(label)}</text><text x="${r + 8}" y="13" class="pkg-tn-label pkg-tn-size">${escapeHtml(meta)}</text>`
+              : `<text x="${r + 8}" y="4" class="pkg-tn-label">${escapeHtml(label)}<tspan class="pkg-tn-size" dx="8">${escapeHtml(meta)}</tspan></text>`
+          }
         </g>`;
     })
     .join("");
@@ -7259,6 +7315,13 @@ function pkgTreeHtml() {
     </div>
     <div class="pkg-card pkg-tree-view" id="pkg-tree-view" style="height:${Math.round(Math.min(620, Math.max(240, H + 24)))}px">
       <svg class="pkg-tree" width="100%" height="100%"><g id="pkg-tree-g">${edgeSvg}${nodeSvg}</g></svg>
+      <svg class="pkg-minimap hidden" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        ${nodes
+          .filter((m) => !m.n.more)
+          .map((m) => `<rect x="${X(m)}" y="${Y(m) - H / 300}" width="${m.n.file ? W / 70 : W / 40}" height="${Math.max(H / 150, 1)}" fill="${m.n.root ? "var(--lib-accent)" : pkgTreeKind(m.n).color}"/>`)
+          .join("")}
+        <rect class="pkg-minimap-view" x="0" y="0" width="0" height="0"/>
+      </svg>
     </div>`;
 }
 
@@ -7292,6 +7355,39 @@ function pkgTreeApply(vp) {
   vp.querySelector("#pkg-tree-g")?.setAttribute("transform", `translate(${v.tx.toFixed(1)},${v.ty.toFixed(1)}) scale(${v.k.toFixed(3)})`);
   const label = $("pkg-tree-zoom-val");
   if (label) label.textContent = `${Math.round(v.k * 100)}%`;
+  // Zoomed out, sizes go first, then file names; folder names grow so they
+  // stay readable.
+  vp.classList.toggle("is-z-mid", v.k < 0.75);
+  vp.classList.toggle("is-z-far", v.k < 0.45);
+  vp.style.setProperty("--tz-l", v.k < 0.75 ? String(Math.min(2.6, 0.75 / v.k)) : "1");
+  pkgMinimapSync(vp);
+}
+
+// The corner map: every node as a dot, the visible part as a frame. Shown
+// only when the tree doesn't fit.
+function pkgMinimapSync(vp) {
+  const mm = vp.querySelector(".pkg-minimap");
+  const frame = vp.querySelector(".pkg-minimap-view");
+  if (!mm || !frame) return;
+  const v = pkgTreeViewState();
+  const { W, H } = PKG.treeDims ?? { W: 1, H: 1 };
+  const fits = W * v.k <= vp.clientWidth && H * v.k <= vp.clientHeight;
+  mm.classList.toggle("hidden", fits);
+  frame.setAttribute("x", String(-v.tx / v.k));
+  frame.setAttribute("y", String(-v.ty / v.k));
+  frame.setAttribute("width", String(vp.clientWidth / v.k));
+  frame.setAttribute("height", String(vp.clientHeight / v.k));
+}
+
+function pkgMinimapJump(vp, mm, e) {
+  const box = mm.getBoundingClientRect();
+  const { W, H } = PKG.treeDims ?? { W: 1, H: 1 };
+  const v = pkgTreeViewState();
+  const x = ((e.clientX - box.left) / box.width) * W;
+  const y = ((e.clientY - box.top) / box.height) * H;
+  v.tx = vp.clientWidth / 2 - x * v.k;
+  v.ty = vp.clientHeight / 2 - y * v.k;
+  pkgTreeApply(vp);
 }
 
 function pkgTreeZoomAt(vp, factor, mx, my) {
@@ -7366,6 +7462,19 @@ function pkgTreeSetup(focus) {
   );
   let drag = null;
   let moved = false;
+  const mm = vp.querySelector(".pkg-minimap");
+  if (mm) {
+    let mmDown = false;
+    mm.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      mmDown = true;
+      mm.setPointerCapture?.(e.pointerId);
+      pkgMinimapJump(vp, mm, e);
+    });
+    mm.addEventListener("pointermove", (e) => mmDown && pkgMinimapJump(vp, mm, e));
+    mm.addEventListener("pointerup", () => (mmDown = false));
+    mm.addEventListener("click", (e) => e.stopPropagation());
+  }
   vp.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
     const v = pkgTreeViewState();
@@ -7601,21 +7710,46 @@ function pkgRenderShared() {
   const total = (PKG.resources ?? []).reduce((acc, r) => acc + Number(r.size || 0), 0) || 1;
   const exact = ((total - s.bytes) / total) * 100;
   const uniquePct = exact > 99 && exact < 100 ? exact.toFixed(1) : exact > 0 && exact < 1 ? exact.toFixed(1) : Math.round(exact);
-  const top = s.packages.slice(0, 10);
-  const max = Math.max(1, ...top.map((p) => p.bytes));
-  const bars = top
-    .map(
-      (p) => `<button type="button" class="pkg-share-row" data-pkg-open="${escapeAttribute(p.file_path)}" data-pkg-open-id="${escapeAttribute(p.package_id)}" title="${escapeAttribute(`${p.package_id}\n${p.files} shared files`)}">
-          ${libThumbHtml(p.file_path, libGradient(p.package_id), "pkg-share-thumb")}</div>
-          <span class="pkg-share-text">
-            <span class="pkg-share-name">${escapeHtml(libTitle(p))}<small>${escapeHtml(deriveCreatorFromPackageId(p.package_id) ?? "")}${
-              libVersion(p) ? ` · v${escapeHtml(libVersion(p))}` : ""
-            }</small></span>
-            <span class="pkg-bar-track"><span class="pkg-bar-fill" style="width:${Math.max(2, (p.bytes / max) * 100).toFixed(1)}%"></span></span>
-          </span>
-          <span class="pkg-share-val">${escapeHtml(formatBytesLocal(p.bytes))}<small>${p.files} file${p.files === 1 ? "" : "s"}</small></span>
-        </button>`,
-    )
+  const top = s.groups.slice(0, 10);
+  const max = Math.max(1, ...top.map((g) => g.bytes));
+  const sub = (p) => `${escapeHtml(deriveCreatorFromPackageId(p.package_id) ?? "")}${libVersion(p) ? ` · v${escapeHtml(libVersion(p))}` : ""}`;
+  const bar = (g) => `<span class="pkg-bar-track"><span class="pkg-bar-fill" style="width:${Math.max(2, (g.bytes / max) * 100).toFixed(1)}%"></span></span>`;
+  const val = (g) => `<span class="pkg-share-val">${escapeHtml(formatBytesLocal(g.bytes))}<small>${pkgCount(g.files, "file", "files")}</small></span>`;
+  const rows = top
+    .map((g) => {
+      const [first] = g.packages;
+      if (g.packages.length === 1) {
+        return `<button type="button" class="pkg-share-row" data-pkg-open="${escapeAttribute(first.file_path)}" data-pkg-open-id="${escapeAttribute(first.package_id)}" title="${escapeAttribute(first.package_id)}">
+            ${libThumbHtml(first.file_path, "var(--lib-elevated)", "pkg-share-thumb")}</div>
+            <span class="pkg-share-text"><span class="pkg-share-name">${escapeHtml(libTitle(first))}<small>${sub(first)}</small></span>${bar(g)}</span>
+            ${val(g)}
+          </button>`;
+      }
+      // Packages sharing exactly the same files are one row.
+      const open = s.open.has(g.key);
+      const members = open
+        ? `<div class="pkg-share-members">${g.packages
+            .slice(0, 200)
+            .map(
+              (p) => `<button type="button" class="pkg-share-member" data-pkg-open="${escapeAttribute(p.file_path)}" data-pkg-open-id="${escapeAttribute(p.package_id)}">
+                  ${escapeHtml(libTitle(p))}<small>${sub(p)}</small></button>`,
+            )
+            .join("")}${g.packages.length > 200 ? `<span class="pkg-muted">+ ${g.packages.length - 200} more</span>` : ""}</div>`
+        : "";
+      return `<div class="pkg-share-group${open ? " is-open" : ""}">
+          <button type="button" class="pkg-share-row" data-pkg-share-group="${escapeAttribute(g.key)}" aria-expanded="${open}">
+            <span class="pkg-share-stack">${g.packages
+              .slice(0, 3)
+              .map((p) => `${libThumbHtml(p.file_path, "var(--lib-elevated)", "pkg-share-thumb")}</div>`)
+              .join("")}</span>
+            <span class="pkg-share-text"><span class="pkg-share-name">${pkgCount(g.packages.length, "package", "packages")} share the same ${pkgCount(g.files, "file", "files")}<small>${escapeHtml(libTitle(first))}, ${escapeHtml(libTitle(g.packages[1]))}${
+              g.packages.length > 2 ? "…" : ""
+            }</small></span>${bar(g)}</span>
+            ${val(g)}
+            <span class="material-symbols-outlined pkg-share-chev">${open ? "expand_less" : "expand_more"}</span>
+          </button>${members}
+        </div>`;
+    })
     .join("");
   pkgSetCount("shared", s.packages.length);
   host.innerHTML = `
@@ -7631,12 +7765,12 @@ function pkgRenderShared() {
         <div class="pkg-legend">
           <div class="pkg-legend-row"><span class="pkg-legend-dot" style="background:var(--lib-success)"></span><span class="pkg-legend-label">Only here</span><span class="pkg-legend-val">${escapeHtml(formatBytesLocal(total - s.bytes))}</span></div>
           <div class="pkg-legend-row"><span class="pkg-legend-dot" style="background:var(--lib-warning)"></span><span class="pkg-legend-label">Also in other packages</span><span class="pkg-legend-val">${escapeHtml(formatBytesLocal(s.bytes))}</span></div>
-          <p class="pkg-muted">${s.files.toLocaleString()} of its files have a copy in ${s.packages.length.toLocaleString()} other package${s.packages.length === 1 ? "" : "s"}. Files under 4 KB aren't compared.</p>
+          <p class="pkg-muted">${s.files.toLocaleString()} of its files have a copy in ${pkgCount(s.packages.length, "other package", "other packages")}. Files under 4 KB aren't compared.</p>
         </div>
       </div>
       <div class="pkg-card">
-        <h3>Shares the most with</h3>
-        ${bars || `<div class="pkg-empty-mini"><span class="material-symbols-outlined">verified</span>No other indexed package has its files.</div>`}
+        <h3>Overlaps the most with</h3>
+        ${rows || `<div class="pkg-empty-mini"><span class="material-symbols-outlined">verified</span>No other indexed package has its files.</div>`}
       </div>
     </div>`;
   libThumbWatch(host);
@@ -7669,14 +7803,29 @@ async function pkgLoadShared() {
         seen.add(ref.package_id);
         let p = packages.get(ref.package_id);
         if (!p) {
-          p = { package_id: ref.package_id, file_path: ref.file_path, bytes: 0, files: 0 };
+          p = { package_id: ref.package_id, file_path: ref.file_path, bytes: 0, files: 0, crcs: [] };
           packages.set(ref.package_id, p);
         }
         p.bytes += Number(r.size);
         p.files += 1;
+        p.crcs.push(Number(r.crc32) >>> 0);
       }
     }
-    PKG.shared = { bytes, files, packages: [...packages.values()].sort((a, b) => b.bytes - a.bytes) };
+    const list = [...packages.values()].sort((a, b) => b.bytes - a.bytes || a.package_id.localeCompare(b.package_id));
+    const groups = new Map();
+    for (const p of list) {
+      const key = p.crcs.sort((a, b) => a - b).join(",");
+      const g = groups.get(key) ?? { key, bytes: p.bytes, files: p.files, packages: [] };
+      g.packages.push(p);
+      groups.set(key, g);
+    }
+    PKG.shared = {
+      bytes,
+      files,
+      packages: list,
+      groups: [...groups.values()].sort((a, b) => b.bytes - a.bytes || b.packages.length - a.packages.length),
+      open: new Set(),
+    };
   } catch (e) {
     if (token !== PKG.token) return;
     PKG.shared = { error: `Couldn't compare: ${String(e?.message || e)}. Build the database first (Database page).` };
@@ -7865,6 +8014,14 @@ function pkgOnClick(event) {
     pkgOpen(id ? { file_path: fp, package_id: id, size_bytes: size } : fp);
     return;
   }
+  const group = t.closest?.("[data-pkg-share-group]");
+  if (group && PKG.shared?.open) {
+    const key = group.getAttribute("data-pkg-share-group");
+    if (PKG.shared.open.has(key)) PKG.shared.open.delete(key);
+    else PKG.shared.open.add(key);
+    pkgRenderShared();
+    return;
+  }
   const missing = t.closest?.("[data-pkg-missing]");
   if (missing) {
     sourceOpen({ packageId: missing.getAttribute("data-pkg-missing") });
@@ -7959,6 +8116,14 @@ function setupPackageExplorer() {
   const view = pkgView();
   if (!view) return;
   view.addEventListener("click", pkgOnClick);
+  // Graph and tree nodes and picture cards act like buttons from the keyboard.
+  view.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const target = e.target;
+    if (!(target instanceof Element) || target.getAttribute("role") !== "button" || target.tagName === "BUTTON") return;
+    e.preventDefault();
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
   window.__refreshPkgView = () => {
     if (!PKG.item) {
       pkgRender();

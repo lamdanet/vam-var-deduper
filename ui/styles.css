@@ -15728,7 +15728,7 @@ button.pkg-stat:hover {
 
 .pkg-stat-sub {
   font-size: 11px;
-  color: var(--lib-text-3);
+  color: var(--lib-text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -17148,4 +17148,182 @@ button.pkg-bar-row:not(:disabled):hover {
 .pkg-icon-act.is-on .material-symbols-outlined {
   color: var(--lib-warning);
   font-variation-settings: "FILL" 1;
+}
+
+/* ---- Package Explorer: review polish ---- */
+
+.pkg-content-more {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--lib-border);
+  color: var(--lib-text-2);
+  font-size: 12px;
+}
+
+.pkg-content-more .material-symbols-outlined {
+  color: #a78bfa;
+}
+
+.pkg-gnode-sub {
+  fill: var(--lib-text-3);
+  font-size: 10.5px;
+}
+
+.pkg-gnode-mark {
+  fill: #0b0d12;
+  font-size: 10px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.pkg-graph {
+  margin: 0 auto;
+}
+
+.pkg-gnode:focus,
+.pkg-tn:focus,
+.pkg-tile:focus {
+  outline: none;
+}
+
+.pkg-gnode:focus-visible .pkg-gnode-box {
+  stroke-width: 3;
+  fill: var(--lib-hover);
+}
+
+.pkg-tn:focus-visible .pkg-tn-dot {
+  stroke-width: 4.5;
+}
+
+.pkg-tn:focus-visible .pkg-tn-label {
+  fill: var(--lib-accent);
+}
+
+.pkg-tile:focus-visible .pkg-tile-thumb {
+  outline: 2px solid var(--lib-accent);
+  outline-offset: 2px;
+}
+
+.pkg-tile:focus-within .pkg-tile-tools {
+  opacity: 1;
+}
+
+.pkg-tree-view {
+  --tz-l: 1;
+}
+
+.pkg-tree-view.is-z-mid .pkg-tn-size {
+  display: none;
+}
+
+.pkg-tree-view.is-z-far .pkg-tn[data-pkg-tn-kind="file"] .pkg-tn-label,
+.pkg-tree-view.is-z-far .pkg-tn.is-more .pkg-tn-label {
+  display: none;
+}
+
+.pkg-tree-view.is-z-mid .pkg-tn[data-pkg-tn-kind="dir"] .pkg-tn-label,
+.pkg-tree-view.is-z-mid .pkg-tn.is-root .pkg-tn-label {
+  font-size: calc(12px * var(--tz-l));
+  stroke-width: calc(5px * var(--tz-l));
+}
+
+.pkg-minimap {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 150px;
+  height: 110px;
+  border: 1px solid var(--lib-border-bright);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lib-base) 85%, transparent);
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.pkg-minimap-view {
+  fill: color-mix(in srgb, var(--lib-accent) 18%, transparent);
+  stroke: var(--lib-accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.pkg-share-stack {
+  position: relative;
+  display: flex;
+  width: 40px;
+  height: 40px;
+}
+
+.pkg-share-stack .pkg-share-thumb {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--lib-surface);
+}
+
+.pkg-share-stack .pkg-share-thumb:nth-child(1) {
+  left: 0;
+  top: 0;
+  z-index: 3;
+}
+
+.pkg-share-stack .pkg-share-thumb:nth-child(2) {
+  left: 6px;
+  top: 6px;
+  z-index: 2;
+}
+
+.pkg-share-stack .pkg-share-thumb:nth-child(3) {
+  left: 12px;
+  top: 12px;
+  z-index: 1;
+}
+
+.pkg-share-group .pkg-share-row {
+  grid-template-columns: 40px minmax(0, 1fr) 90px 20px;
+}
+
+.pkg-share-chev {
+  color: var(--lib-text-3);
+}
+
+.pkg-share-group.is-open {
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--lib-elevated) 50%, transparent);
+}
+
+.pkg-share-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 2px 8px 10px 56px;
+}
+
+.pkg-share-member {
+  padding: 3px 9px;
+  border: 1px solid var(--lib-border);
+  border-radius: 999px;
+  background: var(--lib-surface);
+  color: var(--lib-text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pkg-share-member small {
+  margin-left: 5px;
+  color: var(--lib-text-3);
+}
+
+.pkg-share-member:hover {
+  border-color: var(--lib-border-bright);
+}
+
+.pkg-tn.is-root .pkg-tn-size {
+  font-size: 11px;
+  font-weight: 400;
 }
