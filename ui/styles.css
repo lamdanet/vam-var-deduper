@@ -19933,6 +19933,18 @@ button.pkg-stat:focus-visible::after {
   font-size: 12.5px;
 }
 
+/* A copy missing part of its bundle: shown, not choosable (old page rule). */
+.fm-cand-row.is-disabled {
+  cursor: not-allowed;
+}
+.fm-cand-row.is-disabled > :not(.cv-incomplete) {
+  opacity: 0.55;
+}
+.cv-incomplete {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+
 .fm-best.cv-warn-box {
   border-color: color-mix(in srgb, var(--accent-warn) 45%, var(--line));
 }

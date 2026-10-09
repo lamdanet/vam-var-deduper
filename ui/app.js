@@ -13894,6 +13894,8 @@ const CV = {
   start: null,
   // also offer packages only the database knows (not installed)
   withDb: false,
+  // copies left out: their creator is blocked (as on the old page)
+  hiddenCopies: 0,
 };
 const CV_RECENT = "cv.recent";
 function cvView() {
@@ -14011,10 +14013,19 @@ async function cvScan() {
     cvRenderProgress();
     const report = await invoke("clean_var_candidates", { inputDir: addon, additionalInputDirs: extra, targetVarPath: CV.target, includeDb: CV.withDb });
     if (token !== CV.token) return;
-    CV.report = report ?? { items: [] };
+    const raw = report ?? { items: [] };
+    let hidden = 0;
+    const items = [];
+    for (const it of raw.items ?? []) {
+      const copies = (it.copies ?? []).filter((c) => !isCreatorBlockedForPackage(c.package_id));
+      hidden += (it.copies ?? []).length - copies.length;
+      if (copies.length) items.push({ ...it, copies });
+    }
+    CV.report = { ...raw, items };
+    CV.hiddenCopies = hidden;
     CV.configOpen = false;
-    const keys = new Set(cvItems().map((i) => i.key));
-    CV.picks = new Map([...CV.picks].filter(([k]) => keys.has(k)));
+    const byKey = new Map(cvItems().map((i) => [i.key, i]));
+    CV.picks = new Map([...CV.picks].filter(([k, p]) => (byKey.get(k)?.copies ?? []).some((c) => c.package_id === p.pkg && cvUsable(c))));
     cvRecentAdd(CV.target, cvItems().length ? `${pkgCount(cvItems().length, "file", "files")} with copies` : "nothing to clean");
     if (!cvItems().some((i) => i.key === CV.selFile)) CV.selFile = cvItems()[0]?.key ?? null;
   } catch (e) {
@@ -14034,6 +14045,17 @@ function cvItems() {
   return CV.report?.items ?? [];
 }
 
+// A copy whose bundle lacks a member (.vaj/.vab, .vmb) can't be pointed at:
+// the old page's rule.
+function cvUsable(c) {
+  return !(c?.incomplete ?? []).length;
+}
+
+// Favourite package 2, favourite creator 1 (the old page's Favorite Source).
+function cvFav(pkg) {
+  return isPackageFavorite(pkg) ? 2 : isCreatorFavoriteForPackage(pkg) ? 1 : 0;
+}
+
 // The packages with copies of the package's files, worked out once per check.
 let cvMemo = { report: undefined };
 function cvPackages() {
@@ -14041,13 +14063,14 @@ function cvPackages() {
   const map = new Map();
   for (const item of cvItems()) {
     for (const c of item.copies ?? []) {
+      if (!cvUsable(c)) continue;
       if (!map.has(c.package_id)) {
         map.set(c.package_id, { pkg: c.package_id, file: c.file_path, installed: c.installed, dep: c.already_dependency, items: [] });
       }
       map.get(c.package_id).items.push({ item, copy: c });
     }
   }
-  const rank = (p) => (p.dep ? 0 : 1) * 4 + (p.installed ? 0 : 2) + (fmPref(p.pkg) === 1 ? 0 : 1) + (fmPref(p.pkg) === -1 ? 8 : 0);
+  const rank = (p) => (p.dep ? 0 : 1) * 4 + (p.installed ? 0 : 2) + (fmPref(p.pkg) === 1 || cvFav(p.pkg) ? 0 : 1) + (fmPref(p.pkg) === -1 ? 8 : 0);
   const pkgs = [...map.values()]
     .map((p) => ({ ...p, bytes: p.items.reduce((n, x) => n + Number(x.item.size ?? 0), 0) }))
     .sort((a, b) => rank(a) - rank(b) || b.bytes - a.bytes || b.items.length - a.items.length);
@@ -14060,12 +14083,32 @@ function cvPkg(pkg) {
   return cvMemo.byPkg.get(pkg) ?? null;
 }
 
-// The copy a file is best pointed at when nothing is chosen: one the
-// package already depends on, installed, one you prefer, not one you avoid.
+// The copy a file is best pointed at when nothing is chosen: installed, not
+// one you avoid, one the package already depends on, a favourite (package,
+// then creator, as the old page's Favorite Source), one you prefer. Never a
+// copy whose bundle lacks a member.
 function cvSuggest(item) {
-  const copies = item.copies ?? [];
-  const score = (c) => (c.already_dependency ? 0 : 4) + (c.installed ? 0 : 16) + (fmPref(c.package_id) === 1 ? 0 : 1) + (fmPref(c.package_id) === -1 ? 8 : 0);
-  return [...copies].sort((a, b) => score(a) - score(b))[0] ?? null;
+  const key = (c) => [c.installed ? 0 : 1, fmPref(c.package_id) === -1 ? 1 : 0, c.already_dependency ? 0 : 1, 2 - cvFav(c.package_id), fmPref(c.package_id) === 1 ? 0 : 1];
+  const cmp = (a, b) => {
+    const x = key(a);
+    const y = key(b);
+    for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
+    return 0;
+  };
+  return (item.copies ?? []).filter(cvUsable).sort(cmp)[0] ?? null;
+}
+
+// Unchosen files with a copy to suggest (the old page's Auto Target).
+function cvOpenSuggestions() {
+  return cvItems()
+    .filter((i) => !CV.picks.has(i.key))
+    .map((item) => ({ item, copy: cvSuggest(item) }))
+    .filter((x) => x.copy);
+}
+
+// Installed, usable, already a dependency.
+function cvInDep(c) {
+  return c.already_dependency && c.installed && cvUsable(c);
 }
 
 function cvTotals() {
@@ -14120,16 +14163,19 @@ async function cvApply() {
   }
   const t = cvTotals();
   const name = libTitle(CV.item);
-  if (t.absent.size) {
+  if (t.absent.size || !backup) {
     const names = [...t.absent].map((p) => pkgIdParts(p).name).join(", ");
-    const ok = await showAppConfirm(`${name} will depend on ${pkgCount(t.absent.size, "package", "packages")} you don't have (${names}): it won't work until you download ${t.absent.size === 1 ? "it" : "them"}. Clean anyway?`);
-    if (!ok) return;
-  } else if (!backup) {
-    const ok = await showAppConfirm(`Clean ${name} without a backup?`);
+    const parts = [
+      t.absent.size ? `${name} will depend on ${pkgCount(t.absent.size, "package", "packages")} you don't have (${names}): it won't work until you download ${t.absent.size === 1 ? "it" : "them"}.` : "",
+      backup ? "" : "No backup of the original will be kept.",
+    ].filter(Boolean);
+    const ok = await showAppConfirm(`${parts.join(" ")} Clean ${name} anyway?`);
     if (!ok) return;
   }
   const keepMap = {};
   for (const [key, p] of CV.picks) keepMap[key] = `${p.pkg}:${p.path}`;
+  const token = CV.token;
+  const target = CV.target;
   CV.applying = true;
   cvRenderStrip();
   let done = null;
@@ -14149,6 +14195,12 @@ async function cvApply() {
   } finally {
     CV.applying = false;
     cvRender();
+  }
+  if (done && token !== CV.token) {
+    // Another package was opened meanwhile: say so, don't show it there.
+    showToast(`Cleaned ${name}: ${formatBytesLocal(Number(done.removed_bytes ?? 0))} smaller.`, "success", 8000);
+    cvRecentAdd(target, "cleaned");
+    return;
   }
   if (done) {
     CV.lastFix = done;
@@ -14415,23 +14467,31 @@ function cvRenderSummary() {
   const self = escapeHtml(cvSelfName());
   // Installed ones only: pointing at a dependency that isn't installed still
   // leaves the package needing a download.
-  const inDep = items.filter((i) => (i.copies ?? []).some((c) => c.already_dependency && c.installed));
-  const onlyDb = items.filter((i) => (i.copies ?? []).every((c) => !c.installed));
+  const inDep = items.filter((i) => (i.copies ?? []).some(cvInDep));
+  const onlyDb = items.filter((i) => (i.copies ?? []).filter(cvUsable).every((c) => !c.installed) && (i.copies ?? []).some(cvUsable));
+  const stuck = items.filter((i) => !(i.copies ?? []).some(cvUsable));
   const openDep = inDep.filter((i) => !CV.picks.has(i.key));
+  const open = cvOpenSuggestions();
   const t = cvTotals();
   const lines = [
     items.length ? `<li><b>${items.length}</b> ${items.length === 1 ? "file it uses has" : "files it uses have"} an exact copy elsewhere: ${escapeHtml(formatBytesLocal(t.bytes))} in all.</li>` : "",
     inDep.length ? `<li><b>${inDep.length}</b> ${inDep.length === 1 ? "is" : "are"} in an installed package ${self} already depends on: pointing there adds no dependency.</li>` : "",
     onlyDb.length ? `<li><b>${onlyDb.length}</b> ${onlyDb.length === 1 ? "has copies" : "have copies"} only in packages you don't have (database).</li>` : "",
+    stuck.length ? `<li><b>${stuck.length}</b> ${stuck.length === 1 ? "has" : "have"} only copies missing part of their set (a .vaj, .vab or .vmb): ${stuck.length === 1 ? "it stays" : "they stay"}.</li>` : "",
+    CV.hiddenCopies ? `<li>${pkgCount(CV.hiddenCopies, "copy", "copies")} from creators you blocked ${CV.hiddenCopies === 1 ? "is" : "are"} left out.</li>` : "",
     CV.report.unreferenced_files
       ? `<li><b>${CV.report.unreferenced_files}</b> more ${CV.report.unreferenced_files === 1 ? "file has" : "files have"} copies (${escapeHtml(formatBytesLocal(Number(CV.report.unreferenced_bytes ?? 0)))}) but ${self} doesn't use ${CV.report.unreferenced_files === 1 ? "it" : "them"} itself: left alone.</li>`
       : "",
   ].join("");
-  host.innerHTML = `<div class="fm-summary"><span class="material-symbols-outlined">info</span><div><ul>${lines}</ul>${
+  const acts = [
     openDep.length
-      ? `<div class="fm-summary-acts"><button type="button" class="ghost-button fm-small" data-cv-act="choose-deps"><span class="material-symbols-outlined">done_all</span>Point those ${openDep.length} at packages it already depends on</button></div>`
-      : ""
-  }</div></div>`;
+      ? `<button type="button" class="ghost-button fm-small" data-cv-act="choose-deps"><span class="material-symbols-outlined">done_all</span>Point those ${openDep.length} at packages it already depends on</button>`
+      : "",
+    open.length
+      ? `<button type="button" class="ghost-button fm-small" data-cv-act="choose-suggested" title="Each file gets its Suggested copy: installed, already a dependency, a favourite or one you prefer first"><span class="material-symbols-outlined">auto_fix_high</span>Choose the suggested copy for ${open.length === items.length ? "all" : "the other"} ${open.length}</button>`
+      : "",
+  ].join("");
+  host.innerHTML = `<div class="fm-summary"><span class="material-symbols-outlined">info</span><div><ul>${lines}</ul>${acts ? `<div class="fm-summary-acts">${acts}</div>` : ""}</div></div>`;
 }
 
 function cvRenderStrip() {
@@ -14463,6 +14523,7 @@ function cvPkgChips(p) {
     p.installed === false ? `<span class="chip fm-chip-warn" title="Only the database knows it: the package won't work until it's downloaded">not installed</span>` : "",
     fmPref(p.pkg) === 1 ? `<span class="chip fm-chip-pref"><span class="material-symbols-outlined">thumb_up</span>Preferred</span>` : "",
     fmPref(p.pkg) === -1 ? `<span class="chip fm-chip-avoid"><span class="material-symbols-outlined">thumb_down</span>Avoid</span>` : "",
+    cvFav(p.pkg) ? `<span class="chip fm-chip-pref"><span class="material-symbols-outlined">star</span>${cvFav(p.pkg) === 2 ? "Favourite" : "Favourite creator"}</span>` : "",
   ].join("");
 }
 
@@ -14500,7 +14561,7 @@ function cvRenderList() {
     ["all", "All", () => true],
     ["todo", "Not chosen", (i) => !CV.picks.has(i.key)],
     ["chosen", "Chosen", (i) => CV.picks.has(i.key)],
-    ["dep", "In a dependency", (i) => (i.copies ?? []).some((c) => c.already_dependency)],
+    ["dep", "In a dependency", (i) => (i.copies ?? []).some(cvInDep)],
   ];
   if (tools) {
     tools.innerHTML = `<div class="fm-filter-row">${filters
@@ -14523,7 +14584,9 @@ function cvRenderList() {
       const right = pick
         ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(pick.pkg)}">→ ${escapeHtml(pkgIdParts(pick.pkg).name)}</span>
             <button type="button" class="fm-icon-btn fm-row-clear" data-cv-file-clear="${escapeAttribute(i.key)}" title="Clear" aria-label="Clear"><span class="material-symbols-outlined">close</span></button></span>`
-        : `<span class="fm-dim">${pkgCount((i.copies ?? []).length, "copy", "copies")}${(i.copies ?? []).some((c) => c.already_dependency) ? " · one in a dependency" : ""}</span>`;
+        : (i.copies ?? []).some(cvUsable)
+          ? `<span class="fm-dim">${pkgCount((i.copies ?? []).length, "copy", "copies")}${(i.copies ?? []).some(cvInDep) ? " · one in a dependency" : ""}</span>`
+          : `<span class="fm-dim" title="Every copy is missing part of its set">stays: no whole copy</span>`;
       return `<div class="group-row missing-row fm-row${i.key === CV.selFile ? " active focused" : ""}${pick ? " is-chosen" : ""}" data-cv-frow="${escapeAttribute(i.key)}" role="option" tabindex="${i.key === CV.selFile ? 0 : -1}">
           <span class="material-symbols-outlined fm-row-state${pick ? "" : " is-dot"}">${pick ? "check_circle" : "fiber_manual_record"}</span>
           <span class="fm-row-text"><span class="fm-row-name" title="${escapeAttribute(i.path)}">${escapeHtml(ft.name)}</span>
@@ -14553,8 +14616,10 @@ function cvRenderDetail() {
     .map((c) => {
       const p = cvPkg(c.package_id) ?? { pkg: c.package_id, file: c.file_path, installed: c.installed, dep: c.already_dependency, items: [] };
       const chosen = pick?.pkg === c.package_id;
-      const others = p.items.filter(({ item: x }) => x.key !== item.key).length;
-      return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}" role="radio" tabindex="0" aria-checked="${chosen}" data-cv-copy="${escapeAttribute(c.package_id)}">
+      const usable = cvUsable(c);
+      const others = usable ? p.items.filter(({ item: x }) => x.key !== item.key).length : 0;
+      const lacks = c.incomplete ?? [];
+      return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}${usable ? "" : " is-disabled"}" role="radio" tabindex="${usable ? 0 : -1}" aria-checked="${chosen}" aria-disabled="${!usable}" data-cv-copy="${escapeAttribute(c.package_id)}">
           ${p.installed === false || !p.file ? `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(p.file, libGradient(p.pkg), "fm-cand-thumb")}<span class="material-symbols-outlined fm-cand-radio fm-cand-thumb-mark">${chosen ? "radio_button_checked" : "radio_button_unchecked"}</span></div>`}
           <div class="fm-cand-top">
             <span class="fm-cand-pick"><span class="fm-cand-name" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}`)}">${fmPkgLabelHtml(c.package_id)}</span></span>
@@ -14562,6 +14627,7 @@ function cvRenderDetail() {
             <span class="fm-cand-acts">${others ? `<button type="button" class="ghost-button fm-tiny" data-cv-useall="${escapeAttribute(c.package_id)}" title="It has ${pkgCount(others, "more of your files", "more of your files")}: point them all here">Use for all ${others + 1}</button>` : ""}</span>
           </div>
           <div class="fm-cand-sub"><span class="fm-dim">${c.internal_path === item.path ? "same path" : escapeHtml(c.internal_path)}</span></div>
+          ${lacks.length ? `<div class="source-incomplete-warning cv-incomplete" title="${escapeAttribute(`Missing in this VAR:\n${lacks.join("\n")}`)}"><span class="material-symbols-outlined source-incomplete-icon" aria-hidden="true">warning</span><span class="source-incomplete-text">${pkgCount(lacks.length, "bundled file", "bundled files")} missing in this VAR — can't point at it</span></div>` : ""}
         </div>`;
     })
     .join("");
@@ -14650,7 +14716,7 @@ function cvOnClick(e) {
   if ((el = q("[data-cv-copy]"))) {
     const item = cvItems().find((i) => i.key === CV.selFile);
     const c = item?.copies?.find((x) => x.package_id === el.getAttribute("data-cv-copy"));
-    if (item && c) {
+    if (item && c && cvUsable(c)) {
       if (CV.picks.get(item.key)?.pkg === c.package_id) CV.picks.delete(item.key);
       else cvPick(item, c);
       cvRefresh();
@@ -14714,13 +14780,20 @@ function cvOnClick(e) {
       let n = 0;
       for (const item of cvItems()) {
         if (CV.picks.has(item.key)) continue;
-        const c = (item.copies ?? []).find((x) => x.already_dependency && x.installed);
+        const c = (item.copies ?? []).find(cvInDep);
         if (c) {
           cvPick(item, c);
           n += 1;
         }
       }
       cvFlash(`${pkgCount(n, "file points", "files point")} at packages it already depends on.`);
+      cvRefresh();
+      break;
+    }
+    case "choose-suggested": {
+      const open = cvOpenSuggestions();
+      for (const { item, copy } of open) cvPick(item, copy);
+      cvFlash(`${pkgCount(open.length, "file points", "files point")} at the suggested copy.`);
       cvRefresh();
       break;
     }
