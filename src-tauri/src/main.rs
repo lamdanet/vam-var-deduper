@@ -178,7 +178,7 @@ fn main() {
             start_apply_missing_resources_fix_task,
             scan_internalize_candidates,
             start_apply_internalize_task,
-            dep_usage::start_dependency_usage_task,
+            dep_usage::start_package_usage_task,
             start_plan_clean_duplicates_task,
             start_plan_organize_by_creator_task,
             move_var_to_creator_folder,

@@ -6734,8 +6734,8 @@ fn users_of_leaves_out_the_asking_package() {
 }
 
 #[test]
-fn dependency_usage_adds_up_every_user() {
-    use crate::dep_usage::{analyze_dependency_usage, RefCache};
+fn package_usage_adds_up_every_user() {
+    use crate::dep_usage::{analyze_package_usage, RefCache};
 
     let dir = repo_root().join("tmp_dep_usage_test");
     if dir.exists() {
@@ -6763,6 +6763,7 @@ fn dependency_usage_adds_up_every_user() {
         &[("Saves/Person/l.json", &br#"{ "c": "D.Big.latest:/Custom/Clothing/x.vam", "a": "D.Big.1:/Custom/a.png" }"#[..])],
     );
     write_test_var_with_deps(&dir.join("V.Other.1.var"), &[], &[("Saves/scene/v.json", &b"{}"[..])]);
+    write_test_var_with_deps(&dir.join("W.Listed.1.var"), &["D.Big.1"], &[("Saves/scene/w.json", &b"{}"[..])]);
 
     let item = |id: &str, deps: &[&str]| {
         let path = dir.join(format!("{id}.var"));
@@ -6776,21 +6777,24 @@ fn dependency_usage_adds_up_every_user() {
         item("T.Scene.1", &["D.Big.1"]),
         item("U.Look.1", &["D.Big.latest"]),
         item("V.Other.1", &[]),
+        item("W.Listed.1", &["D.Big.1"]),
     ];
     let cache = Mutex::new(RefCache::default());
-    let report = analyze_dependency_usage(&dir.join("T.Scene.1.var"), &items, &cache, |_, _| {}).expect("analyze");
+    let r = analyze_package_usage(&dir.join("D.Big.1.var"), &items, &cache, |_, _| {}).expect("analyze");
 
-    assert_eq!(report.target_package_id, "T.Scene.1");
-    assert_eq!(report.deps.len(), 1);
-    let d = &report.deps[0];
-    assert_eq!(d.package_id.as_deref(), Some("D.Big.1"));
-    assert_eq!(d.users.len(), 2, "the scene and the look; V doesn't depend on it");
-    assert!(d.users[0].is_target, "the analysed package comes first");
-    assert_eq!(d.target_bytes, 4, "just a.png");
-    let look = &d.users[1];
-    assert_eq!(look.package_id, "U.Look.1");
-    assert_eq!((look.files, look.bytes), (3, 4 + 2 + 2), "a.png and the .vam with its .vaj");
-    assert_eq!(d.sum_bytes, 4 + 8);
-    assert_eq!(d.union_bytes, 8, "a.png counted once");
+    assert_eq!(r.package_id, "D.Big.1");
+    assert_eq!(r.users.len(), 3, "T, U and W depend on it; V doesn't");
+    assert_eq!(r.users[0].package_id, "U.Look.1", "the one using most first");
+    assert_eq!((r.users[0].files, r.users[0].bytes), (3, 4 + 2 + 2), "a.png and the .vam with its .vaj");
+    let t = r.users.iter().find(|u| u.package_id == "T.Scene.1").expect("T");
+    assert_eq!((t.bytes, t.paths.clone()), (4, vec!["Custom/a.png".to_string()]));
+    let w = r.users.iter().find(|u| u.package_id == "W.Listed.1").expect("W");
+    assert_eq!(w.bytes, 0, "listed, references nothing");
+    assert_eq!(r.sum_bytes, 4 + 8);
+    assert_eq!(r.union_bytes, 8, "a.png counted once");
+    assert_eq!(r.content_bytes, 5000 + 8);
+    assert_eq!(r.unused_bytes, 5000, "big.png: nobody uses it");
+    assert_eq!(r.used_files[0].path, "Custom/a.png");
+    assert_eq!(r.used_files[0].users, 2);
     fs::remove_dir_all(&dir).expect("cleanup");
 }

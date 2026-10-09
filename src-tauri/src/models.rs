@@ -393,9 +393,9 @@ pub(crate) struct ProgressPayload {
     pub(crate) fix_report: Option<FixReport>,
     #[serde(default)]
     pub(crate) internalize_report: Option<InternalizeReport>,
-    /// Result payload for `start_dependency_usage_task` (Dependency Usage).
+    /// Result payload for `start_package_usage_task` (Dependency Usage).
     #[serde(default)]
-    pub(crate) dependency_usage_result: Option<DepUsageReport>,
+    pub(crate) package_usage_result: Option<PackageUsageReport>,
     /// Result payload for `start_scan_missing_resources_task`. Background
     /// scan that walks every text payload in the target VAR, harvests
     /// `Pkg:/path` refs, classifies them against the local scan + DB, and
@@ -1509,43 +1509,46 @@ pub(crate) struct OffloadFailure {
 /// and the task's worker thread.
 pub(crate) type TaskMap = Arc<Mutex<HashMap<u64, ProgressPayload>>>;
 
-/// One package that uses a dependency, and how much of it it references.
+/// One package that uses the analysed package, and how much of it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct DepUser {
+pub(crate) struct PackageUser {
     pub(crate) package_id: String,
     pub(crate) file_path: String,
     /// The files it references, with what they need (a .vam's .vaj, textures).
     pub(crate) bytes: u64,
     pub(crate) files: u32,
-    /// The package the analysis is for.
-    pub(crate) is_target: bool,
+    /// The paths it references (without what they bring along).
+    pub(crate) paths: Vec<String>,
 }
 
-/// One dependency of the analysed package, across every package that uses it.
+/// A file of the analysed package that some package uses.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct DepUsage {
-    /// As meta.json lists it.
-    pub(crate) declared: String,
-    /// The package in the folders it resolves to; `None` when not installed.
-    pub(crate) package_id: Option<String>,
-    pub(crate) file_path: Option<String>,
+pub(crate) struct UsedFile {
+    pub(crate) path: String,
     pub(crate) size: u64,
-    /// Only another version of it is installed.
-    pub(crate) other_version: bool,
-    /// The analysed package first, then the others by bytes.
-    pub(crate) users: Vec<DepUser>,
-    /// Distinct files all users reference.
-    pub(crate) union_bytes: u64,
-    /// What copying each user's files into it would add, all users together.
-    pub(crate) sum_bytes: u64,
-    pub(crate) target_bytes: u64,
-    pub(crate) target_files: u32,
+    pub(crate) users: u32,
 }
 
+/// Dependency Usage: who uses one package, and how much of it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct DepUsageReport {
-    pub(crate) target_package_id: String,
-    /// Packages whose references were read.
+pub(crate) struct PackageUsageReport {
+    pub(crate) package_id: String,
+    pub(crate) file_path: String,
+    /// On disk.
+    pub(crate) size: u64,
+    pub(crate) file_count: u32,
+    /// Its files' sizes, unpacked.
+    pub(crate) content_bytes: u64,
+    /// Every user given its own copy of what it uses, all together.
+    pub(crate) sum_bytes: u64,
+    /// The distinct files all users use.
+    pub(crate) union_bytes: u64,
+    pub(crate) used_count: u32,
+    /// What no user references.
+    pub(crate) unused_bytes: u64,
+    /// The most used files, most users first.
+    pub(crate) used_files: Vec<UsedFile>,
+    /// Most bytes first.
+    pub(crate) users: Vec<PackageUser>,
     pub(crate) packages_read: u32,
-    pub(crate) deps: Vec<DepUsage>,
 }
