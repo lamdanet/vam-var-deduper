@@ -10841,11 +10841,6 @@ function fmRenderStrip() {
        <span class="fm-strip-text"><b>${c.chosen} of ${c.total} chosen${coming ? ` · ${coming} by download` : ""}</b><small>${
          FM.flash ? escapeHtml(FM.flash) : c.chosen ? "Run Fixes rewrites these; the rest stay as they are." : "Fix as many or as few as you like."
        }</small></span>
-       ${
-         FM.prefChange && FM.prefChange.for === FM.selected
-           ? `<button type="button" class="ghost-button fm-small" data-fm-act="pref-undo" title="Put the preference and the choices back"><span class="material-symbols-outlined">undo</span>Undo</button>`
-           : ""
-       }
        ${FM.picks.size ? `<button type="button" class="ghost-button fm-small" data-fm-act="clear-picks" title="Clear every choice"><span class="material-symbols-outlined">close</span>Clear all</button>` : ""}
        <button type="button" class="accent-button fm-small" data-fm-act="apply" ${c.chosen && !FM.applying ? "" : "disabled"}>${
          FM.applying ? "Fixing…" : c.chosen ? `Run Fixes (${c.chosen})` : "Run Fixes"
@@ -11142,7 +11137,8 @@ function fmPickRow(el) {
 // that (clicking the same one again). It acts on the choices already made
 // right away: preferring switches them to it where it has the same file;
 // avoiding moves them to the next best copy (or keeps one with no other
-// copy, with its warning). Undo puts the preference and the choices back.
+// copy, with its warning). Clicking the same button again clears it, and
+// puts back the choices that click moved.
 async function fmSetPref(pkg, val) {
   const prev = fmPref(pkg);
   const next = prev === val ? 0 : val;
@@ -11154,6 +11150,15 @@ async function fmSetPref(pkg, val) {
   }
   if (next) FM_PREFS.set(pkg, next);
   else FM_PREFS.delete(pkg);
+  // Taking back the last click: its choices go back too.
+  const last = FM.prefChange;
+  if (last && last.pkg === pkg && next === last.prev) {
+    for (const [key, pick] of last.before) FM.picks.set(key, pick);
+    FM.prefChange = null;
+    fmFlash(`${pkgIdParts(pkg).name} is as it was.`);
+    fmRefresh();
+    return;
+  }
   const before = new Map();
   let moved = 0;
   let kept = 0;
@@ -11177,7 +11182,7 @@ async function fmSetPref(pkg, val) {
       } else kept += 1;
     }
   }
-  FM.prefChange = { pkg, prev, next, before, for: FM.selected };
+  FM.prefChange = { pkg, prev, next, before };
   const name = pkgIdParts(pkg).name;
   fmFlash(
     next === 1
@@ -11186,24 +11191,6 @@ async function fmSetPref(pkg, val) {
         ? `${name} is avoided.${moved ? ` ${pkgCount(moved, "choice", "choices")} moved to the next best copy.` : ""}${kept ? ` ${kept} kept: no other copy.` : ""}`
         : `${name}: no preference any more.`,
   );
-  fmRefresh();
-}
-
-// Undo the last preference click: the preference and the choices it moved.
-async function fmUndoPref() {
-  const ch = FM.prefChange;
-  if (!ch) return;
-  try {
-    await invoke("set_replacement_pref", { packageId: ch.pkg, pref: ch.prev });
-  } catch (e) {
-    showToast(`Couldn't undo that: ${String(e?.message || e)}`, "error");
-    return;
-  }
-  if (ch.prev) FM_PREFS.set(ch.pkg, ch.prev);
-  else FM_PREFS.delete(ch.pkg);
-  for (const [key, pick] of ch.before) FM.picks.set(key, pick);
-  FM.prefChange = null;
-  fmFlash(`Undone: ${pkgIdParts(ch.pkg).name} is as it was.`);
   fmRefresh();
 }
 
@@ -11394,9 +11381,6 @@ function fmOnClick(e) {
       break;
     case "replace":
       fmReplaceOriginal();
-      break;
-    case "pref-undo":
-      fmUndoPref();
       break;
     case "show-backup":
       if (FM.replaced?.backupPath) invoke("show_in_explorer", { path: FM.replaced.backupPath }).catch(() => {});
