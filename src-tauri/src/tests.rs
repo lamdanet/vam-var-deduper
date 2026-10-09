@@ -7069,3 +7069,29 @@ fn missing_file_check_is_reused_until_something_changes() {
     fs::remove_dir_all(&dir).expect("cleanup");
 }
 
+#[test]
+fn database_log_is_emptied_at_open_and_kept_small() {
+    let dir = std::env::temp_dir().join(format!("vvd_wal_test_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("t.db");
+    {
+        let db = crate::db::open_file(&path).expect("open");
+        let conn = db.conn.lock().unwrap();
+        let limit: i64 = conn.query_row("PRAGMA journal_size_limit", [], |r| r.get(0)).unwrap();
+        assert_eq!(limit, 64 * 1024 * 1024);
+        conn.execute_batch("CREATE TABLE big (x BLOB); INSERT INTO big VALUES (zeroblob(4000000));").unwrap();
+        // Left as if the app had been stopped without closing.
+        std::mem::forget(conn);
+        std::mem::forget(db);
+    }
+    let wal = dir.join("t.db-wal");
+    assert!(fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) > 1_000_000, "the change sits in the log");
+    let db = crate::db::open_file(&path).expect("reopen");
+    assert!(fs::metadata(&wal).map(|m| m.len()).unwrap_or(0) < 100_000, "checkpointed and emptied at open");
+    let n: i64 = db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM big", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1, "nothing lost");
+    drop(db);
+    let _ = fs::remove_dir_all(&dir);
+}
+

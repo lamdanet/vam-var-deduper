@@ -165,6 +165,17 @@ impl Db {
         // SEEDED_CATEGORIES land in DBs that already have v4 applied. Cheap
         // (one INSERT OR IGNORE per name) and idempotent.
         seed_categories(&conn)?;
+        // A -wal file left by an app that didn't close cleanly: checkpoint it
+        // into the database and empty it now (after the migrations), before
+        // the readers open. Never fatal: a busy database just keeps its log
+        // until the next checkpoint.
+        if let Ok((busy, log, done)) = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+        }) {
+            if busy != 0 || done < log {
+                eprintln!("database log not fully checkpointed at startup: busy={busy} log={log} checkpointed={done}");
+            }
+        }
         Ok(conn)
     }
 
@@ -250,6 +261,9 @@ fn apply_pragmas(conn: &Connection) -> Result<()> {
     //   Advisory — SQLite caps at file size if the DB is smaller.
     // - wal_autocheckpoint = 2000: doubles the default checkpoint threshold,
     //   reducing fsync stalls during long bulk-insert sessions.
+    // - journal_size_limit = 64 MB: after a checkpoint the -wal file shrinks
+    //   back to this, instead of keeping its biggest size for good (one big
+    //   import left a 561 MB file that was nearly all already checkpointed).
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
@@ -257,7 +271,8 @@ fn apply_pragmas(conn: &Connection) -> Result<()> {
          PRAGMA temp_store = MEMORY;
          PRAGMA cache_size = -262144;
          PRAGMA mmap_size = 1073741824;
-         PRAGMA wal_autocheckpoint = 2000;",
+         PRAGMA wal_autocheckpoint = 2000;
+         PRAGMA journal_size_limit = 67108864;",
     )
     .context("failed to apply SQLite pragmas")?;
     Ok(())
