@@ -125,9 +125,15 @@ release time, it fills it with the commit messages since the last release.
   packages it uses on the left (what copying each one in adds, and whether
   other packages list it as a dependency), their files on the right. A
   package comes in whole, so every copy drops the dependency; one it can't
-  copy in whole (a file missing from it, or one that clashes) isn't offered,
-  and the summary says why and opens Fix Missing. It fixes the original,
-  with a backup in the same folder as Fix Missing's, and checks it again
+  copy in whole isn't offered, and the summary says why. A file missing from
+  a package comes from an exact copy in another package when there is one;
+  otherwise the summary opens Fix Missing. Plugins stay dependencies. It
+  fixes the original, with a backup in the same folder as Fix Missing's,
+  and checks it again
+
+### Fixed
+- Internalize Resources no longer copies a plugin's .cslist without its
+  scripts and drops the plugin as a dependency
 - Internalize Resources no longer promises a dependency goes when the
   package still references a file missing from it, and drops one a
   scene names by another version (`.latest`) than meta.json lists
