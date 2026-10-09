@@ -32,8 +32,8 @@ use crate::{
     },
     naming,
     models::{
-        BrokenRef, ExternalRef, ExternalRefGroup, InternalizeReport, InternalizeSelection,
-        RefFill, ScannedData, META_PATH,
+        BrokenRef, ExternalRef, ExternalRefGroup, FillSource, InternalizeReport,
+        InternalizeSelection, RefFill, ScannedData, META_PATH,
     },
     scan::{extract_vaj_self_paths, extract_vaj_support_paths},
     utils::{decode_text, dump_json_bytes, normalize_zip_path, read_json_bytes},
@@ -778,13 +778,20 @@ pub(crate) fn fill_from_copies(groups: &mut [ExternalRefGroup], broken: &[Broken
             }
             match target_crcs.get(&ref_path) {
                 Some(own) if *own == crc => {
-                    group.fills.push(RefFill {
-                        ref_pkg: b.ref_pkg.clone(),
-                        ref_path: ref_path.clone(),
+                    let own = FillSource {
                         from_pkg: "SELF".into(),
                         from_path: ref_path.clone(),
                         size: b.expected_size.unwrap_or(0),
                         from_self: true,
+                    };
+                    group.fills.push(RefFill {
+                        ref_pkg: b.ref_pkg.clone(),
+                        ref_path: ref_path.clone(),
+                        from_pkg: own.from_pkg.clone(),
+                        from_path: own.from_path.clone(),
+                        size: own.size,
+                        from_self: true,
+                        alternatives: vec![own],
                     });
                     continue;
                 }
@@ -800,20 +807,28 @@ pub(crate) fn fill_from_copies(groups: &mut [ExternalRefGroup], broken: &[Broken
                     && b.expected_size.is_none_or(|s| s == r.size)
                     && (normalize_zip_path(&r.internal_path) == ref_path || single(&r.internal_path))
             });
-            // The target's own copy first: nothing to read.
-            let pick = exact
-                .clone()
-                .find(|r| r.package_id.eq_ignore_ascii_case(&target_id))
-                .or_else(|| exact.clone().next());
-            if let Some(r) = pick {
-                let from_self = r.package_id.eq_ignore_ascii_case(&target_id);
+            // Every exact copy, the target's own first (nothing to read).
+            let mut sources: Vec<FillSource> = exact
+                .map(|r| {
+                    let from_self = r.package_id.eq_ignore_ascii_case(&target_id);
+                    FillSource {
+                        from_pkg: if from_self { "SELF".into() } else { r.package_id.clone() },
+                        from_path: normalize_zip_path(&r.internal_path),
+                        size: r.size,
+                        from_self,
+                    }
+                })
+                .collect();
+            sources.sort_by_key(|s| !s.from_self);
+            if let Some(first) = sources.first().cloned() {
                 group.fills.push(RefFill {
                     ref_pkg: b.ref_pkg.clone(),
                     ref_path,
-                    from_pkg: if from_self { "SELF".into() } else { r.package_id.clone() },
-                    from_path: normalize_zip_path(&r.internal_path),
-                    size: r.size,
-                    from_self,
+                    from_pkg: first.from_pkg,
+                    from_path: first.from_path,
+                    size: first.size,
+                    from_self: first.from_self,
+                    alternatives: sources,
                 });
             }
         }

@@ -938,6 +938,8 @@ pub(crate) struct AppState {
     /// Each package's `Pkg:/path` references, for Dependency Usage; checked
     /// against the file's size and modified time.
     pub(crate) dep_refs_cache: Arc<Mutex<crate::dep_usage::RefCache>>,
+    /// The missing-file check's recent results (Fix Missing, Internalize).
+    pub(crate) broken_refs_cache: Arc<Mutex<crate::fix_var::BrokenRefsCache>>,
 }
 
 impl AppState {
@@ -954,6 +956,7 @@ impl AppState {
             recycle_support: Arc::new(Mutex::new(HashMap::new())),
             var_packages_cache_generation: Arc::new(AtomicU64::new(0)),
             dep_refs_cache: Arc::new(Mutex::new(crate::dep_usage::RefCache::default())),
+            broken_refs_cache: Arc::new(Mutex::new(crate::fix_var::BrokenRefsCache::default())),
         }
     }
 }
@@ -1483,6 +1486,18 @@ pub(crate) struct RefFill {
     pub(crate) ref_pkg: String,
     pub(crate) ref_path: String,
     /// Where the copy is; `from_self` when the target already has it.
+    pub(crate) from_pkg: String,
+    pub(crate) from_path: String,
+    pub(crate) size: u64,
+    pub(crate) from_self: bool,
+    /// Every exact copy found (this one first): the page picks one, a package
+    /// you prefer first.
+    pub(crate) alternatives: Vec<FillSource>,
+}
+
+/// One exact copy of a missing file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct FillSource {
     pub(crate) from_pkg: String,
     pub(crate) from_path: String,
     pub(crate) size: u64,

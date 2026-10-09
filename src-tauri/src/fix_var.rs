@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -818,4 +819,66 @@ mod tests {
         assert_eq!(replacement_target("Abie.A35.1", "SELF"), ("SELF".to_string(), false));
         assert_eq!(replacement_target("Abie.A35.1", "Other.Pack.3"), ("Other.Pack.3".to_string(), true));
     }
+}
+
+/// The missing-file check's results for the last few packages, reused while
+/// nothing they depend on has changed: the package file itself, the folders'
+/// packages (the scan's file list) and the database (its write counters). So
+/// Check again, or going between Fix Missing and Internalize, doesn't repeat
+/// it.
+#[derive(Default)]
+pub(crate) struct BrokenRefsCache {
+    entries: Vec<(u64, Vec<BrokenRef>)>,
+}
+
+const BROKEN_REFS_CACHE_SIZE: usize = 8;
+
+#[cfg(test)]
+impl BrokenRefsCache {
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+fn broken_refs_key(target_path: &Path, scan: &ScannedData, db: &Db) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let meta = fs::metadata(target_path).ok()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    target_path.hash(&mut h);
+    meta.len().hash(&mut h);
+    meta.modified().ok().hash(&mut h);
+    for f in &scan.files {
+        f.relative_path.hash(&mut h);
+        f.size.hash(&mut h);
+        f.modified_ns.hash(&mut h);
+    }
+    // Writes through the app's connection, and commits by any other one.
+    let conn = db.conn.lock().ok()?;
+    let changes: i64 = conn.query_row("SELECT total_changes()", [], |r| r.get(0)).ok()?;
+    let version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0)).ok()?;
+    (changes, version).hash(&mut h);
+    Some(h.finish())
+}
+
+pub(crate) fn scan_broken_refs_cached(
+    cache: &Mutex<BrokenRefsCache>,
+    target_path: &Path,
+    scan: &ScannedData,
+    db: &Db,
+) -> Result<Vec<BrokenRef>> {
+    let key = broken_refs_key(target_path, scan, db);
+    if let (Some(key), Ok(guard)) = (key, cache.lock()) {
+        if let Some((_, refs)) = guard.entries.iter().find(|(k, _)| *k == key) {
+            return Ok(refs.clone());
+        }
+    }
+    let refs = scan_target_var_for_broken_refs(target_path, scan, db)?;
+    if let (Some(key), Ok(mut guard)) = (key, cache.lock()) {
+        guard.entries.retain(|(k, _)| *k != key);
+        guard.entries.push((key, refs.clone()));
+        if guard.entries.len() > BROKEN_REFS_CACHE_SIZE {
+            guard.entries.remove(0);
+        }
+    }
+    Ok(refs)
 }

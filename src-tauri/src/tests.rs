@@ -7032,3 +7032,40 @@ fn internalize_makes_a_package_whole_from_copies_of_a_missing_dependency() {
     assert_eq!(raw, b"skin-bytes");
     fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+#[test]
+fn missing_file_check_is_reused_until_something_changes() {
+    use crate::fix_var::{scan_broken_refs_cached, BrokenRefsCache};
+
+    let dir = repo_root().join("tmp_broken_cache_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    let target = vars.join("T.Scene.1.var");
+    write_test_var_with_deps(&target, &["S.Pack.1"], &[("Saves/scene/s.json", &br#"{ "a": "S.Pack.1:/gone.png" }"#[..])]);
+    write_test_var_with_deps(&vars.join("S.Pack.1.var"), &[], &[("other.png", &b"x"[..])]);
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], None, |_, _| {}).expect("scan");
+    let db = crate::db::open_in_memory().expect("db");
+    let cache = Mutex::new(BrokenRefsCache::default());
+
+    let first = scan_broken_refs_cached(&cache, &target, &scanned, &db).expect("check");
+    assert_eq!(first.len(), 1);
+    let again = scan_broken_refs_cached(&cache, &target, &scanned, &db).expect("check");
+    assert_eq!(again.len(), 1);
+    assert_eq!(cache.lock().unwrap().len(), 1, "nothing changed: reused");
+
+    // The package changes: checked again.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write_test_var_with_deps(&target, &["S.Pack.1"], &[("Saves/scene/s.json", &br#"{ "a": "S.Pack.1:/gone.png", "b": "S.Pack.1:/also-gone.png" }"#[..])]);
+    let changed = scan_broken_refs_cached(&cache, &target, &scanned, &db).expect("check");
+    assert_eq!(changed.len(), 2);
+    assert_eq!(cache.lock().unwrap().len(), 2);
+
+    // The database changes: checked again.
+    db.conn.lock().unwrap().execute_batch("CREATE TABLE t_cache_probe (x INTEGER); INSERT INTO t_cache_probe VALUES (1);").expect("write");
+    scan_broken_refs_cached(&cache, &target, &scanned, &db).expect("check");
+    assert_eq!(cache.lock().unwrap().len(), 3);
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
