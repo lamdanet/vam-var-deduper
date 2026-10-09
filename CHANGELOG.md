@@ -70,7 +70,9 @@ release time, it fills it with the commit messages since the last release.
   replacement source (thumbs up) or one to avoid (thumbs down): preferred packages are chosen
   over others wherever they have the same file, in every check, and avoided
   ones are never chosen by themselves; you can still pick one, with a
-  warning. Settings lists them, to switch or remove. The list works from the keyboard and with
+  warning. VAR Packages shows them on each package, filters by them
+  (Preferred source, Avoided source) and sets them from the right-click
+  menu, for one package or a selection. The list works from the keyboard and with
   screen readers. Package Explorer has a Check refs button and shows what
   the last check found, with Fix references. It replaces Missing
   Resources: the sidebar, Send to and the right-click menus open Fix
