@@ -130,7 +130,9 @@ release time, it fills it with the commit messages since the last release.
   otherwise the summary opens Fix Missing. A dependency that isn't installed
   can be made unnecessary the same way: when every file used from it has an
   exact copy, those are copied in and the package works without it, with no
-  download. Plugins stay dependencies. It
+  download. Plugins stay dependencies. Its start page lists the packages
+  whose installed dependencies are biggest, and a package's right-click
+  menu chooses, explores or copies it. It
   fixes the original, with a backup in the same folder as Fix Missing's,
   and checks it again
 
