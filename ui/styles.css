@@ -19200,3 +19200,20 @@ button.pkg-stat:focus-visible::after {
 .fm-cand-row.is-selected .fm-cand-acts .fm-icon-btn {
   visibility: visible;
 }
+
+/* The chosen row's x clears its choice. */
+.fm-row-clear {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+}
+
+.fm-row-clear:hover {
+  color: var(--accent-danger);
+}
+
+/* A double click on a card clears its choice; it doesn't select text. */
+.fm-cand-row,
+.fm-cand-alt {
+  user-select: none;
+}

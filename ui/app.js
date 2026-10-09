@@ -10517,7 +10517,10 @@ function fmRenderList() {
       st === "fixed"
         ? `<span class="chip chip-accent">Fixed</span>`
         : st === "chosen"
-          ? `<span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(`${pick.replacement_pkg}:/${pick.replacement_path ?? ""}`)}">→ ${escapeHtml(fmPkgShort(pick.replacement_pkg))}</span>`
+          ? `<span class="fm-row-right">
+              <span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(`${pick.replacement_pkg}:/${pick.replacement_path ?? ""}`)}">→ ${escapeHtml(fmPkgShort(pick.replacement_pkg))}</span>
+              <button type="button" class="fm-icon-btn fm-row-clear" data-fm-row-unpick="${escapeAttribute(key)}" title="Clear this choice" aria-label="Clear this choice"><span class="material-symbols-outlined">close</span></button>
+            </span>`
           : st === "skipped"
             ? `<span class="chip fm-chip-muted" title="Run Fixes leaves it as it is">Skipped</span>`
             : st === "downloading"
@@ -11122,6 +11125,16 @@ function fmUseBest(key, { advance = false } = {}) {
 function fmPickRow(el) {
   const key = el.getAttribute("data-fm-pickrow");
   const pkg = el.getAttribute("data-fm-pkg");
+  const sig = `${key}|${pkg}|${el.getAttribute("data-fm-path")}`;
+  const now = Date.now();
+  if (FM.lastPick?.sig === sig && now - FM.lastPick.at < 450) {
+    FM.lastPick = null;
+    FM.picks.delete(key);
+    fmFlash("Choice cleared.");
+    fmRefresh();
+    return;
+  }
+  FM.lastPick = { sig, at: now };
   FM.skipped.delete(key);
   FM.picks.set(key, {
     replacement_pkg: pkg,
@@ -11236,6 +11249,14 @@ function fmOnClick(e) {
   const t = e.target;
   const q = (sel) => t.closest?.(sel);
   let el;
+  if ((el = q("[data-fm-row-unpick]"))) {
+    e.preventDefault();
+    e.stopPropagation();
+    FM.picks.delete(el.getAttribute("data-fm-row-unpick"));
+    fmFlash("Choice cleared.");
+    fmRefresh();
+    return;
+  }
   if ((el = q("[data-fm-pref]"))) {
     e.preventDefault();
     e.stopPropagation();
