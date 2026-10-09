@@ -91,6 +91,10 @@ impl ReadPool {
         self.inner.lock().map(|g| g.capacity == 0).unwrap_or(true)
     }
 
+    pub(crate) fn capacity(&self) -> usize {
+        self.inner.lock().map(|g| g.capacity).unwrap_or(0)
+    }
+
     fn acquire(&self) -> ReadGuard<'_> {
         let mut guard = self
             .inner
@@ -173,6 +177,12 @@ impl Db {
         })
     }
 
+    /// How many read-only queries can run at once: the read connections (the
+    /// writer alone when there are none, as for in-memory databases).
+    pub(crate) fn read_parallelism(&self) -> usize {
+        self.readers.capacity().max(1)
+    }
+
     /// Acquire a connection suitable for read-only queries. Prefer this over
     /// `db.conn.lock()` on hot read paths so they don't serialize on the
     /// writer mutex during scans / imports / dedup writes.
@@ -208,6 +218,15 @@ pub(crate) fn open(app: &tauri::AppHandle) -> Result<Db> {
     // standard cross-connection visibility under WAL.
     let conn = Db::migrate_writer(conn)?;
     let readers = ReadPool::open_from_path(&path, READ_POOL_SIZE)?;
+    Db::finalize(conn, readers)
+}
+
+/// A database file with its read connections, as the app opens one.
+#[cfg(test)]
+pub(crate) fn open_file(path: &Path) -> Result<Db> {
+    let conn = Connection::open(path)?;
+    let conn = Db::migrate_writer(conn)?;
+    let readers = ReadPool::open_from_path(path, READ_POOL_SIZE)?;
     Db::finalize(conn, readers)
 }
 
