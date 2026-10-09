@@ -72,8 +72,9 @@ release time, it fills it with the commit messages since the last release.
   ones are never chosen by themselves; you can still pick one, with a
   warning. The list works from the keyboard and with
   screen readers. Package Explorer has a Check refs button and shows what
-  the last check found, with Fix references. Missing Resources is still
-  there
+  the last check found, with Fix references. It replaces Missing
+  Resources: the sidebar, Send to and the right-click menus open Fix
+  Missing
 - **Package Explorer**: a new page that shows one package in pictures. It
   says in plain words what's wrong with the package, if anything (missing or
   offloaded dependencies, not on the Hub, damaged…), and its main button
