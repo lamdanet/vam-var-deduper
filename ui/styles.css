@@ -17090,9 +17090,6 @@ button.pkg-stat:focus-visible::after {
   color: var(--accent-warn) !important;
 }
 
-.fm-out-mode {
-  margin-bottom: 10px;
-}
 
 /* The list. */
 .fm-list-tools {
@@ -17963,47 +17960,6 @@ button.pkg-stat:focus-visible::after {
 
 .fm-row.is-skipped .fm-row-name {
   color: var(--text-muted);
-}
-
-/* The fixed copy's last step: take the original's place. */
-.fm-replace {
-  display: flex;
-  gap: 10px;
-  margin: 0 20px 14px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--accent-success) 45%, var(--line));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent-success) 9%, transparent);
-}
-
-.fm-replace > .material-symbols-outlined {
-  color: var(--accent-success);
-}
-
-.fm-replace.is-warn {
-  border-color: color-mix(in srgb, var(--accent-warn) 45%, var(--line));
-  background: color-mix(in srgb, var(--accent-warn) 8%, transparent);
-}
-
-.fm-replace.is-warn > .material-symbols-outlined {
-  color: var(--accent-warn);
-}
-
-.fm-replace > div {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  font-size: 13px;
-}
-
-.fm-replace small {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.fm-replace .check-row {
-  font-size: 12px;
 }
 
 .fm-replace-acts {
