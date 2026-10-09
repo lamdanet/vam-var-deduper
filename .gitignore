@@ -56,3 +56,4 @@ for test/
 # tmp_stitch_*, tmp_recursive_scan, ...). They clean up after themselves on
 # success, so these only linger after a failing or interrupted run.
 /tmp_*/
+reference-tools/
