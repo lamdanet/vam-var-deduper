@@ -11594,6 +11594,1252 @@ function setupFixMissing() {
   fmRender();
 }
 
+// ---- Internalize Resources --------------------------------------------------------------
+// Fix Missing's sister: a package uses files from other installed packages
+// (Pkg:/path in its scenes, looks and presets); copy the ones you choose
+// into it, with whatever they need (a .vam's .vaj and textures), and point
+// the references at the copies. A package whose files all come in is no
+// longer a dependency, and one nothing else uses can then be removed.
+// Same layout as Fix Missing: the package on top with the Copy in card
+// beside it, the packages it uses on the left, the chosen one's files on
+// the right.
+
+const IZ = {
+  target: "",
+  item: null,
+  token: 0,
+  // ExternalRefGroup[] once checked; null before.
+  groups: null,
+  scanning: false,
+  progress: 0,
+  message: "",
+  error: "",
+  // izKey(pkg, path) of the files to copy in
+  picks: new Set(),
+  // the source package the right panel shows
+  selected: null,
+  filter: "all",
+  query: "",
+  applying: false,
+  // the last copy's report, shown after the check that follows
+  lastFix: null,
+  planOpen: false,
+  sheetOpen: false,
+  configOpen: null,
+  flash: "",
+  flashTimer: null,
+  // the empty page's packages to start from: { loading, items, total, error }
+  start: null,
+  // keys whose "comes with" list is open
+  bundleOpen: new Set(),
+};
+const IZ_RECENT = "iz.recent";
+
+function izKey(pkg, path) {
+  return `${pkg}|${path ?? ""}`;
+}
+
+function izView() {
+  return $("internalize-resources-view");
+}
+
+function izVisible() {
+  const v = izView();
+  return Boolean(v && !v.classList.contains("hidden"));
+}
+
+function izShowView() {
+  const view = izView();
+  if (!view) return;
+  document.querySelectorAll(".app-main").forEach((v) => v.classList.toggle("hidden", v !== view));
+  document.querySelectorAll("[data-sidebar-link]").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("data-sidebar-link") === "internalize-resources");
+  });
+}
+
+function izTargetId() {
+  return String(IZ.target).split(/[\\/]/).pop().replace(/\.var$/i, "");
+}
+
+function izSelfName() {
+  return IZ.item ? libTitle(IZ.item) : "this package";
+}
+
+// The packages checked lately, newest first: [{ path, count, at }].
+function izRecentGet() {
+  try {
+    const list = JSON.parse(fmStoreGet(IZ_RECENT, "[]"));
+    return Array.isArray(list) ? list.filter((r) => r && typeof r.path === "string") : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+function izRecentAdd(path, count) {
+  const list = [{ path, count, at: Date.now() }, ...izRecentGet().filter((r) => r.path !== path)].slice(0, 8);
+  fmStoreSet(IZ_RECENT, JSON.stringify(list));
+}
+
+// Open the page on a package; `scan` checks it right away.
+function izOpen(target, { scan = false } = {}) {
+  const fp = typeof target === "string" ? target : target?.file_path;
+  if (!fp) return;
+  if (IZ.target !== fp) {
+    IZ.token += 1;
+    Object.assign(IZ, {
+      target: fp,
+      item: libFindItem(fp) ?? pkgBareItem(fp),
+      groups: null,
+      error: "",
+      picks: new Set(),
+      selected: null,
+      filter: "all",
+      query: "",
+      lastFix: null,
+      configOpen: null,
+      flash: "",
+      bundleOpen: new Set(),
+    });
+  }
+  izShowView();
+  izRender();
+  if (scan && !IZ.scanning) izScan();
+}
+
+// ---- Check -------------------------------------------------------------------------------
+
+// The VAR Packages listing: the start page's list, and what tells the check
+// who else uses each package.
+async function izLoadStart() {
+  if (IZ.start || !invoke) return;
+  const inputDir = vamAddonPackagesDir();
+  if (!inputDir) return;
+  IZ.start = { loading: true, items: [], total: 0, error: "" };
+  try {
+    const page = await invoke("list_var_packages", {
+      inputDir,
+      additionalInputDirs: getAdditionalDirs("varPackages"),
+      offset: 0,
+      limit: 40,
+      search: null,
+      filters: {},
+      sort: "deps",
+      sortDir: "desc",
+      forceRescan: false,
+      deepScan: state.varPackagesScannedDeep !== false,
+      offloadDir: offloadDir() || null,
+    });
+    const items = (page?.items ?? []).filter((it) => it.dep_count > it.missing_dep_count && !it.offloaded);
+    // The installed ones are what this page can copy from.
+    items.sort((a, b) => b.dep_count - b.missing_dep_count - (a.dep_count - a.missing_dep_count));
+    IZ.start = { loading: false, items, total: Number(page?.total ?? items.length), error: "" };
+  } catch (e) {
+    IZ.start = { loading: false, items: [], total: 0, error: String(e?.message || e) };
+  }
+  if (!IZ.target) izRenderDetails();
+}
+
+async function izScan() {
+  if (!invoke || !IZ.target || IZ.scanning) return;
+  const addon = vamAddonPackagesDir();
+  if (!addon) {
+    showToast("Set your VaM folder in Settings first.", "error");
+    return;
+  }
+  const token = IZ.token;
+  // The same folders as Fix Missing, so either page's check reuses the
+  // other's folder scan.
+  const extra = missingExtraDirs();
+  Object.assign(IZ, { scanning: true, progress: 0, message: "Reading your packages…", error: "", groups: null });
+  izRender();
+  const tick = (fraction, message) => {
+    if (token !== IZ.token) return;
+    IZ.progress = fraction * 0.9;
+    if (message) IZ.message = message;
+    izRenderProgress();
+  };
+  try {
+    await Promise.all([
+      fmPoll("start_scan_task", { request: { input_dir: addon, additional_input_dirs: extra, target_var_path: IZ.target, skip_db: true } }, tick),
+      izLoadStart(),
+    ]);
+    if (token !== IZ.token) return;
+    IZ.progress = 0.92;
+    IZ.message = "Reading the files it uses from other packages…";
+    izRenderProgress();
+    const groups = await invoke("scan_internalize_candidates", { inputDir: addon, additionalInputDirs: extra, targetVarPath: IZ.target });
+    if (token !== IZ.token) return;
+    IZ.groups = Array.isArray(groups) ? groups : [];
+    const files = IZ.groups.reduce((n, g) => n + (g.refs ?? []).length, 0);
+    izRecentAdd(IZ.target, files);
+    IZ.configOpen = false;
+    const keys = new Set(IZ.groups.flatMap((g) => (g.refs ?? []).map((r) => izKey(g.source_pkg_id, r.ref_path))));
+    IZ.picks = new Set([...IZ.picks].filter((k) => keys.has(k)));
+    if (!IZ.groups.some((g) => g.source_pkg_id === IZ.selected)) IZ.selected = izSorted()[0]?.source_pkg_id ?? null;
+  } catch (e) {
+    if (token !== IZ.token) return;
+    IZ.error = String(e?.message || e);
+  } finally {
+    if (token === IZ.token) {
+      IZ.scanning = false;
+      izRender();
+    }
+  }
+}
+
+// ---- What the choices add up to ----------------------------------------------------------
+
+function izGroup(pkg) {
+  return (IZ.groups ?? []).find((g) => g.source_pkg_id === pkg) ?? null;
+}
+
+// Copyable: a file whose own path doesn't clash with a different file
+// already inside the package.
+function izClash(ref) {
+  return (ref.conflicts ?? []).includes(ref.ref_path);
+}
+
+function izPickedIn(g) {
+  return (g.refs ?? []).filter((r) => IZ.picks.has(izKey(g.source_pkg_id, r.ref_path))).length;
+}
+
+// Every file can come in, so the dependency can go (a clashing file keeps
+// pointing at the package).
+function izDroppable(g) {
+  return !(g.refs ?? []).some(izClash);
+}
+
+// Only this package uses it (null: not known).
+function izExclusive(g) {
+  return g.used_by_others == null ? null : g.used_by_others === 0;
+}
+
+// About how much a set of files adds: the whole package's bundle when all
+// its files come, else the files' own bundles (a texture two of them share
+// is counted twice).
+function izBytesOf(g, refs) {
+  if (refs.length && refs.length === (g.refs ?? []).length) return Number(g.total_bundle_bytes ?? 0);
+  return refs.reduce((n, r) => n + Number(r.bundle_total_size ?? r.size ?? 0), 0);
+}
+
+function izTotals() {
+  const t = { files: 0, copyable: 0, chosen: 0, bytes: 0, drops: [], partial: [], removable: [], freed: 0 };
+  for (const g of IZ.groups ?? []) {
+    const refs = g.refs ?? [];
+    const picked = refs.filter((r) => IZ.picks.has(izKey(g.source_pkg_id, r.ref_path)));
+    t.files += refs.length;
+    t.copyable += refs.filter((r) => !izClash(r)).length;
+    t.chosen += picked.length;
+    t.bytes += izBytesOf(g, picked);
+    if (!picked.length) continue;
+    if (picked.length === refs.length) {
+      t.drops.push(g.source_pkg_id);
+      if (izExclusive(g)) {
+        t.removable.push(g.source_pkg_id);
+        t.freed += Number(g.source_var_size ?? 0);
+      }
+    } else t.partial.push(g.source_pkg_id);
+  }
+  return t;
+}
+
+// The list's order: packages only this one uses first (copying them in
+// frees the most), then by what removing them would free.
+function izSorted() {
+  const rank = (g) => (izExclusive(g) === true && izDroppable(g) ? 0 : izExclusive(g) == null ? 1 : 2);
+  return [...(IZ.groups ?? [])].sort(
+    (a, b) => rank(a) - rank(b) || Number(b.source_var_size ?? 0) - Number(b.total_bundle_bytes ?? 0) - (Number(a.source_var_size ?? 0) - Number(a.total_bundle_bytes ?? 0)),
+  );
+}
+
+function izFiltered() {
+  const q = IZ.query;
+  return izSorted().filter((g) => {
+    const picked = izPickedIn(g);
+    const ok =
+      IZ.filter === "all" ||
+      (IZ.filter === "only" && izExclusive(g) === true) ||
+      (IZ.filter === "shared" && izExclusive(g) === false) ||
+      (IZ.filter === "chosen" && picked > 0) ||
+      (IZ.filter === "todo" && picked === 0);
+    return ok && (!q || `${g.source_pkg_id} ${(g.refs ?? []).map((r) => r.ref_path).join(" ")}`.toLowerCase().includes(q));
+  });
+}
+
+// Choose every copyable file of these packages.
+function izChooseAll(groups) {
+  let n = 0;
+  for (const g of groups) {
+    for (const r of g.refs ?? []) {
+      const k = izKey(g.source_pkg_id, r.ref_path);
+      if (izClash(r) || IZ.picks.has(k)) continue;
+      IZ.picks.add(k);
+      n += 1;
+    }
+  }
+  return n;
+}
+
+function izFlash(text) {
+  IZ.flash = text;
+  const live = $("iz-live");
+  if (live) live.textContent = text;
+  const token = IZ.token;
+  clearTimeout(IZ.flashTimer);
+  IZ.flashTimer = setTimeout(() => {
+    if (token !== IZ.token) return;
+    IZ.flash = "";
+    izRenderStrip();
+  }, 4000);
+}
+
+// ---- Copy in -------------------------------------------------------------------------------
+
+async function izApply() {
+  if (!invoke || IZ.applying || !IZ.picks.size) return;
+  const addon = vamAddonPackagesDir();
+  const backup = fmBackup();
+  const backupDir = fmBackupDir();
+  if (backup && !backupDir) {
+    izFlash("Choose a folder for the backups first.");
+    izRenderStrip();
+    $("iz-details")?.querySelector('[data-iz-act="pick-backup"]')?.focus();
+    return;
+  }
+  const selections = [];
+  for (const g of IZ.groups ?? []) {
+    for (const r of g.refs ?? []) {
+      if (IZ.picks.has(izKey(g.source_pkg_id, r.ref_path))) selections.push({ source_pkg_id: g.source_pkg_id, ref_path: r.ref_path });
+    }
+  }
+  if (!selections.length) return;
+  const name = libTitle(IZ.item);
+  const totals = izTotals();
+  if (!backup) {
+    const ok = await showAppConfirm(`Copy ${pkgCount(selections.length, "file", "files")} into ${name} without a backup?`);
+    if (!ok) return;
+  }
+  IZ.applying = true;
+  IZ.message = "Copying the files in…";
+  izRenderStrip();
+  let done = null;
+  try {
+    const p = await fmPoll(
+      "start_apply_internalize_task",
+      {
+        inputDir: addon,
+        additionalInputDirs: missingExtraDirs(),
+        targetVarPath: IZ.target,
+        outputDir: null,
+        replaceInPlace: true,
+        selections,
+        backup,
+        backupDir: backup ? backupDir : null,
+      },
+      (_f, message) => {
+        if (message) IZ.message = message;
+      },
+    );
+    const report = p.internalize_report ?? {};
+    const dropped = new Set(report.dependencies_removed ?? []);
+    done = {
+      ...report,
+      count: selections.length,
+      name,
+      // Dropped, and nothing else uses them: they can go.
+      removable: totals.removable
+        .filter((pkg) => dropped.has(pkg))
+        .map((pkg) => ({ pkg, file: izGroup(pkg)?.source_var_path ?? "", size: Number(izGroup(pkg)?.source_var_size ?? 0) })),
+    };
+    vpRefreshAfterMutation().catch(() => {});
+  } catch (e) {
+    showToast(`Copying in failed: ${String(e?.message || e)}`, "error", 8000);
+  } finally {
+    IZ.applying = false;
+    izRender();
+  }
+  if (done) {
+    IZ.lastFix = done;
+    IZ.picks = new Set();
+    izFlash(`Copied in ${pkgCount(Number(done.refs_rewritten ?? done.count), "file", "files")}. Checking it again…`);
+    await izScan();
+  }
+}
+
+// ---- Render ----------------------------------------------------------------------------
+
+function izRender() {
+  const view = izView();
+  if (!view) return;
+  const checked = Array.isArray(IZ.groups);
+  if (IZ.configOpen == null || !IZ.target) IZ.configOpen = !checked;
+  view.innerHTML = `
+    <section class="dashboard-grid fm-top">
+      <article class="card source-card" id="iz-source"></article>
+      <article class="card details-card" id="iz-details"></article>
+    </section>
+    <section class="progress-card card${IZ.scanning ? "" : " hidden"}" id="iz-progress">
+      <div class="progress-head"><strong>Checking</strong><span id="iz-progress-pct">0%</span></div>
+      <div class="progress-track"><div class="progress-bar" id="iz-progress-bar"></div></div>
+      <p class="panel-subtitle" id="iz-progress-msg"></p>
+    </section>
+    <section class="content-grid fm-grid iz-grid">
+      <article class="panel card fm-list-card iz-list-card">
+        <div class="panel-head panel-head-groups">
+          <div class="panel-head-main">
+            <div class="groups-header-row">
+              <h2>Packages it uses</h2>
+              <div class="group-filter-stack">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">search</span>
+                  <input id="iz-search" type="search" placeholder="Filter by package or path" value="${escapeAttribute(IZ.query)}" />
+                </div>
+              </div>
+            </div>
+            <p class="panel-subtitle" id="iz-list-subtitle"></p>
+            <div id="iz-summary"></div>
+            <div class="fm-list-tools" id="iz-list-tools"></div>
+          </div>
+        </div>
+        <div id="iz-list" class="group-list" role="listbox" aria-label="Packages it uses"></div>
+      </article>
+      <article class="panel card fm-detail-card iz-detail-card" id="iz-detail"></article>
+    </section>
+    <div id="iz-live" class="sr-only" aria-live="polite"></div>`;
+  $("iz-search").addEventListener("input", (e) => {
+    IZ.query = e.target.value.trim().toLowerCase();
+    izRenderList();
+  });
+  izRenderSource();
+  izRenderDetails();
+  izRenderProgress();
+  izRenderRefs();
+}
+
+function izRefresh() {
+  izRenderDetails();
+  izRenderRefs();
+}
+
+function izRenderRefs() {
+  izRenderSummary();
+  izRenderList();
+  izRenderDetail();
+}
+
+function izRenderProgress() {
+  const card = $("iz-progress");
+  if (!card) return;
+  card.classList.toggle("hidden", !IZ.scanning);
+  const pct = Math.round(IZ.progress * 100);
+  const bar = $("iz-progress-bar");
+  if (bar) bar.style.width = `${pct}%`;
+  const label = $("iz-progress-pct");
+  if (label) label.textContent = `${pct}%`;
+  const msg = $("iz-progress-msg");
+  if (msg) msg.textContent = `${IZ.message || "Working…"}${IZ.progress < 0.9 ? " — the first check reads every package in your folders; later ones reuse that" : ""}`;
+}
+
+// What the check found, as a chip.
+function izInfoChip() {
+  const groups = IZ.groups ?? [];
+  if (IZ.scanning) return `<span class="chip">Checking…</span>`;
+  if (IZ.error) return `<span class="chip missing-kind-text-ref" title="${escapeAttribute(IZ.error)}">Check failed</span>`;
+  if (!Array.isArray(IZ.groups)) return `<span class="chip">Not checked yet</span>`;
+  if (!groups.length) return `<span class="chip chip-accent"><span class="material-symbols-outlined">check_circle</span>Uses no files from other packages</span>`;
+  const files = groups.reduce((n, g) => n + (g.refs ?? []).length, 0);
+  return `<span class="chip fm-chip-info"><span class="material-symbols-outlined">input</span>${pkgCount(files, "file", "files")} from ${pkgCount(groups.length, "package", "packages")}</span>`;
+}
+
+function izRenderSource() {
+  const host = $("iz-source");
+  if (!host) return;
+  const extra = getUserAdditionalDirs("missing");
+  if (IZ.target && !IZ.configOpen) {
+    const it = IZ.item ?? pkgBareItem(IZ.target);
+    const facts = [
+      it.size_bytes ? formatBytesLocal(it.size_bytes) : "",
+      it.item_count ? pkgCount(it.item_count, "item", "items") : "",
+      it.dep_count ? pkgCount(it.dep_count, "dependency", "dependencies") : "",
+      it.used_by_count ? `used by ${pkgCount(it.used_by_count, "package", "packages")}` : "",
+      it.license ? it.license : "",
+    ].filter(Boolean);
+    const tags = fmTypeTags(it);
+    host.innerHTML = `
+      <header class="card-eyebrow fm-eyebrow">Source Configuration
+        <button type="button" class="fm-link" data-iz-act="config" title="Pick another .var, or change where it looks">Change</button></header>
+      <div class="fm-hero">
+        ${libThumbHtml(IZ.target, libGradient(it.file_name || it.package_id), "fm-hero-thumb")}</div>
+        <div class="fm-hero-main">
+          <div class="fm-hero-title" title="${escapeAttribute(IZ.target)}">
+            <h2>${escapeHtml(libTitle(it))}</h2>${libVersion(it) ? `<span class="fm-hero-ver">v${escapeHtml(libVersion(it))}</span>` : ""}
+          </div>
+          <div class="fm-hero-by">by <b>${escapeHtml(libCreator(it))}</b>${facts.length ? ` · ${escapeHtml(facts.join(" · "))}` : ""}</div>
+          ${tags ? `<div class="fm-hero-tags">${tags}</div>` : ""}
+          <div class="fm-info-chips">${izInfoChip()}</div>
+          <div class="fm-hero-acts">
+            <button type="button" class="ghost-button fm-small" data-iz-act="explore" title="Open it in Package Explorer"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
+            <button type="button" class="ghost-button fm-small" data-iz-act="show-file" title="${escapeAttribute(IZ.target)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+            <button type="button" class="ghost-button fm-small" data-iz-act="scan" ${IZ.scanning ? "disabled" : ""} title="${escapeAttribute(
+              `Looks in AddonPackages${extra.length ? ` + ${pkgCount(extra.length, "folder", "folders")}` : ""}`,
+            )}"><span class="material-symbols-outlined">refresh</span>${IZ.scanning ? "Checking…" : "Check again"}</button>
+          </div>
+        </div>
+      </div>`;
+    libThumbWatch(host);
+    return;
+  }
+  const folders = `<div class="fm-folders">
+      <span class="material-symbols-outlined">folder_open</span>
+      <span>Looks in AddonPackages, the offload folder${extra.length ? ` and ${pkgCount(extra.length, "more folder", "more folders")}` : ""} (the same as Fix Missing)</span>
+      ${extra
+        .map(
+          (d, i) => `<span class="fm-folder-chip" title="${escapeAttribute(d)}">${escapeHtml(d.split(/[\\/]/).filter(Boolean).slice(-2).join("\\"))}
+             <button type="button" data-iz-rmdir="${i}" title="Stop looking here" aria-label="Remove"><span class="material-symbols-outlined">close</span></button></span>`,
+        )
+        .join("")}
+      <button type="button" class="ghost-button fm-small" data-iz-act="add-folder"><span class="material-symbols-outlined">create_new_folder</span>Add folder</button>
+    </div>`;
+  host.innerHTML = `
+    <header class="card-eyebrow fm-eyebrow">Source Configuration${
+      IZ.target && Array.isArray(IZ.groups) ? `<button type="button" class="fm-link" data-iz-act="config">Fold</button>` : ""
+    }</header>
+    <div class="source-body">
+      <div class="var-details-dropzone missing-target-dropzone fm-dropzone${IZ.target ? " is-compact" : ""}" data-iz-act="pick" role="button" tabindex="0">
+        <div class="var-details-dropzone-icon"><span class="material-symbols-outlined">upload_file</span></div>
+        <h4 class="var-details-dropzone-title">${IZ.target ? "Drop another .var to check it instead" : "Drag and drop a .var"}</h4>
+        <p class="var-details-dropzone-subtitle">${IZ.target ? "or click to pick one" : "The package to copy other packages' files into."}</p>
+        ${IZ.target ? "" : `<div class="var-details-dropzone-actions"><button type="button" class="primary-button" data-iz-act="pick">Select File</button></div>`}
+      </div>
+      <div class="path-grid">
+        <div class="path-row"><span class="path-label">Where to look</span>${folders}</div>
+      </div>
+      <div class="action-row">
+        <button type="button" class="primary-button action-button fm-scan-btn" data-iz-act="scan" ${IZ.target && !IZ.scanning ? "" : "disabled"}>${
+          IZ.scanning ? "Checking…" : Array.isArray(IZ.groups) ? "Check again" : "Check it"
+        }</button>
+      </div>
+    </div>`;
+}
+
+function izStartHtml() {
+  const recent = izRecentGet().slice(0, 5);
+  const known = new Set(recent.map((r) => r.path));
+  const st = IZ.start;
+  const most = (st?.items ?? []).filter((it) => !known.has(it.file_path)).slice(0, 6);
+  const row = (path, item, note) => `<button type="button" class="fm-start-row" data-iz-start="${escapeAttribute(path)}" title="${escapeAttribute(path)}">
+      <span class="fm-start-text"><b>${escapeHtml(libTitle(item))}</b><small>by ${escapeHtml(libCreator(item))}</small></span>
+      <span class="chip">${escapeHtml(note)}</span>
+    </button>`;
+  const parts = [];
+  if (recent.length) {
+    parts.push(
+      `<h3 class="fm-start-h">Checked lately</h3>${recent
+        .map((r) => row(r.path, libFindItem(r.path) ?? pkgBareItem(r.path), r.count ? pkgCount(r.count, "file from others", "files from others") : "uses no others"))
+        .join("")}`,
+    );
+  }
+  parts.push(
+    `<h3 class="fm-start-h">With the most dependencies</h3>${
+      !st || st.loading
+        ? `<p class="fm-none-line">Looking through your packages…</p>`
+        : st.error
+          ? `<p class="fm-none-line">Couldn't list them: ${escapeHtml(st.error)}</p>`
+          : most.length
+            ? most.map((it) => row(it.file_path, it, pkgCount(it.dep_count - it.missing_dep_count, "dependency installed", "dependencies installed"))).join("")
+            : `<p class="fm-none-line">None of your packages uses another one.</p>`
+    }`,
+  );
+  return `<div class="fm-start">${parts.join("")}<p class="fm-start-note">Pick one to check it, or drop a .var on the left.</p></div>`;
+}
+
+// What Copy in will change, from the choices so far.
+function izPlanHtml() {
+  const t = izTotals();
+  if (!t.chosen) {
+    return `<div class="fm-plan is-empty"><span class="material-symbols-outlined">edit_note</span>
+        <span>Choose files to copy in, and this shows what it will change.</span></div>`;
+  }
+  const few = (list, html) => `${list.slice(0, 3).map(html).join("")}${list.length > 3 ? `<small class="fm-plan-more">and ${list.length - 3} more</small>` : ""}`;
+  const files = new Set();
+  for (const g of IZ.groups ?? []) {
+    for (const r of g.refs ?? []) {
+      if (IZ.picks.has(izKey(g.source_pkg_id, r.ref_path))) (r.source_files_in_target ?? []).forEach((f) => files.add(f.split("/").pop()));
+    }
+  }
+  const dir = fmBackupDir();
+  const where = `${izSelfName()} itself${
+    !fmBackup() ? ", without a backup" : dir ? `, after backing it up to …\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : " (choose a folder for the backup)"
+  }`;
+  const line = (icon, label, body) => `<div class="fm-plan-line"><span class="material-symbols-outlined">${icon}</span><span class="fm-plan-label">${label}</span><span class="fm-plan-body">${body}</span></div>`;
+  const summary = [
+    `${pkgCount(t.chosen, "file", "files")} · about ${formatBytesLocal(t.bytes)}`,
+    t.drops.length ? `drops ${pkgCount(t.drops.length, "dependency", "dependencies")}` : "no dependency dropped",
+  ].join(" · ");
+  const open = IZ.planOpen;
+  return `<div class="fm-plan${open ? "" : " is-folded"}">
+      <button type="button" class="fm-plan-toggle" data-iz-act="plan" aria-expanded="${open}" title="${open ? "Fold" : "What it changes, in detail"}">
+        <span class="fm-plan-h">Copy in</span><span class="fm-plan-sum">${escapeHtml(summary)}</span>
+        <span class="material-symbols-outlined">${open ? "expand_less" : "expand_more"}</span>
+      </button>
+      ${
+        open
+          ? `${line("input", "Copy", `${pkgCount(t.chosen, "file", "files")} with what they need, about ${escapeHtml(formatBytesLocal(t.bytes))}`)}
+             ${line("edit", "Rewrite", `the references in ${escapeHtml([...files].join(", ") || "meta.json")}`)}
+             ${t.drops.length ? line("link_off", "No longer need", few(t.drops, (pkg) => fmPkgLabelHtml(pkg))) : ""}
+             ${t.partial.length ? line("link", "Still need", `${few(t.partial, (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">some of their files stay where they are</small>`) : ""}
+             ${t.removable.length ? line("delete_sweep", "Can remove", `${few(t.removable, (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">nothing else uses ${t.removable.length === 1 ? "it" : "them"}: ${escapeHtml(formatBytesLocal(t.freed))}</small>`) : ""}
+             ${line("save", "Write", escapeHtml(where))}`
+          : ""
+      }
+    </div>`;
+}
+
+function izRenderDetails() {
+  const host = $("iz-details");
+  if (!host) return;
+  const groups = IZ.groups ?? [];
+  const folded = Boolean(IZ.target && !IZ.configOpen);
+  const fix = IZ.lastFix;
+  const removeHtml = (fix?.removable ?? [])
+    .map(
+      (r) => `<div class="iz-report-remove">${fmPkgLabelHtml(r.pkg)}<span class="fm-dim">${escapeHtml(formatBytesLocal(r.size))}</span>
+          <button type="button" class="ghost-button fm-small" data-iz-explore-pkg="${escapeAttribute(r.pkg)}" data-iz-explore-file="${escapeAttribute(r.file)}" title="Open it in Package Explorer, to remove it from there"><span class="material-symbols-outlined">space_dashboard</span>Explore</button></div>`,
+    )
+    .join("");
+  const report = fix
+    ? `<div class="fm-report">
+        <span class="material-symbols-outlined">check_circle</span>
+        <button type="button" class="fm-icon-btn fm-report-close" data-iz-act="fix-report-close" title="Close" aria-label="Close"><span class="material-symbols-outlined">close</span></button>
+        <div><b>Copied ${pkgCount(Number(fix.refs_rewritten ?? fix.count), "file", "files")} into ${escapeHtml(fix.name)}.</b>
+          <small>${pkgCount(Number(fix.entries_copied ?? 0), "file", "files")} added (${escapeHtml(formatBytesLocal(Number(fix.bytes_added ?? 0)))}), ${pkgCount(Number(fix.files_rewritten ?? 0), "file", "files")} inside it rewritten.</small>
+          ${(fix.entries_skipped_collision ?? []).length ? `<small>${pkgCount(fix.entries_skipped_collision.length, "file was", "files were")} already inside, so not copied again.</small>` : ""}
+          ${(fix.dependencies_removed ?? []).length ? `<small class="fm-report-pkgs">No longer depends on ${fix.dependencies_removed.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
+          ${removeHtml ? `<small>Nothing else uses ${fix.removable.length === 1 ? "this one" : "these"}, so ${fix.removable.length === 1 ? "it" : "they"} can go:</small>${removeHtml}` : ""}
+          ${(fix.errors ?? []).map((e) => `<small class="fm-report-err">${escapeHtml(e)}</small>`).join("")}
+          <small>${
+            fix.backup_path
+              ? `The original is backed up: <span title="${escapeAttribute(fix.backup_path)}">${escapeHtml(fix.backup_path.split(/[\\/]/).slice(-2).join("\\"))}</span>`
+              : "No backup of the original was kept."
+          }</small>
+          ${fix.backup_path ? `<div class="fm-replace-acts"><button type="button" class="ghost-button fm-small" data-iz-act="show-backup"><span class="material-symbols-outlined">folder_open</span>Show the backup</button></div>` : ""}
+        </div>
+      </div>`
+    : "";
+  const dir = fmBackupDir();
+  const settings = groups.length
+    ? `<div class="fm-backup-line">
+        <label class="check-row" title="A copy of the package as it is now, before the files are copied in (shared with Fix Missing)">
+          <input id="iz-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>${fmBackup() ? "Keep a backup in" : "Keep a backup of the original"}</span></label>
+        ${
+          fmBackup()
+            ? `<button type="button" class="fm-folder-chip-btn${dir ? "" : " is-empty"}" data-iz-act="pick-backup"
+                title="${escapeAttribute(dir ? `${dir}\nBackups go here, never over an earlier one. Click to choose another folder.` : "Choose where backups go")}">
+                <span class="material-symbols-outlined">folder_open</span><span class="fm-folder-chip-text">${escapeHtml(
+                  dir ? `…\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : "choose a folder",
+                )}</span><span class="material-symbols-outlined">expand_more</span></button>`
+            : ""
+        }
+      </div>`
+    : "";
+  let cta = "";
+  if (groups.length) {
+    cta = "";
+  } else if (!IZ.target) {
+    izLoadStart();
+    cta = izStartHtml();
+  } else if (Array.isArray(IZ.groups) && !IZ.error) {
+    cta = `<p class="fm-details-hint fm-details-clean"><span class="material-symbols-outlined">check_circle</span>Nothing to copy in: it uses no files from other installed packages.</p>`;
+  } else if (!IZ.scanning) {
+    cta = `<p class="fm-details-hint">Check the package to see which files it uses from other packages.</p>`;
+  }
+  host.innerHTML = `
+    <header class="card-eyebrow">${!IZ.target ? "Start from" : "Copy in"}</header>
+    ${folded || !IZ.target ? "" : `<p class="fm-details-hint">${escapeHtml(IZ.target)}</p>`}
+    ${report}${settings}${groups.length ? izPlanHtml() : ""}${cta}`;
+  $("iz-backup")?.addEventListener("change", (e) => {
+    fmStoreSet(FM_STORE.backup, e.target.checked ? "1" : "0");
+    izRenderDetails();
+  });
+  libThumbWatch(host);
+}
+
+// After a check: which packages can go, which stay.
+function izRenderSummary() {
+  const host = $("iz-summary");
+  if (!host) return;
+  const groups = IZ.groups ?? [];
+  if (!groups.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const only = groups.filter((g) => izExclusive(g) === true && izDroppable(g));
+  const shared = groups.filter((g) => izExclusive(g) === false);
+  const openOnly = only.filter((g) => (g.refs ?? []).some((r) => !izClash(r) && !IZ.picks.has(izKey(g.source_pkg_id, r.ref_path))));
+  const clashes = groups.reduce((n, g) => n + (g.refs ?? []).filter(izClash).length, 0);
+  const bytes = only.reduce((n, g) => n + Number(g.total_bundle_bytes ?? 0), 0);
+  const frees = only.reduce((n, g) => n + Number(g.source_var_size ?? 0), 0);
+  const self = escapeHtml(izSelfName());
+  const lines = [
+    only.length
+      ? `<li><b>${only.length}</b> ${only.length === 1 ? "is" : "are"} used only by ${self}: copy ${only.length === 1 ? "its" : "their"} files in (about ${escapeHtml(
+          formatBytesLocal(bytes),
+        )}) and ${only.length === 1 ? "it" : "they"} can be removed, freeing ${escapeHtml(formatBytesLocal(frees))}.</li>`
+      : "",
+    shared.length
+      ? `<li><b>${shared.length}</b> ${shared.length === 1 ? "is" : "are"} used by other packages too: copying makes ${self} stand on its own, but ${shared.length === 1 ? "it stays" : "they stay"} installed.</li>`
+      : "",
+    clashes ? `<li><b>${clashes}</b> ${clashes === 1 ? "file clashes" : "files clash"} with a different file already inside ${self} at the same path — left out.</li>` : "",
+  ].join("");
+  if (!lines) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = `<div class="fm-summary">
+      <span class="material-symbols-outlined">lightbulb</span>
+      <div><ul>${lines}</ul>
+        ${
+          openOnly.length
+            ? `<div class="fm-summary-acts"><button type="button" class="ghost-button fm-small fm-summary-main" data-iz-act="choose-only"><span class="material-symbols-outlined">done_all</span>Choose the ${
+                openOnly.length === 1 ? "one" : openOnly.length
+              } only ${self} uses</button></div>`
+            : ""
+        }
+      </div>
+    </div>`;
+}
+
+// Who else uses a package, as a chip.
+function izUsageChip(g) {
+  const ex = izExclusive(g);
+  if (ex == null) return "";
+  if (ex) return `<span class="chip fm-chip-good" title="No other package in your folders depends on it">only used here</span>`;
+  const names = (g.other_users ?? []).map((id) => pkgIdParts(id).name);
+  const more = Number(g.used_by_others) - names.length;
+  return `<span class="chip fm-chip-muted" title="${escapeAttribute(`Also used by ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}`)}">used by ${pkgCount(Number(g.used_by_others), "other", "others")}</span>`;
+}
+
+function izRenderList() {
+  const host = $("iz-list");
+  const subtitle = $("iz-list-subtitle");
+  const tools = $("iz-list-tools");
+  if (!host) return;
+  const groups = IZ.groups;
+  if (!Array.isArray(groups)) {
+    host.className = "group-list empty";
+    host.innerHTML = IZ.scanning ? "Checking…" : IZ.error ? escapeHtml(IZ.error) : IZ.target ? "Check the package to list the packages it uses." : "Pick a .var above, or one of the packages on the right.";
+    if (subtitle) subtitle.textContent = IZ.target ? "Not checked yet." : "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  if (!groups.length) {
+    host.className = "group-list empty";
+    host.innerHTML = `<span class="fm-clean"><span class="material-symbols-outlined">check_circle</span>It uses no files from other installed packages.</span>`;
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  host.className = "group-list";
+  const t = izTotals();
+  if (subtitle) {
+    subtitle.innerHTML = `<span>${pkgCount(t.files, "file", "files")} from ${pkgCount(groups.length, "package", "packages")}${t.chosen ? ` · ${t.chosen} chosen` : ""}</span>
+      <span class="fm-keys"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> chooses all its files</span>`;
+  }
+  if (tools) {
+    const count = (k) => {
+      const save = IZ.filter;
+      IZ.filter = k;
+      const n = izFiltered().length;
+      IZ.filter = save;
+      return n;
+    };
+    const known = groups.some((g) => izExclusive(g) != null);
+    tools.innerHTML = `
+      <div class="fm-filter-row">${[
+        ["all", "All"],
+        known ? ["only", "Only used here"] : null,
+        known ? ["shared", "Used by others"] : null,
+        ["todo", "Not chosen"],
+        ["chosen", "Chosen"],
+      ]
+        .filter(Boolean)
+        .map(([k, label]) => `<button type="button" class="fm-filter${IZ.filter === k ? " is-active" : ""}" data-iz-filter="${k}">${label} <small>${count(k)}</small></button>`)
+        .join("")}</div>`;
+  }
+  const rows = izFiltered();
+  if (!rows.length) {
+    host.innerHTML = `<p class="fm-none">No package matches.</p>`;
+    return;
+  }
+  const focusKey = rows.some((g) => g.source_pkg_id === IZ.selected) ? IZ.selected : rows[0].source_pkg_id;
+  host.innerHTML = rows
+    .map((g) => {
+      const pkg = g.source_pkg_id;
+      const p = pkgIdParts(pkg);
+      const refs = g.refs ?? [];
+      const picked = izPickedIn(g);
+      const all = picked > 0 && picked === refs.length;
+      const icon = all ? "check_circle" : picked ? "incomplete_circle" : "fiber_manual_record";
+      const sub = [p.creator, p.ver].filter(Boolean).join(" · ");
+      const right = all
+        ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed" title="Every file it gives is chosen: ${escapeAttribute(izSelfName())} won't need it">copy in · no longer needed</span>
+            <button type="button" class="fm-icon-btn fm-row-clear" data-iz-row-clear="${escapeAttribute(pkg)}" title="Clear these choices" aria-label="Clear these choices"><span class="material-symbols-outlined">close</span></button></span>`
+        : picked
+          ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed">${picked} of ${refs.length} chosen</span>
+              <button type="button" class="fm-icon-btn fm-row-clear" data-iz-row-clear="${escapeAttribute(pkg)}" title="Clear these choices" aria-label="Clear these choices"><span class="material-symbols-outlined">close</span></button></span>`
+          : "";
+      return `<div class="group-row missing-row fm-row iz-row${pkg === IZ.selected ? " active focused" : ""}${picked ? " is-chosen" : ""}" data-iz-row="${escapeAttribute(pkg)}"
+          role="option" aria-selected="${pkg === IZ.selected}" tabindex="${pkg === focusKey ? 0 : -1}">
+          <span class="material-symbols-outlined fm-row-state${picked ? "" : " is-dot"}">${icon}</span>
+          ${libThumbHtml(g.source_var_path, libGradient(pkg), "iz-row-thumb")}</div>
+          <span class="fm-row-text">
+            <span class="fm-row-name" title="${escapeAttribute(pkg)}">${escapeHtml(p.name)}${sub ? ` <small class="iz-row-sub">${escapeHtml(sub)}</small>` : ""}</span>
+            <span class="fm-row-dir">
+              <span class="iz-fact" title="What copying all its files in adds, with what they need">${pkgCount(refs.length, "file", "files")} · ${escapeHtml(formatBytesLocal(Number(g.total_bundle_bytes ?? 0)))}</span>
+              <span class="iz-fact" title="The whole package">of ${escapeHtml(formatBytesLocal(Number(g.source_var_size ?? 0)))}</span>
+              ${izUsageChip(g)}
+            </span>
+          </span>
+          ${right}
+        </div>`;
+    })
+    .join("");
+  libThumbWatch(host);
+}
+
+function izRenderStrip() {
+  const host = $("iz-strip");
+  if (!host) return;
+  const groups = IZ.groups ?? [];
+  if (!groups.length) {
+    host.innerHTML = "";
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+  const t = izTotals();
+  const sheet = `<button type="button" class="fm-icon-btn fm-sheet-toggle" data-iz-act="sheet" aria-expanded="${IZ.sheetOpen}" title="${
+    IZ.sheetOpen ? "Fold" : "Open"
+  }"><span class="material-symbols-outlined">${IZ.sheetOpen ? "expand_more" : "expand_less"}</span></button>`;
+  const note = IZ.flash
+    ? escapeHtml(IZ.flash)
+    : t.chosen
+      ? `About ${escapeHtml(formatBytesLocal(t.bytes))}${t.drops.length ? ` · drops ${pkgCount(t.drops.length, "dependency", "dependencies")}` : ""}`
+      : "Copy in as many or as few as you like.";
+  const of = `${t.chosen} of ${pkgCount(t.copyable, "file", "files")} chosen`;
+  host.innerHTML = `<span class="fm-ring" title="${escapeAttribute(of)}">${pkgRing(t.copyable ? t.chosen / t.copyable : 0, t.chosen && t.chosen === t.copyable ? "var(--accent-success)" : "var(--primary)", { size: 38, track: "var(--line)" })}<b>${t.chosen}</b></span>
+     <span class="fm-strip-text"><b>${of}</b><small>${note}</small></span>
+     ${IZ.picks.size ? `<button type="button" class="ghost-button fm-small" data-iz-act="clear-picks" title="Clear every choice"><span class="material-symbols-outlined">close</span>Clear all</button>` : ""}
+     <button type="button" class="accent-button fm-small" data-iz-act="apply" ${t.chosen && !IZ.applying ? "" : "disabled"}>${
+       IZ.applying ? "Copying…" : t.chosen ? `Copy in (${t.chosen})` : "Copy in"
+     }</button>${sheet}`;
+}
+
+function izFileHtml(g, r) {
+  const key = izKey(g.source_pkg_id, r.ref_path);
+  const picked = IZ.picks.has(key);
+  const clash = izClash(r);
+  const path = r.ref_path;
+  const slash = path.lastIndexOf("/");
+  const type = fmFileType(path);
+  const others = (r.bundle_paths ?? []).filter((p) => p !== path);
+  const open = IZ.bundleOpen.has(key);
+  const used = (r.source_files_in_target ?? []).map((f) => f.split("/").pop());
+  const inside = (r.already_inside ?? []).length;
+  const tags = [
+    clash ? `<span class="chip fm-chip-warn" title="${escapeAttribute(`${izSelfName()} already has a different file at ${path}: copying would leave the reference loading that one`)}">Clashes</span>` : "",
+    !clash && inside ? `<span class="chip" title="${escapeAttribute((r.already_inside ?? []).join("\n"))}">${inside === (r.bundle_paths ?? []).length ? "Already inside" : `${inside} already inside`}</span>` : "",
+  ].join("");
+  return `<div class="fm-cand-row iz-file${picked ? " is-selected" : ""}${clash ? " is-avoided" : ""}" ${
+    clash ? `aria-disabled="true"` : `role="checkbox" tabindex="0" aria-checked="${picked}" data-iz-pick="${escapeAttribute(key)}"`
+  }>
+      <div class="fm-cand-top">
+        <span class="fm-cand-pick">
+          <span class="material-symbols-outlined fm-cand-radio">${clash ? "block" : picked ? "check_box" : "check_box_outline_blank"}</span>
+          <span class="iz-file-text"><b title="${escapeAttribute(`${g.source_pkg_id}:/${path}`)}">${escapeHtml(slash >= 0 ? path.slice(slash + 1) : path)}</b>
+            <span class="fm-row-dir">${fmTypeChip(type.label)}${
+              type.rest ? `<span class="fm-row-folder" title="${escapeAttribute(`Folder: ${type.folder}`)}"><span class="material-symbols-outlined">folder</span><span class="fm-trunc">${escapeHtml(type.rest)}</span></span>` : ""
+            }<span class="fm-dim">${escapeHtml(formatBytesLocal(Number(r.bundle_total_size ?? r.size ?? 0)))}</span></span></span>
+        </span>
+        <span class="fm-cand-tags">${tags}</span>
+        <span class="fm-cand-acts">
+          <button type="button" class="fm-icon-btn" data-iz-copy="${escapeAttribute(`${g.source_pkg_id}:/${path}`)}" title="Copy the reference"><span class="material-symbols-outlined">content_copy</span></button>
+        </span>
+      </div>
+      <div class="fm-cand-sub">
+        <span class="fm-dim" title="${escapeAttribute((r.source_files_in_target ?? []).join("\n"))}">used in ${escapeHtml(used.slice(0, 2).join(", ") || "meta.json")}${used.length > 2 ? ` and ${used.length - 2} more` : ""}</span>
+        ${
+          others.length
+            ? `<button type="button" class="fm-link iz-bundle-toggle" data-iz-bundle="${escapeAttribute(key)}" aria-expanded="${open}">+ ${pkgCount(others.length, "file it needs", "files it needs")}</button>`
+            : ""
+        }
+      </div>
+      ${
+        open
+          ? `<ul class="iz-bundle">${others
+              .map((p) => `<li${(r.conflicts ?? []).includes(p) ? ` class="is-clash" title="A different file is already inside at this path"` : ""}><code>${escapeHtml(p)}</code></li>`)
+              .join("")}</ul>`
+          : ""
+      }
+    </div>`;
+}
+
+function izRenderDetail() {
+  const host = $("iz-detail");
+  if (!host) return;
+  const g = izGroup(IZ.selected);
+  if (!g) {
+    host.innerHTML = `<div class="fm-strip hidden" id="iz-strip"></div>
+      <div class="panel-head"><div><h2>Files it uses</h2>
+        <p class="panel-subtitle">${(IZ.groups ?? []).length ? "Select a package to see the files it gives." : "The files to copy in are chosen here."}</p></div></div>
+      <div class="detail-empty">No package selected.</div>`;
+    izSheetSync(host);
+    izRenderStrip();
+    return;
+  }
+  const pkg = g.source_pkg_id;
+  const p = pkgIdParts(pkg);
+  const refs = g.refs ?? [];
+  const copyable = refs.filter((r) => !izClash(r));
+  const picked = izPickedIn(g);
+  const all = copyable.length > 0 && picked === refs.length;
+  const ex = izExclusive(g);
+  const self = escapeHtml(izSelfName());
+  const name = escapeHtml(p.name);
+  const size = escapeHtml(formatBytesLocal(Number(g.source_var_size ?? 0)));
+  const usage =
+    ex === true && !izDroppable(g)
+      ? `Nothing else uses it, but a file that clashes keeps ${self} needing it.`
+      : ex === true
+      ? `Nothing else uses it: once its files are in, you can remove it and free ${size}.`
+      : ex === false
+        ? `${pkgCount(Number(g.used_by_others), "other package uses", "other packages use")} it${
+            (g.other_users ?? []).length ? ` (${escapeHtml((g.other_users ?? []).slice(0, 3).map((id) => pkgIdParts(id).name).join(", "))}${Number(g.used_by_others) > 3 ? "…" : ""})` : ""
+          }, so it stays installed either way.`
+        : "";
+  const verdict = all
+    ? `<div class="fm-chosen">
+        <div class="fm-chosen-main">
+          <span class="material-symbols-outlined">check_circle</span>
+          <div class="fm-chosen-text"><small>Every file chosen</small><b>${self} won't need ${name} any more.</b><small>${usage}</small></div>
+          <button type="button" class="ghost-button fm-small" data-iz-row-clear="${escapeAttribute(pkg)}"><span class="material-symbols-outlined">close</span>Clear</button>
+        </div>
+      </div>`
+    : copyable.length
+      ? `<div class="fm-best">
+          <div class="fm-best-text">
+            <span class="fm-best-tag">${ex === true && izDroppable(g) ? "Worth copying in" : "Copy in"}</span>
+            <b>${picked ? `The other ${copyable.length - picked}` : `All ${pkgCount(copyable.length, "file", "files")}`}, about ${escapeHtml(formatBytesLocal(izBytesOf(g, copyable.filter((r) => !IZ.picks.has(izKey(pkg, r.ref_path))))))}</b>
+            <small>${copyable.length === refs.length ? `Then ${self} no longer needs ${name}. ` : ""}${usage}</small>
+          </div>
+          <button type="button" class="accent-button" data-iz-choose="${escapeAttribute(pkg)}"><span class="material-symbols-outlined">done_all</span>${picked ? "Choose the rest" : "Choose all"}</button>
+        </div>`
+      : `<p class="fm-none-line">Every file clashes with a different one already inside ${self}.</p>`;
+  const local = libFindItem(g.source_var_path);
+  host.innerHTML = `
+    <div class="fm-strip" id="iz-strip"></div>
+    <h2 class="sr-only">Files it uses</h2>
+    <div class="detail-panel fm-detail-body">
+      <div class="iz-pkg-head">
+        ${libThumbHtml(g.source_var_path, libGradient(pkg), "iz-pkg-thumb")}</div>
+        <div class="iz-pkg-text">
+          <b title="${escapeAttribute(pkg)}">${name}</b>
+          <small>${escapeHtml([p.creator, p.ver, formatBytesLocal(Number(g.source_var_size ?? 0))].filter(Boolean).join(" · "))}</small>
+          <span class="iz-pkg-chips">${izUsageChip(g)}${local ? fmTypeTags(local) : ""}</span>
+        </div>
+      </div>
+      <div class="fm-ref-acts">
+        <button type="button" class="ghost-button fm-small" data-iz-explore-pkg="${escapeAttribute(pkg)}" data-iz-explore-file="${escapeAttribute(g.source_var_path)}" title="${escapeAttribute(`Open ${pkg} in Package Explorer`)}"><span class="material-symbols-outlined">space_dashboard</span>Explore package</button>
+        <button type="button" class="ghost-button fm-small" data-iz-show="${escapeAttribute(g.source_var_path)}" title="${escapeAttribute(g.source_var_path)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+        <button type="button" class="fm-icon-btn" data-iz-copy="${escapeAttribute(pkg)}" title="Copy the package id"><span class="material-symbols-outlined">content_copy</span></button>
+      </div>
+      ${verdict}
+      <section class="fm-sources">
+        <h3 class="iz-files-h">Files ${self} uses from it <small>${refs.length}</small></h3>
+        <div class="fm-cands">${refs.map((r) => izFileHtml(g, r)).join("")}</div>
+      </section>
+    </div>`;
+  libThumbWatch(host);
+  izSheetSync(host);
+  izRenderStrip();
+}
+
+// Kept inside the window like Fix Missing's panel, so its end is reachable.
+function izFitPanel() {
+  const card = $("iz-detail");
+  if (!card || !izVisible()) return;
+  const grid = document.querySelector(".iz-grid");
+  const pos = getComputedStyle(card).position;
+  if (pos === "fixed") {
+    const list = document.querySelector(".iz-list-card")?.getBoundingClientRect();
+    if (list) {
+      card.style.left = `${Math.round(list.left)}px`;
+      card.style.width = `${Math.round(list.width)}px`;
+      card.style.right = "auto";
+    }
+    card.style.maxHeight = "";
+    if (grid) grid.style.paddingBottom = `${Math.round(card.getBoundingClientRect().height) + 24}px`;
+    return;
+  }
+  card.style.left = "";
+  card.style.width = "";
+  card.style.right = "";
+  if (grid) grid.style.paddingBottom = "";
+  if (pos !== "sticky") {
+    card.style.maxHeight = "";
+    return;
+  }
+  const header = document.querySelector(".app-header")?.getBoundingClientRect().bottom ?? 56;
+  const top = Math.max(card.getBoundingClientRect().top, header + 12);
+  card.style.maxHeight = `${Math.max(260, Math.floor(window.innerHeight - top - 12))}px`;
+}
+
+function izSheetSync(host) {
+  host.classList.toggle("is-open", IZ.sheetOpen);
+  host.classList.toggle("is-empty", !(IZ.groups ?? []).length);
+  requestAnimationFrame(izFitPanel);
+}
+
+function izFocusRow(pkg) {
+  const row = izView()?.querySelector(`[data-iz-row="${CSS.escape(pkg)}"]`);
+  row?.focus({ preventScroll: true });
+  requestAnimationFrame(() => {
+    const card = $("iz-detail");
+    if (!row || !card || getComputedStyle(card).position !== "fixed") {
+      row?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    const over = row.getBoundingClientRect().bottom - card.getBoundingClientRect().top + 12;
+    if (over > 0) document.scrollingElement.scrollTop += over;
+  });
+}
+
+// ---- Events ---------------------------------------------------------------------------------
+
+// Enter on a row: choose all its files, or clear them when they all are.
+function izToggleAll(pkg) {
+  const g = izGroup(pkg);
+  if (!g) return;
+  const refs = g.refs ?? [];
+  if (refs.length && izPickedIn(g) === refs.length) {
+    refs.forEach((r) => IZ.picks.delete(izKey(pkg, r.ref_path)));
+    izFlash("Choices cleared.");
+  } else {
+    const n = izChooseAll([g]);
+    izFlash(n ? `Chose ${pkgCount(n, "file", "files")} from ${pkgIdParts(pkg).name}.` : "Nothing more to choose there.");
+  }
+  izRefresh();
+}
+
+function izTogglePick(key) {
+  if (IZ.picks.has(key)) IZ.picks.delete(key);
+  else IZ.picks.add(key);
+  izRefresh();
+}
+
+function izOnClick(e) {
+  const t = e.target;
+  const q = (sel) => t.closest?.(sel);
+  let el;
+  if ((el = q("[data-iz-row-clear]"))) {
+    e.preventDefault();
+    e.stopPropagation();
+    const pkg = el.getAttribute("data-iz-row-clear");
+    for (const r of izGroup(pkg)?.refs ?? []) IZ.picks.delete(izKey(pkg, r.ref_path));
+    izFlash("Choices cleared.");
+    izRefresh();
+    return;
+  }
+  if ((el = q("[data-iz-explore-pkg]"))) {
+    e.preventDefault();
+    e.stopPropagation();
+    fmExplore(el.getAttribute("data-iz-explore-pkg"), el.getAttribute("data-iz-explore-file"));
+    return;
+  }
+  if ((el = q("[data-iz-show]"))) {
+    invoke("show_in_explorer", { path: el.getAttribute("data-iz-show") }).catch(() => {});
+    return;
+  }
+  if ((el = q("[data-iz-copy]"))) {
+    e.preventDefault();
+    e.stopPropagation();
+    const text = el.getAttribute("data-iz-copy");
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        izFlash(text.includes(":/") ? "Copied the reference." : "Copied the package id.");
+        izRenderStrip();
+      })
+      .catch(() => {});
+    return;
+  }
+  if ((el = q("[data-iz-bundle]"))) {
+    e.preventDefault();
+    e.stopPropagation();
+    const k = el.getAttribute("data-iz-bundle");
+    if (IZ.bundleOpen.has(k)) IZ.bundleOpen.delete(k);
+    else IZ.bundleOpen.add(k);
+    izRenderDetail();
+    return;
+  }
+  if ((el = q("[data-iz-rmdir]"))) {
+    removeAdditionalDir("missing", Number(el.getAttribute("data-iz-rmdir"))).then(izRenderSource);
+    return;
+  }
+  if ((el = q("[data-iz-choose]"))) {
+    const g = izGroup(el.getAttribute("data-iz-choose"));
+    if (g) {
+      const n = izChooseAll([g]);
+      izFlash(`Chose ${pkgCount(n, "file", "files")}.`);
+      izRefresh();
+    }
+    return;
+  }
+  if ((el = q("[data-iz-pick]"))) {
+    izTogglePick(el.getAttribute("data-iz-pick"));
+    return;
+  }
+  if ((el = q("[data-iz-start]"))) {
+    izOpen(el.getAttribute("data-iz-start"), { scan: true });
+    return;
+  }
+  if ((el = q("[data-iz-row]"))) {
+    IZ.selected = el.getAttribute("data-iz-row");
+    IZ.sheetOpen = true;
+    izRenderRefs();
+    izFocusRow(IZ.selected);
+    return;
+  }
+  if ((el = q("[data-iz-filter]"))) {
+    IZ.filter = el.getAttribute("data-iz-filter");
+    izRenderList();
+    return;
+  }
+  if (!(el = q("[data-iz-act]"))) return;
+  switch (el.getAttribute("data-iz-act")) {
+    case "pick":
+      invoke("pick_var_file")
+        .then((picked) => picked && izOpen(picked, { scan: true }))
+        .catch(() => {});
+      break;
+    case "config":
+      IZ.configOpen = !IZ.configOpen;
+      izRenderSource();
+      izRenderDetails();
+      break;
+    case "sheet":
+      IZ.sheetOpen = !IZ.sheetOpen;
+      izRenderDetail();
+      break;
+    case "scan":
+      izScan();
+      break;
+    case "explore":
+      if (IZ.target) pkgOpen(IZ.item?.__lib ? IZ.item : IZ.target);
+      break;
+    case "show-file":
+      invoke("show_in_explorer", { path: IZ.target }).catch(() => {});
+      break;
+    case "fix-report-close":
+      IZ.lastFix = null;
+      izRenderDetails();
+      break;
+    case "plan":
+      IZ.planOpen = !IZ.planOpen;
+      izRenderDetails();
+      break;
+    case "show-backup":
+      if (IZ.lastFix?.backup_path) invoke("show_in_explorer", { path: IZ.lastFix.backup_path }).catch(() => {});
+      break;
+    case "add-folder":
+      addAdditionalDir("missing").then(izRenderSource);
+      break;
+    case "choose-only": {
+      const only = (IZ.groups ?? []).filter((g) => izExclusive(g) === true && izDroppable(g));
+      const n = izChooseAll(only);
+      izFlash(`Chose ${pkgCount(n, "file", "files")} from ${pkgCount(only.length, "package", "packages")} only ${izSelfName()} uses.`);
+      izRefresh();
+      break;
+    }
+    case "clear-picks":
+      IZ.picks.clear();
+      izRefresh();
+      break;
+    case "pick-backup":
+      invoke("pick_folder")
+        .then((dir) => {
+          if (!dir) return;
+          fmStoreSet(FM_STORE.backupDir, dir);
+          izRenderDetails();
+        })
+        .catch(() => {});
+      break;
+    case "apply":
+      izApply();
+      break;
+    default:
+      break;
+  }
+}
+
+function setupInternalize() {
+  const view = izView();
+  if (!view) return;
+  view.addEventListener("click", izOnClick);
+  view.addEventListener("keydown", (e) => {
+    const row = e.target.closest?.("[data-iz-row]");
+    if (row && e.target === row) {
+      const pkg = row.getAttribute("data-iz-row");
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+        e.preventDefault();
+        const rows = [...view.querySelectorAll("[data-iz-row]")];
+        const i = rows.indexOf(row);
+        const next = e.key === "Home" ? rows[0] : e.key === "End" ? rows[rows.length - 1] : rows[i + (e.key === "ArrowDown" ? 1 : -1)];
+        if (next) {
+          IZ.selected = next.getAttribute("data-iz-row");
+          izRenderRefs();
+          izFocusRow(IZ.selected);
+        }
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        IZ.selected = pkg;
+        izToggleAll(pkg);
+        izFocusRow(pkg);
+      } else if (e.key === " ") {
+        e.preventDefault();
+        IZ.selected = pkg;
+        izRenderRefs();
+        izFocusRow(pkg);
+      }
+      return;
+    }
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-iz-pick]")) {
+      e.preventDefault();
+      const key = e.target.getAttribute("data-iz-pick");
+      izTogglePick(key);
+      view.querySelector(`[data-iz-pick="${CSS.escape(key)}"]`)?.focus();
+      return;
+    }
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches?.(".fm-dropzone")) {
+      e.preventDefault();
+      invoke("pick_var_file")
+        .then((picked) => picked && izOpen(picked, { scan: true }))
+        .catch(() => {});
+    }
+  });
+  window.__refreshInternalizeResourcesView = () => izRender();
+  window.addEventListener("scroll", izFitPanel, { passive: true, capture: true });
+  window.addEventListener("resize", izFitPanel);
+  window.__TAURI__?.event
+    ?.listen?.("tauri://drag-drop", (event) => {
+      if (!izVisible() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
+      const varPath = (event?.payload?.paths ?? []).map(String).find((p) => /\.var$/i.test(p));
+      if (varPath) izOpen(varPath, { scan: true });
+    })
+    .catch(() => {});
+  izRender();
+}
+
 // ---- Drop .var files on the window (dropin.rs) ---------------------------------------
 // Anywhere except the pages that take a single .var (Package Explorer, Missing
 // Resources, Internalize): the dropped packages are checked and copied — or
@@ -17362,25 +18608,7 @@ function sendVarToTargetPage(page, path) {
   }
 
   if (page === "internalize-resources") {
-    goto("internalize-resources");
-    if (state.internalize) {
-      state.internalize.targetVar = target;
-      if (!state.internalize.inputDir) {
-        const p = parentDir();
-        if (p) state.internalize.inputDir = p;
-      }
-    }
-    const targetEl = $("internalize-target-var");
-    if (targetEl) {
-      targetEl.value = target;
-      // The page's own input listener syncs state + re-renders its VAR info.
-      targetEl.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    const dirEl = $("internalize-input-dir");
-    if (dirEl && !dirEl.value && state.internalize?.inputDir) {
-      dirEl.value = state.internalize.inputDir;
-    }
-    renderVamSources();
+    izOpen(target, { scan: true });
     addLog(`Sent target VAR to Internalize Resources: ${target}`);
     return;
   }
@@ -23786,6 +25014,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDropImport();
   setupPackageExplorer();
   setupFixMissing();
+  setupInternalize();
   // The Hub package index: shortly after start-up, then every 30 minutes.
   setTimeout(() => hubIndexRefresh(false), 1500);
   setInterval(() => hubIndexRefresh(false), 30 * 60 * 1000);
@@ -26433,1088 +27662,6 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     // Initial paint so the empty state shows on first load.
     renderUrAll();
-  })();
-
-  // ===========================================================
-  // Internalize Resources page (sidebar link `internalize-resources`)
-  //
-  // The mirror image of Missing Resources: scans the target VAR for *valid*
-  // external `Pkg:/path` refs and lets the user inline whichever ones they
-  // want by copying the source bundle into the target (rewriting refs to
-  // `SELF:/...`). When every ref to a source pkg is internalized, the source
-  // pkg is dropped from the target's meta.json dependencies — at which point
-  // the user can delete the (often huge) source var entirely.
-  // IIFE-scoped to keep helpers out of the global namespace.
-  // ===========================================================
-  (function setupInternalizeResources() {
-    if (!state.internalize) return;
-    function iz() { return state.internalize; }
-
-    function refKey(pkg, path) {
-      return `${pkg}|${path ?? ""}`;
-    }
-
-    function setStatus(msg, isError) {
-      iz().status = msg ?? "";
-      const el = $("internalize-status");
-      if (!el) return;
-      el.textContent = msg ?? "";
-      el.classList.toggle("missing-status-error", !!isError);
-    }
-
-    function groupMatchesFilter(group, filterLc) {
-      if (!filterLc) return true;
-      if (group.source_pkg_id.toLowerCase().includes(filterLc)) return true;
-      // Search bundles by ref path too so users can find "the one with this
-      // texture" without already knowing the source pkg id.
-      return (group.refs || []).some((r) =>
-        (r.ref_path || "").toLowerCase().includes(filterLc),
-      );
-    }
-
-    function countSelectedInGroup(group) {
-      if (!group) return 0;
-      let n = 0;
-      for (const r of group.refs || []) {
-        if (iz().selectedRefs[refKey(group.source_pkg_id, r.ref_path)]) n++;
-      }
-      return n;
-    }
-
-    function totalSelectedRefs() {
-      // Recount from scratch every time — selectedRefs entries can become
-      // stale across scans (a previously-selected ref might not appear in
-      // the new group list). Only count refs we still have a group for.
-      let n = 0;
-      for (const g of iz().groups || []) {
-        for (const r of g.refs || []) {
-          if (iz().selectedRefs[refKey(g.source_pkg_id, r.ref_path)]) n++;
-        }
-      }
-      return n;
-    }
-
-    function findGroup(pkg) {
-      return (iz().groups || []).find((g) => g.source_pkg_id === pkg);
-    }
-
-    function renderList() {
-      const container = $("internalize-list");
-      const subtitle = $("internalize-list-subtitle");
-      if (!container) return;
-      const groups = iz().groups || [];
-      const filterLc = (iz().filter ?? "").toLowerCase().trim();
-      const visible = groups.filter((g) => groupMatchesFilter(g, filterLc));
-      const scanned = !!iz().lastScanCompleted;
-
-      if (subtitle) {
-        if (groups.length === 0) {
-          if (iz().scanning) {
-            subtitle.textContent = "Scanning…";
-          } else if (scanned) {
-            subtitle.textContent = "Scan complete — no internalizable external refs found.";
-          } else {
-            subtitle.textContent = "Scan a target VAR to populate this list.";
-          }
-        } else {
-          const selected = totalSelectedRefs();
-          subtitle.textContent = `${groups.length} source pkg${groups.length === 1 ? "" : "s"}` +
-            (selected ? ` — ${selected} ref${selected === 1 ? "" : "s"} selected` : "");
-        }
-      }
-
-      if (visible.length === 0) {
-        container.classList.add("empty");
-        let emptyHtml;
-        if (groups.length > 0) {
-          emptyHtml = `<p class="group-empty">No source packages match the current filter.</p>`;
-        } else if (iz().scanning) {
-          emptyHtml = `<p class="group-empty">Scanning…</p>`;
-        } else if (scanned) {
-          emptyHtml = `
-            <div class="missing-empty-clean">
-              <span class="material-symbols-outlined missing-empty-clean-icon">check_circle</span>
-              <h4 class="missing-empty-clean-title">No internalizable refs found</h4>
-              <p class="missing-empty-clean-subtitle">
-                Every external <code>Pkg:/path</code> reference is either broken
-                (handled by Fix Missing) or the target has none.
-              </p>
-            </div>
-          `;
-        } else {
-          emptyHtml = `<p class="group-empty">No external refs yet. Click <strong>Scan</strong> to analyze the target VAR.</p>`;
-        }
-        container.innerHTML = emptyHtml;
-        renderListPagination(0);
-        return;
-      }
-      container.classList.remove("empty");
-
-      const totalPages = Math.max(1, Math.ceil(visible.length / GROUP_PAGE_SIZE));
-      if (iz().listPage >= totalPages) iz().listPage = totalPages - 1;
-      if (iz().listPage < 0) iz().listPage = 0;
-      const start = iz().listPage * GROUP_PAGE_SIZE;
-      const pageVisible = visible.slice(start, start + GROUP_PAGE_SIZE);
-
-      const html = pageVisible.map((g) => {
-        const isSelected = g.source_pkg_id === iz().selectedPkg;
-        const refCount = (g.refs || []).length;
-        const picked = countSelectedInGroup(g);
-        const pickedChip = picked
-          ? `<span class="chip chip-accent missing-row-fixed">${picked}/${refCount} picked</span>`
-          : "";
-        const sourceSize = formatBytesLocal(g.source_var_size ?? 0);
-        const bundleSize = formatBytesLocal(g.total_bundle_bytes ?? 0);
-        return `
-          <button type="button" class="group-row missing-row ${isSelected ? "active focused" : ""}" data-internalize-pkg="${escapeAttribute(g.source_pkg_id)}">
-            <div class="group-row-line missing-row-head">
-              <span class="missing-row-pkg">${escapeHtml(g.source_pkg_id)}</span>
-              ${pickedChip}
-            </div>
-            <div class="group-row-line missing-row-meta">
-              <span>${refCount} ref${refCount === 1 ? "" : "s"}</span>
-              <span>·</span>
-              <span title="Total bundle bytes if every ref is internalized">copy ~${bundleSize}</span>
-              <span>·</span>
-              <span title="On-disk size of the source VAR">source ${sourceSize}</span>
-            </div>
-          </button>
-        `;
-      }).join("");
-      container.innerHTML = html;
-      renderListPagination(visible.length);
-    }
-
-    function renderListPagination(totalVisible) {
-      const pagination = $("internalize-list-pagination");
-      if (!pagination) return;
-      if (totalVisible <= GROUP_PAGE_SIZE) {
-        pagination.classList.add("hidden");
-        pagination.innerHTML = "";
-        return;
-      }
-      const totalPages = Math.max(1, Math.ceil(totalVisible / GROUP_PAGE_SIZE));
-      if (iz().listPage >= totalPages) iz().listPage = totalPages - 1;
-      const currentPage = iz().listPage;
-      const pages = buildPageNumbers(totalPages, currentPage);
-
-      pagination.classList.remove("hidden");
-      pagination.innerHTML = `
-        <button class="page-nav-button" data-page-action="prev" type="button" ${currentPage === 0 ? "disabled" : ""}>
-          <span class="material-symbols-outlined">chevron_left</span>
-          Previous
-        </button>
-        <div class="page-numbers">
-          ${pages
-            .map((page) =>
-              page === "ellipsis"
-                ? `<span class="page-ellipsis">…</span>`
-                : `<button class="page-button ${page === currentPage ? "active" : ""}" data-page-jump="${page}" type="button">${page + 1}</button>`
-            )
-            .join("")}
-        </div>
-        <button class="page-nav-button" data-page-action="next" type="button" ${currentPage >= totalPages - 1 ? "disabled" : ""}>
-          Next
-          <span class="material-symbols-outlined">chevron_right</span>
-        </button>
-      `;
-      pagination.querySelectorAll("[data-page-action]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const action = button.dataset.pageAction;
-          if (action === "prev") iz().listPage = Math.max(0, iz().listPage - 1);
-          if (action === "next") iz().listPage = Math.min(totalPages - 1, iz().listPage + 1);
-          renderList();
-        });
-      });
-      pagination.querySelectorAll("[data-page-jump]").forEach((button) => {
-        button.addEventListener("click", () => {
-          iz().listPage = Number(button.dataset.pageJump) || 0;
-          renderList();
-        });
-      });
-    }
-
-    function renderDetail() {
-      const empty = $("internalize-detail-empty");
-      const panel = $("internalize-detail-panel");
-      const pkg = iz().selectedPkg;
-      const group = pkg ? findGroup(pkg) : null;
-      if (!group || !panel || !empty) {
-        if (panel) panel.classList.add("hidden");
-        if (empty) empty.classList.remove("hidden");
-        return;
-      }
-      empty.classList.add("hidden");
-      panel.classList.remove("hidden");
-
-      const pkgEl = $("internalize-detail-pkg");
-      if (pkgEl) pkgEl.textContent = group.source_pkg_id;
-      const sizeChip = $("internalize-detail-source-size");
-      if (sizeChip) sizeChip.textContent = `Source VAR ${formatBytesLocal(group.source_var_size ?? 0)}`;
-      const bundleChip = $("internalize-detail-bundle-size");
-      if (bundleChip) bundleChip.textContent = `Bundle ${formatBytesLocal(group.total_bundle_bytes ?? 0)}`;
-
-      const refsEl = $("internalize-refs");
-      if (refsEl) {
-        const pkgAttr = escapeAttribute(group.source_pkg_id);
-        const sourceVarAttr = escapeAttribute(group.source_var_path || "");
-        const rows = (group.refs || []).map((r) => {
-          const key = refKey(group.source_pkg_id, r.ref_path);
-          const checked = !!iz().selectedRefs[key];
-          const crcStr = (typeof r.crc32 === "number")
-            ? `CRC32 ${r.crc32.toString(16).padStart(8, "0").toUpperCase()}`
-            : "";
-          const bundleMembers = (r.bundle_paths || []).length;
-          const sourceFiles = (r.source_files_in_target || []);
-          // Limit the previewed bundle list — clothing items can drag in a
-          // dozen textures and we don't want the row to balloon. The full
-          // list still gets copied at apply time; this is a display cap.
-          const previewBundles = (r.bundle_paths || []).slice(0, 5);
-          const moreBundles = bundleMembers > previewBundles.length
-            ? `<span class="missing-source-empty">…+${bundleMembers - previewBundles.length} more</span>`
-            : "";
-          const bundleList = previewBundles
-            .map((p) => `<li><code>${escapeHtml(p)}</code></li>`)
-            .join("");
-          const referencedIn = sourceFiles.length === 0
-            ? `<li class="missing-source-empty">No payload references (meta.json only).</li>`
-            : sourceFiles.map((f) => `<li><code>${escapeHtml(f)}</code></li>`).join("");
-          const refPathAttr = escapeAttribute(r.ref_path);
-          return `
-            <label class="source-row missing-candidate ${checked ? "is-checked" : ""}"
-                   data-ref-path="${refPathAttr}"
-                   data-source-pkg="${pkgAttr}"
-                   data-source-var="${sourceVarAttr}">
-              <input type="checkbox" class="internalize-ref-check" ${checked ? "checked" : ""}
-                     data-ref-key="${escapeAttribute(key)}" />
-              <div class="source-main">
-                <strong><code>${escapeHtml(r.ref_path)}</code></strong>
-                <span class="source-row-meta">
-                  ${formatBytesLocal(r.bundle_total_size ?? r.size ?? 0)} bundle
-                  · ${bundleMembers} file${bundleMembers === 1 ? "" : "s"}
-                  ${crcStr ? `· ${crcStr}` : ""}
-                </span>
-                <details class="internalize-bundle-details">
-                  <summary>Bundle members (${bundleMembers})</summary>
-                  <ul class="missing-source-files">${bundleList}${moreBundles}</ul>
-                </details>
-                <details class="internalize-referenced-details">
-                  <summary>Referenced in (${sourceFiles.length})</summary>
-                  <ul class="missing-source-files">${referencedIn}</ul>
-                </details>
-                <div class="missing-candidate-actions">
-                  <button type="button" class="missing-candidate-action" data-iz-action="open-var-details"
-                          data-source-pkg="${pkgAttr}" data-source-var="${sourceVarAttr}"
-                          title="Open the source package's details">
-                    <span class="material-symbols-outlined">description</span>
-                    <span>Details</span>
-                  </button>
-                  <button type="button" class="missing-candidate-action" data-iz-action="copy-ref"
-                          data-source-pkg="${pkgAttr}" data-ref-path="${refPathAttr}"
-                          title="Copy SourcePkg:/path to clipboard">
-                    <span class="material-symbols-outlined">content_copy</span>
-                    <span>Copy ref</span>
-                  </button>
-                  <button type="button" class="missing-candidate-action" data-iz-action="copy-pkg-id"
-                          data-source-pkg="${pkgAttr}"
-                          title="Copy source package id to clipboard">
-                    <span class="material-symbols-outlined">tag</span>
-                    <span>Copy id</span>
-                  </button>
-                  <button type="button" class="missing-candidate-action" data-iz-action="copy-path"
-                          data-ref-path="${refPathAttr}"
-                          title="Copy the internal path to clipboard">
-                    <span class="material-symbols-outlined">link</span>
-                    <span>Copy path</span>
-                  </button>
-                  <button type="button" class="missing-candidate-action" data-iz-action="show-in-explorer"
-                          data-source-var="${sourceVarAttr}"
-                          title="Show the source .var file in Explorer">
-                    <span class="material-symbols-outlined">folder_open</span>
-                    <span>Show .var</span>
-                  </button>
-                </div>
-              </div>
-            </label>
-          `;
-        }).join("");
-        refsEl.innerHTML = rows;
-      }
-
-      const clearBtn = $("internalize-clear-button");
-      const selectAllBtn = $("internalize-select-all-group");
-      const picked = countSelectedInGroup(group);
-      if (clearBtn) clearBtn.disabled = picked === 0;
-      if (selectAllBtn) selectAllBtn.disabled = (group.refs || []).length === 0;
-    }
-
-    function updateRunButton() {
-      const btn = $("internalize-run-button");
-      if (!btn) return;
-      const picked = totalSelectedRefs();
-      btn.disabled = picked === 0 || iz().applying;
-      btn.textContent = picked === 0
-        ? "Internalize Selected"
-        : `Internalize ${picked} Ref${picked === 1 ? "" : "s"}`;
-    }
-
-    function showProgress(title, fraction, message) {
-      const card = $("internalize-progress-card");
-      const pct = $("internalize-progress-percent");
-      const bar = $("internalize-progress-bar");
-      const msg = $("internalize-progress-message");
-      const titleEl = $("internalize-progress-title");
-      if (!card) return;
-      card.classList.remove("hidden");
-      const clamped = Math.max(0, Math.min(1, Number(fraction) || 0));
-      if (pct) pct.textContent = `${Math.round(clamped * 100)}%`;
-      if (bar) bar.style.width = `${clamped * 100}%`;
-      if (msg) msg.textContent = message ?? "";
-      if (titleEl && title) titleEl.textContent = title;
-    }
-
-    function hideProgress() {
-      const card = $("internalize-progress-card");
-      if (card) card.classList.add("hidden");
-      const bar = $("internalize-progress-bar");
-      if (bar) bar.style.width = "0%";
-      const pct = $("internalize-progress-percent");
-      if (pct) pct.textContent = "0%";
-    }
-
-    function sleep(ms) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-
-    async function runScanTask(inputDir, targetVar) {
-      // Reuse the same scan_task command as Missing Resources — it populates
-      // the shared scan cache that scan_internalize_candidates reads from.
-      const handle = await invoke("start_scan_task", {
-        request: {
-          input_dir: inputDir,
-          additional_input_dirs: getAdditionalDirs("internalize"),
-          target_var_path: targetVar,
-          skip_db: true,
-        },
-      });
-      const taskId = handle?.id;
-      if (taskId == null) throw new Error("scan task did not return a handle");
-      const cleanup = () => invoke("clear_task", { taskId }).catch(() => {});
-      try {
-        while (true) {
-          const payload = await invoke("get_task_progress", { taskId });
-          if (payload) {
-            const fraction = Number(payload.progress ?? 0);
-            const msg = payload.message ?? "";
-            showProgress("Scanning", fraction, msg);
-            if (payload.done) {
-              if (payload.error) throw new Error(String(payload.error));
-              return payload;
-            }
-          }
-          await sleep(TASK_POLL_MS);
-        }
-      } finally {
-        cleanup();
-      }
-    }
-
-    async function scanExternalRefs() {
-      if (!invoke) return;
-      const inputDir = iz().inputDir.trim();
-      const targetVar = iz().targetVar.trim();
-      if (!inputDir || !targetVar) {
-        setStatus("Pick both a VAR folder and a target .var file.", true);
-        return;
-      }
-      iz().scanning = true;
-      iz().groups = [];
-      iz().selectedRefs = {};
-      iz().selectedPkg = null;
-      iz().listPage = 0;
-      iz().lastScanCompleted = false;
-      setStatus("", false);
-      showProgress("Scanning", 0, "Starting scan…");
-      renderList();
-      renderDetail();
-      updateRunButton();
-      const scanBtn = $("internalize-scan-button");
-      if (scanBtn) scanBtn.disabled = true;
-      try {
-        await runScanTask(inputDir, targetVar);
-        showProgress("Analyzing", 0.97, "Harvesting external refs…");
-        const groups = await invoke("scan_internalize_candidates", {
-          inputDir,
-          additionalInputDirs: getAdditionalDirs("internalize"),
-          targetVarPath: targetVar,
-        });
-        iz().groups = Array.isArray(groups) ? groups : [];
-        iz().lastScanCompleted = true;
-        const count = iz().groups.length;
-        const totalRefs = iz().groups.reduce((sum, g) => sum + (g.refs?.length || 0), 0);
-        const summary = count === 0
-          ? "Scan complete — no internalizable external refs found."
-          : `Found ${count} source pkg${count === 1 ? "" : "s"}, ${totalRefs} ref${totalRefs === 1 ? "" : "s"}.`;
-        showProgress("Done", 1, summary);
-        setStatus(summary, false);
-        setTimeout(hideProgress, 1500);
-      } catch (err) {
-        hideProgress();
-        setStatus(String(err && err.message ? err.message : err), true);
-        iz().groups = [];
-        iz().lastScanCompleted = false;
-      } finally {
-        iz().scanning = false;
-        if (scanBtn) scanBtn.disabled = false;
-        renderList();
-        renderDetail();
-        updateRunButton();
-      }
-    }
-
-    async function applyInternalize() {
-      if (!invoke) return;
-      // Build selections from selectedRefs map. Skip stale keys whose group
-      // is no longer present (a defensive measure — the scan refresh clears
-      // selectedRefs, but better to filter than send garbage to Rust).
-      const selections = [];
-      for (const g of iz().groups || []) {
-        for (const r of g.refs || []) {
-          const key = refKey(g.source_pkg_id, r.ref_path);
-          if (iz().selectedRefs[key]) {
-            selections.push({ source_pkg_id: g.source_pkg_id, ref_path: r.ref_path });
-          }
-        }
-      }
-      if (selections.length === 0) return;
-      const replaceInPlace = !!iz().replaceInPlace;
-      const outputDir = iz().outputDir.trim();
-      if (!replaceInPlace && !outputDir) {
-        setStatus("Set an Output Folder or enable 'Replace in place' before running.", true);
-        return;
-      }
-      iz().applying = true;
-      updateRunButton();
-      setStatus(`Internalizing ${selections.length} ref${selections.length === 1 ? "" : "s"}…`, false);
-      showProgress("Applying", 0, `Rewriting target VAR with ${selections.length} ref${selections.length === 1 ? "" : "s"}…`);
-      const progressBar = $("internalize-progress-bar");
-      const progressPct = $("internalize-progress-percent");
-      if (progressBar) progressBar.classList.add("is-indeterminate");
-      if (progressPct) progressPct.textContent = "";
-      let taskId = null;
-      try {
-        const handle = await invoke("start_apply_internalize_task", {
-          inputDir: iz().inputDir.trim(),
-          additionalInputDirs: getAdditionalDirs("internalize"),
-          targetVarPath: iz().targetVar.trim(),
-          outputDir: outputDir || null,
-          replaceInPlace,
-          selections,
-          backup: !!iz().backup,
-        });
-        taskId = handle?.id;
-        if (taskId == null) throw new Error("internalize task did not return a handle");
-        let report = null;
-        while (true) {
-          const payload = await invoke("get_task_progress", { taskId });
-          if (payload) {
-            const msg = payload.message ?? "";
-            if (msg) setStatus(msg, false);
-            if (payload.done) {
-              if (payload.error) throw new Error(String(payload.error));
-              report = payload.internalize_report ?? null;
-              break;
-            }
-          }
-          await sleep(TASK_POLL_MS);
-        }
-        if (progressBar) progressBar.classList.remove("is-indeterminate");
-        const copied = report?.entries_copied ?? 0;
-        const skipped = (report?.entries_skipped_collision || []).length;
-        const depsRemoved = (report?.dependencies_removed || []).length;
-        const rewritten = report?.files_rewritten ?? 0;
-        const bytesAdded = report?.bytes_added ?? 0;
-        const wrotePath = report?.output_path ?? "";
-        setStatus(
-          `Internalized ${report?.refs_rewritten ?? selections.length} ref(s). ` +
-          `${copied} file(s) copied (${formatBytesLocal(bytesAdded)}), ${rewritten} file(s) rewritten, ` +
-          `${depsRemoved} dep(s) dropped` +
-          (skipped ? `, ${skipped} skipped (collision)` : "") +
-          (wrotePath ? ` → ${wrotePath}` : ""),
-          false,
-        );
-        // Reset selections; re-run the scan so the list reflects the new
-        // state (any internalized ref now becomes a SELF: ref the next scan
-        // won't pick up).
-        iz().selectedRefs = {};
-        iz().selectedPkg = null;
-        iz().listPage = 0;
-        showProgress("Applying", 0.85, "Re-analyzing target VAR…");
-        try {
-          const groups = await invoke("scan_internalize_candidates", {
-            inputDir: iz().inputDir.trim(),
-            additionalInputDirs: getAdditionalDirs("internalize"),
-            targetVarPath: iz().targetVar.trim(),
-          });
-          iz().groups = Array.isArray(groups) ? groups : [];
-        } catch (err) {
-          iz().groups = [];
-        }
-        showProgress("Done", 1, `Internalized ${report?.refs_rewritten ?? selections.length} ref(s).`);
-        setTimeout(hideProgress, 1500);
-        renderList();
-        renderDetail();
-      } catch (err) {
-        if (progressBar) progressBar.classList.remove("is-indeterminate");
-        hideProgress();
-        setStatus(`Internalize failed: ${String(err)}`, true);
-      } finally {
-        if (progressBar) progressBar.classList.remove("is-indeterminate");
-        if (taskId != null) {
-          invoke("clear_task", { taskId }).catch(() => {});
-        }
-        iz().applying = false;
-        updateRunButton();
-      }
-    }
-
-    function syncInputsFromState() {
-      const dirInput = $("internalize-input-dir");
-      const outputInput = $("internalize-output-dir");
-      const targetInput = $("internalize-target-var");
-      const backup = $("internalize-backup");
-      const replaceCheckbox = $("internalize-replace-in-place");
-      if (dirInput && !dirInput.value) dirInput.value = iz().inputDir;
-      if (outputInput && !outputInput.value) outputInput.value = iz().outputDir;
-      if (targetInput) targetInput.value = iz().targetVar;
-      if (backup) backup.checked = !!iz().backup;
-      if (replaceCheckbox) replaceCheckbox.checked = !!iz().replaceInPlace;
-      if (backup && replaceCheckbox) backup.disabled = !replaceCheckbox.checked;
-    }
-
-    function renderVarInfo() {
-      const emptyHint = $("internalize-var-info-empty");
-      const body = $("internalize-var-info-body");
-      const label = $("internalize-var-info-label");
-      const sizeVal = $("internalize-var-info-size-val");
-      const timeVal = $("internalize-var-info-time-val");
-      const sceneRow = $("internalize-var-info-scene-row");
-      const sceneVal = $("internalize-var-info-scene-val");
-      const thumb = $("internalize-var-info-thumb");
-      const img = $("internalize-var-info-scene-img");
-      if (!emptyHint || !body || !label) return;
-
-      const target = iz().targetVar.trim();
-      if (!target) {
-        body.classList.add("hidden");
-        emptyHint.classList.remove("hidden");
-        return;
-      }
-      emptyHint.classList.add("hidden");
-      body.classList.remove("hidden");
-
-      const fileName = target.split(/[\\/]/).pop() ?? "";
-      const pkgId = fileName.replace(/\.var$/i, "");
-      label.textContent = pkgId || target;
-      if (sizeVal) sizeVal.textContent = "—";
-      if (timeVal) timeVal.textContent = "—";
-      if (sceneVal) sceneVal.textContent = "";
-      if (img) img.src = "";
-      if (sceneRow) sceneRow.classList.add("hidden");
-      if (thumb) { thumb.classList.add("hidden"); thumb.classList.add("empty"); }
-
-      if (!invoke) return;
-      invoke("get_var_file_stats", { packagePath: target })
-        .then((stats) => {
-          if (iz().targetVar.trim() !== target) return;
-          if (sizeVal) sizeVal.textContent = formatBytesLocal(stats.size_bytes);
-          const date = stats.modified_ms != null ? new Date(stats.modified_ms) : null;
-          if (timeVal) timeVal.textContent = date ? date.toLocaleString() : "—";
-          if (stats.scene_image_path) {
-            if (sceneVal) sceneVal.textContent = stats.scene_image_path;
-            if (img) img.src = stats.scene_image_data || "";
-            if (sceneRow) sceneRow.classList.remove("hidden");
-            if (thumb) {
-              thumb.classList.remove("hidden");
-              if (stats.scene_image_data) thumb.classList.remove("empty");
-            }
-          }
-        })
-        .catch(() => {});
-    }
-
-    function bindEvents() {
-      const targetInput = $("internalize-target-var");
-      if (targetInput) {
-        targetInput.addEventListener("input", () => {
-          iz().targetVar = targetInput.value;
-          renderVarInfo();
-        });
-      }
-      const dropzone = $("internalize-target-dropzone");
-      if (dropzone) {
-        dropzone.addEventListener("click", (e) => {
-          if (e.target.closest("button")) return;
-          $("internalize-pick-target")?.click();
-        });
-        ["dragenter", "dragover"].forEach((evt) => {
-          dropzone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            dropzone.classList.add("is-dragover");
-          });
-        });
-        ["dragleave", "drop"].forEach((evt) => {
-          dropzone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            dropzone.classList.remove("is-dragover");
-          });
-        });
-      }
-      const dirInput = $("internalize-input-dir");
-      if (dirInput) {
-        dirInput.addEventListener("input", () => {
-          iz().inputDir = dirInput.value;
-          const outputInput = $("internalize-output-dir");
-          if (outputInput && !outputInput.value) {
-            iz().outputDir = `${iz().inputDir}_internalized`;
-            outputInput.value = iz().outputDir;
-          }
-        });
-      }
-      const outputInput = $("internalize-output-dir");
-      if (outputInput) {
-        outputInput.addEventListener("input", () => {
-          iz().outputDir = outputInput.value;
-        });
-      }
-      const pickTarget = $("internalize-pick-target");
-      if (pickTarget) {
-        pickTarget.addEventListener("click", async () => {
-          if (!invoke) return;
-          try {
-            const selected = await invoke("pick_var_file");
-            if (selected) {
-              iz().targetVar = String(selected);
-              if (targetInput) targetInput.value = iz().targetVar;
-              renderVarInfo();
-            }
-          } catch (err) {
-            setStatus(`Pick failed: ${String(err)}`, true);
-          }
-        });
-      }
-      const pickDir = $("internalize-pick-input");
-      if (pickDir) {
-        pickDir.addEventListener("click", async () => {
-          if (!invoke) return;
-          try {
-            const selected = await invoke("pick_folder");
-            if (selected) {
-              iz().inputDir = String(selected);
-              if (dirInput) dirInput.value = iz().inputDir;
-              if (!iz().outputDir) {
-                iz().outputDir = `${iz().inputDir}_internalized`;
-                if (outputInput) outputInput.value = iz().outputDir;
-              }
-            }
-          } catch (err) {
-            setStatus(`Pick failed: ${String(err)}`, true);
-          }
-        });
-      }
-      // Same Tauri drag-drop wiring as Missing Resources — accept the first
-      // .var when this view is active.
-      const tauriEvent = window.__TAURI__?.event;
-      if (tauriEvent && typeof tauriEvent.listen === "function") {
-        const isViewActive = () => {
-          const view = $("internalize-resources-view");
-          return view && !view.classList.contains("hidden");
-        };
-        const paintDrag = (active) => {
-          const dz = $("internalize-target-dropzone");
-          if (dz) dz.classList.toggle("is-dragover", active);
-        };
-        tauriEvent.listen("tauri://drag-drop", (event) => {
-          paintDrag(false);
-          if (!isViewActive()) return;
-          const paths = event?.payload?.paths ?? [];
-          const varPath = paths.find((p) => /\.var$/i.test(String(p)));
-          if (!varPath) {
-            if (paths.length > 0) setStatus("Only .var files are accepted here.", true);
-            return;
-          }
-          iz().targetVar = String(varPath);
-          const el = $("internalize-target-var");
-          if (el) el.value = iz().targetVar;
-          renderVarInfo();
-        }).catch(() => {});
-        tauriEvent.listen("tauri://drag-enter", () => {
-          if (isViewActive()) paintDrag(true);
-        }).catch(() => {});
-        tauriEvent.listen("tauri://drag-over", () => {
-          if (isViewActive()) paintDrag(true);
-        }).catch(() => {});
-        tauriEvent.listen("tauri://drag-leave", () => paintDrag(false)).catch(() => {});
-      }
-      const pickOutput = $("internalize-pick-output");
-      if (pickOutput) {
-        pickOutput.addEventListener("click", async () => {
-          if (!invoke) return;
-          try {
-            const selected = await invoke("pick_folder");
-            if (selected) {
-              iz().outputDir = String(selected);
-              if (outputInput) outputInput.value = iz().outputDir;
-            }
-          } catch (err) {
-            setStatus(`Pick failed: ${String(err)}`, true);
-          }
-        });
-      }
-      const backup = $("internalize-backup");
-      const replaceCheckbox = $("internalize-replace-in-place");
-      const syncBackupEnabled = () => {
-        if (backup && replaceCheckbox) backup.disabled = !replaceCheckbox.checked;
-      };
-      if (backup) {
-        backup.checked = !!iz().backup;
-        backup.addEventListener("change", () => {
-          iz().backup = !!backup.checked;
-          invoke?.("save_config", { config: buildCurrentConfig() }).catch(() => {});
-        });
-      }
-      if (replaceCheckbox) {
-        replaceCheckbox.checked = !!iz().replaceInPlace;
-        replaceCheckbox.addEventListener("change", () => {
-          iz().replaceInPlace = !!replaceCheckbox.checked;
-          // Default to backup-on whenever the user switches to in-place mode
-          // so a misclick can't destroy work silently.
-          if (replaceCheckbox.checked && backup) {
-            backup.checked = true;
-            iz().backup = true;
-          }
-          syncBackupEnabled();
-          invoke?.("save_config", { config: buildCurrentConfig() }).catch(() => {});
-        });
-      }
-      syncBackupEnabled();
-
-      const scanBtn = $("internalize-scan-button");
-      if (scanBtn) scanBtn.addEventListener("click", scanExternalRefs);
-      const runBtn = $("internalize-run-button");
-      if (runBtn) runBtn.addEventListener("click", applyInternalize);
-
-      const clearBtn = $("internalize-clear-button");
-      if (clearBtn) clearBtn.addEventListener("click", () => {
-        const pkg = iz().selectedPkg;
-        const group = pkg ? findGroup(pkg) : null;
-        if (!group) return;
-        // Clear only the current group's selections, not every selection on
-        // the page. The user has a separate way to wipe everything (re-scan).
-        for (const r of group.refs || []) {
-          delete iz().selectedRefs[refKey(group.source_pkg_id, r.ref_path)];
-        }
-        updateRunButton();
-        renderList();
-        renderDetail();
-      });
-      const selectAllBtn = $("internalize-select-all-group");
-      if (selectAllBtn) selectAllBtn.addEventListener("click", () => {
-        const pkg = iz().selectedPkg;
-        const group = pkg ? findGroup(pkg) : null;
-        if (!group) return;
-        for (const r of group.refs || []) {
-          iz().selectedRefs[refKey(group.source_pkg_id, r.ref_path)] = true;
-        }
-        updateRunButton();
-        renderList();
-        renderDetail();
-      });
-
-      const filterInput = $("internalize-list-filter");
-      if (filterInput) {
-        filterInput.addEventListener("input", () => {
-          iz().filter = filterInput.value ?? "";
-          iz().listPage = 0;
-          renderList();
-        });
-      }
-
-      const listEl = $("internalize-list");
-      if (listEl) {
-        listEl.addEventListener("click", (event) => {
-          const row = event.target.closest("[data-internalize-pkg]");
-          if (!row) return;
-          const pkg = row.getAttribute("data-internalize-pkg");
-          if (!pkg) return;
-          iz().selectedPkg = pkg;
-          renderList();
-          renderDetail();
-        });
-      }
-
-      const refsEl = $("internalize-refs");
-      if (refsEl) {
-        refsEl.addEventListener("change", (event) => {
-          const cb = event.target;
-          if (!cb || !cb.classList.contains("internalize-ref-check")) return;
-          const key = cb.getAttribute("data-ref-key");
-          if (!key) return;
-          if (cb.checked) {
-            iz().selectedRefs[key] = true;
-          } else {
-            delete iz().selectedRefs[key];
-          }
-          updateRunButton();
-          // Repaint the row's is-checked class without a full detail re-render
-          // (would lose the user's open <details> elements).
-          const label = cb.closest(".source-row");
-          if (label) label.classList.toggle("is-checked", cb.checked);
-          // Refresh the left list so the "x/y picked" chip stays in sync.
-          renderList();
-        });
-
-        // Action-button clicks. Buttons sit inside the row's <label>, so a
-        // raw click would normally toggle the checkbox — preventDefault on the
-        // label-bound click stops that and stopPropagation keeps it from
-        // bubbling to the row-select handler. Mirrors the Missing Resources
-        // candidate-action pattern.
-        refsEl.addEventListener("click", async (event) => {
-          const btn = event.target.closest("[data-iz-action]");
-          if (!btn) return;
-          event.preventDefault();
-          event.stopPropagation();
-          const action = btn.getAttribute("data-iz-action");
-          const pkg = btn.getAttribute("data-source-pkg") || "";
-          const refPath = btn.getAttribute("data-ref-path") || "";
-          const sourceVar = btn.getAttribute("data-source-var") || "";
-          try {
-            if (action === "copy-pkg-id" && pkg) {
-              const ok = await copyTextToClipboard(pkg);
-              if (ok) addLog(`Copied ${pkg}`);
-            } else if (action === "copy-path" && refPath) {
-              const ok = await copyTextToClipboard(refPath);
-              if (ok) addLog(`Copied ${refPath}`);
-            } else if (action === "copy-ref" && pkg && refPath) {
-              const full = `${pkg}:/${refPath}`;
-              const ok = await copyTextToClipboard(full);
-              if (ok) addLog(`Copied ${full}`);
-            } else if (action === "open-var-details" && pkg) {
-              openCandidatePackage(pkg, sourceVar);
-            } else if (action === "show-in-explorer" && sourceVar) {
-              await showPackageInExplorer(sourceVar);
-            }
-          } catch (err) {
-            setStatus(`Action failed: ${String(err)}`, true);
-          }
-        });
-
-        // Right-click any ref row to open a context menu. Same set of actions
-        // as the buttons, plus a "Search Resource List by CRC" entry when the
-        // ref has a CRC32 (useful for finding other refs to the same bytes).
-        refsEl.addEventListener("contextmenu", (event) => {
-          const row = event.target.closest(".source-row");
-          if (!row) return;
-          event.preventDefault();
-          hideContextMenu();
-          const pkg = row.getAttribute("data-source-pkg") || "";
-          const refPath = row.getAttribute("data-ref-path") || "";
-          const sourceVar = row.getAttribute("data-source-var") || "";
-          const group = pkg ? findGroup(pkg) : null;
-          const refData = group ? (group.refs || []).find((r) => r.ref_path === refPath) : null;
-          showContextMenu(event.clientX, event.clientY, buildRefMenuItems(pkg, refPath, sourceVar, refData));
-        });
-      }
-
-      // Right-click on a group row in the left panel — bulk actions that
-      // apply at the source-pkg level (Copy id, open details, show .var
-      // in Explorer, select-all-in-pkg).
-      const listElForMenu = $("internalize-list");
-      if (listElForMenu) {
-        listElForMenu.addEventListener("contextmenu", (event) => {
-          const row = event.target.closest("[data-internalize-pkg]");
-          if (!row) return;
-          event.preventDefault();
-          hideContextMenu();
-          const pkg = row.getAttribute("data-internalize-pkg") || "";
-          // Match Overview behavior: right-click first selects the row so any
-          // subsequent action (Internalize Selected, etc.) sees the visible
-          // detail panel matching the chosen group.
-          iz().selectedPkg = pkg;
-          renderList();
-          renderDetail();
-          const group = pkg ? findGroup(pkg) : null;
-          showContextMenu(event.clientX, event.clientY, buildGroupMenuItems(group));
-        });
-      }
-    }
-
-    function buildRefMenuItems(pkg, refPath, sourceVar, refData) {
-      const items = [];
-      if (pkg && refPath) {
-        const full = `${pkg}:/${refPath}`;
-        items.push({
-          label: `Copy ${full}`,
-          action: async () => {
-            const ok = await copyTextToClipboard(full);
-            if (ok) addLog(`Copied ${full}`);
-          },
-        });
-      }
-      if (pkg) {
-        items.push({
-          label: `Copy package id (${pkg})`,
-          action: async () => {
-            const ok = await copyTextToClipboard(pkg);
-            if (ok) addLog(`Copied ${pkg}`);
-          },
-        });
-      }
-      if (refPath) {
-        items.push({
-          label: `Copy path (${refPath})`,
-          action: async () => {
-            const ok = await copyTextToClipboard(refPath);
-            if (ok) addLog(`Copied ${refPath}`);
-          },
-        });
-      }
-      // CRC-driven search bridges this ref into the Resource List view so the
-      // user can see every other VAR that holds the same bytes — handy when
-      // deciding whether to internalize or to keep the source dep around.
-      if (refData && Number.isFinite(refData.crc32) && refData.crc32 != null) {
-        const hex = refData.crc32.toString(16).padStart(8, "0").toUpperCase();
-        items.push({ separator: true });
-        if (typeof searchResourceListByCrc === "function") {
-          items.push({
-            label: `Search Resource List by CRC ${hex}`,
-            action: () => searchResourceListByCrc(refData.crc32),
-          });
-        }
-        items.push({
-          label: `Copy CRC ${hex}`,
-          action: async () => {
-            const ok = await copyTextToClipboard(hex);
-            if (ok) addLog(`Copied ${hex}`);
-          },
-        });
-      }
-      if (pkg) {
-        items.push({ separator: true });
-        items.push({
-          label: "Open source package details",
-          action: () => openCandidatePackage(pkg, sourceVar),
-        });
-      }
-      if (sourceVar) {
-        items.push({
-          label: "Show source .var in Explorer",
-          action: async () => {
-            await showPackageInExplorer(sourceVar);
-          },
-        });
-        items.push({
-          label: `Copy source .var path`,
-          action: async () => {
-            const ok = await copyTextToClipboard(sourceVar);
-            if (ok) addLog(`Copied ${sourceVar}`);
-          },
-        });
-      }
-      // Toggle-pick lives at the bottom — it's a state mutation, not a copy
-      // action, so the separator helps the eye distinguish it.
-      if (pkg && refPath) {
-        const key = refKey(pkg, refPath);
-        const isPicked = !!iz().selectedRefs[key];
-        items.push({ separator: true });
-        items.push({
-          label: isPicked ? "Deselect this ref" : "Select this ref",
-          action: () => {
-            if (isPicked) {
-              delete iz().selectedRefs[key];
-            } else {
-              iz().selectedRefs[key] = true;
-            }
-            updateRunButton();
-            renderList();
-            renderDetail();
-          },
-        });
-      }
-      return items;
-    }
-
-    function buildGroupMenuItems(group) {
-      if (!group) return [];
-      const items = [];
-      items.push({
-        label: `Copy package id (${group.source_pkg_id})`,
-        action: async () => {
-          const ok = await copyTextToClipboard(group.source_pkg_id);
-          if (ok) addLog(`Copied ${group.source_pkg_id}`);
-        },
-      });
-      items.push({
-        label: "Open source package details",
-        action: () => openCandidatePackage(group.source_pkg_id, group.source_var_path),
-      });
-      if (group.source_var_path) {
-        items.push({
-          label: "Show source .var in Explorer",
-          action: async () => {
-            await showPackageInExplorer(group.source_var_path);
-          },
-        });
-        items.push({
-          label: "Copy source .var path",
-          action: async () => {
-            const ok = await copyTextToClipboard(group.source_var_path);
-            if (ok) addLog(`Copied ${group.source_var_path}`);
-          },
-        });
-      }
-      const refCount = (group.refs || []).length;
-      const pickedCount = countSelectedInGroup(group);
-      if (refCount > 0) {
-        items.push({ separator: true });
-        items.push({
-          label: pickedCount === refCount ? "Deselect every ref in this pkg" : `Select every ref in this pkg (${refCount})`,
-          action: () => {
-            const allSelected = pickedCount === refCount;
-            for (const r of group.refs || []) {
-              const k = refKey(group.source_pkg_id, r.ref_path);
-              if (allSelected) delete iz().selectedRefs[k];
-              else iz().selectedRefs[k] = true;
-            }
-            updateRunButton();
-            renderList();
-            renderDetail();
-          },
-        });
-      }
-      return items;
-    }
-
-    bindEvents();
-
-    window.__refreshInternalizeResourcesView = function () {
-      // Seed from Overview's currently-active paths if Internalize is fresh.
-      if (!iz().inputDir) {
-        const overviewInput = $("input-dir");
-        if (overviewInput?.value) iz().inputDir = overviewInput.value;
-      }
-      syncInputsFromState();
-      renderVarInfo();
-      renderList();
-      renderDetail();
-      updateRunButton();
-      setStatus(iz().status, false);
-    };
-
-    renderVarInfo();
-    renderList();
-    renderDetail();
-    updateRunButton();
   })();
 
   renderLogs();

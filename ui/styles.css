@@ -19323,3 +19323,208 @@ button.pkg-stat:focus-visible::after {
   top: 6px;
   right: 6px;
 }
+
+/* ---- Internalize Resources: Fix Missing's layout, packages as rows ---- */
+
+.fm-row.group-row.iz-row {
+  grid-template-columns: 22px 44px minmax(0, 1fr) auto;
+}
+
+.iz-row-thumb,
+.iz-pkg-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--lib-thumb-bg);
+}
+
+.iz-row-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+
+.iz-pkg-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: 10px;
+}
+
+.iz-row-thumb img,
+.iz-pkg-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.iz-row .fm-row-name {
+  font-size: 13.5px;
+}
+
+.iz-row-sub {
+  margin-left: 4px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.iz-row .fm-row-dir {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 3px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  white-space: normal;
+}
+
+.iz-fact {
+  color: var(--text-muted);
+}
+
+.iz-fact + .iz-fact {
+  margin-left: -4px;
+  color: var(--text-dim);
+}
+
+.iz-row .chip,
+.iz-pkg-chips .chip {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+/* The chosen package, on top of its files. */
+.iz-pkg-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px 4px;
+}
+
+.iz-detail-card .fm-ref-acts {
+  align-items: center;
+}
+
+.iz-pkg-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.iz-pkg-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+}
+
+.iz-pkg-text small {
+  color: var(--text-muted);
+}
+
+.iz-pkg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.iz-detail-card .fm-chosen-text b {
+  display: block;
+  margin: 1px 0;
+}
+
+.iz-files-h {
+  margin: 14px 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.iz-files-h small {
+  margin-left: 4px;
+  color: var(--text-dim);
+}
+
+/* A file: its checkbox, name, kind, folder and size; what it needs below. */
+.iz-file-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.iz-file-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.iz-file .fm-row-dir {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  white-space: normal;
+}
+
+.iz-file .fm-cand-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding-left: 30px;
+  font-size: 12px;
+}
+
+.iz-file[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.iz-bundle {
+  margin: 6px 0 0 30px;
+  padding: 0;
+  list-style: none;
+}
+
+.iz-bundle li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.iz-bundle li.is-clash code {
+  color: var(--accent-warn);
+}
+
+.iz-report-remove {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 4px 0;
+}
+
+#iz-list-subtitle {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.iz-list-card #iz-list-subtitle .fm-keys {
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.iz-list-card:focus-within #iz-list-subtitle .fm-keys {
+  opacity: 1;
+}
