@@ -819,13 +819,19 @@ pub(crate) fn apply_graph(items: &mut [VarPackageListItem]) -> u64 {
     unresolved.len() as u64
 }
 
-pub(crate) fn status_matches(
-    item: &VarPackageListItem,
-    status: &str,
-    favorite_ids: &HashSet<String>,
-) -> bool {
+/// What the user marked on packages: favorites, and Fix Missing's preferred
+/// (1) or avoided (-1) replacement sources.
+#[derive(Default)]
+pub(crate) struct PackageMarks {
+    pub(crate) favorites: HashSet<String>,
+    pub(crate) replacement: std::collections::HashMap<String, i32>,
+}
+
+pub(crate) fn status_matches(item: &VarPackageListItem, status: &str, marks: &PackageMarks) -> bool {
     match status {
-        "favorites" => favorite_ids.contains(&item.package_id),
+        "favorites" => marks.favorites.contains(&item.package_id),
+        "preferred_source" => marks.replacement.get(&item.package_id) == Some(&1),
+        "avoided_source" => marks.replacement.get(&item.package_id) == Some(&-1),
         "indexed" => item.indexed,
         "unindexed" => !item.indexed,
         "dependency" => item.used_by_count > 0,
@@ -843,8 +849,8 @@ pub(crate) fn status_matches(
 }
 
 const STATUS_KEYS: &[&str] = &[
-    "favorites", "installed", "dependency", "standalone", "orphan", "broken", "outdated", "updates", "local",
-    "damaged", "disabled", "indexed", "unindexed",
+    "favorites", "preferred_source", "avoided_source", "installed", "dependency", "standalone", "orphan",
+    "broken", "outdated", "updates", "local", "damaged", "disabled", "indexed", "unindexed",
 ];
 
 pub(crate) fn type_matches(item: &VarPackageListItem, filters: &VarPackageFilters) -> bool {
@@ -865,10 +871,10 @@ pub(crate) fn location_matches(item: &VarPackageListItem, filters: &VarPackageFi
 pub(crate) fn library_status_matches(
     item: &VarPackageListItem,
     filters: &VarPackageFilters,
-    favorite_ids: &HashSet<String>,
+    marks: &PackageMarks,
 ) -> bool {
     match filters.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => status_matches(item, s, favorite_ids),
+        Some(s) => status_matches(item, s, marks),
         None => true,
     }
 }
@@ -880,7 +886,7 @@ pub(crate) fn compute_facets(
     all: &[VarPackageListItem],
     base: &[&VarPackageListItem],
     filters: &VarPackageFilters,
-    favorite_ids: &HashSet<String>,
+    marks: &PackageMarks,
     missing_unique: u64,
 ) -> crate::models::VarPackageFacets {
     let mut facets = crate::models::VarPackageFacets::default();
@@ -893,7 +899,7 @@ pub(crate) fn compute_facets(
     facets.statuses.insert("all".to_string(), 0);
 
     for item in base {
-        let status_ok = library_status_matches(item, filters, favorite_ids);
+        let status_ok = library_status_matches(item, filters, marks);
         let type_ok = type_matches(item, filters);
         if status_ok {
             *facets.types.entry(item.pkg_type.clone()).or_insert(0) += 1;
@@ -901,7 +907,7 @@ pub(crate) fn compute_facets(
         if type_ok {
             *facets.statuses.entry("all".to_string()).or_insert(0) += 1;
             for key in STATUS_KEYS {
-                if status_matches(item, key, favorite_ids) {
+                if status_matches(item, key, marks) {
                     *facets.statuses.entry((*key).to_string()).or_insert(0) += 1;
                 }
             }

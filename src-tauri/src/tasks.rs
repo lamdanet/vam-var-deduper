@@ -1652,11 +1652,18 @@ pub(crate) fn list_var_packages(
     }
 
     // Loaded before taking the cache lock so the DB read never runs while
-    // holding the folder-cache mutex. Always loaded (the table is tiny): the
-    // Favorites row of the status facet needs it even when not filtering.
-    let favorite_ids: HashSet<String> = {
+    // holding the folder-cache mutex. Always loaded (the tables are tiny): the
+    // Favorites and replacement-source rows of the status facet need them
+    // even when not filtering.
+    let marks = {
         let conn = db.read().map_err(|err| err.to_string())?;
-        db::get_favorite_package_ids(&conn).map_err(|err| err.to_string())?
+        crate::library::PackageMarks {
+            favorites: db::get_favorite_package_ids(&conn).map_err(|err| err.to_string())?,
+            replacement: db::get_replacement_prefs(&conn)
+                .map_err(|err| err.to_string())?
+                .into_iter()
+                .collect(),
+        }
     };
 
     let mut cache = state
@@ -1705,16 +1712,16 @@ pub(crate) fn list_var_packages(
                     return false;
                 }
             }
-            matches_var_package_filters(item, &filters, &favorite_ids)
+            matches_var_package_filters(item, &filters, &marks.favorites)
                 && crate::library::location_matches(item, &filters)
         })
         .collect();
-    let mut facets = crate::library::compute_facets(items, &base, &filters, &favorite_ids, missing_unique);
+    let mut facets = crate::library::compute_facets(items, &base, &filters, &marks, missing_unique);
 
     let mut filtered: Vec<&VarPackageListItem> = base
         .into_iter()
         .filter(|item| {
-            crate::library::library_status_matches(item, &filters, &favorite_ids)
+            crate::library::library_status_matches(item, &filters, &marks)
                 && crate::library::type_matches(item, &filters)
         })
         .collect();

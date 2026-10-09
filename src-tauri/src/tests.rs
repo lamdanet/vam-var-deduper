@@ -5587,6 +5587,30 @@ fn lib_item(package_id: &str, deps: &[&str]) -> VarPackageListItem {
 }
 
 #[test]
+fn replacement_source_statuses_and_counts() {
+    use crate::library::{compute_facets, status_matches, PackageMarks};
+    use crate::models::VarPackageFilters;
+
+    let items = vec![lib_item("Good.Source.1", &[]), lib_item("Bad.Source.1", &[]), lib_item("Plain.Pkg.1", &[])];
+    let mut marks = PackageMarks::default();
+    marks.replacement.insert("Good.Source.1".into(), 1);
+    marks.replacement.insert("Bad.Source.1".into(), -1);
+    marks.favorites.insert("Plain.Pkg.1".into());
+
+    assert!(status_matches(&items[0], "preferred_source", &marks));
+    assert!(!status_matches(&items[0], "avoided_source", &marks));
+    assert!(status_matches(&items[1], "avoided_source", &marks));
+    assert!(!status_matches(&items[2], "preferred_source", &marks));
+    assert!(status_matches(&items[2], "favorites", &marks));
+
+    let base: Vec<&VarPackageListItem> = items.iter().collect();
+    let facets = compute_facets(&items, &base, &VarPackageFilters::default(), &marks, 0);
+    assert_eq!(facets.statuses.get("preferred_source"), Some(&1));
+    assert_eq!(facets.statuses.get("avoided_source"), Some(&1));
+    assert_eq!(facets.statuses.get("favorites"), Some(&1));
+}
+
+#[test]
 fn library_dependency_graph() {
     let mut items = vec![
         lib_item("A.Scene.1", &["B.Look.2", "C.Hair.latest", "D.Gone.1", "E.Old.min5"]),

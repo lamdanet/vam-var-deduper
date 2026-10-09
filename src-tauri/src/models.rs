@@ -1237,7 +1237,8 @@ pub(crate) struct VarPackageFilterOptions {
 pub(crate) struct VarPackageFilters {
     /// `"indexed"` (file exists on disk) or `"unindexed"` (missing on disk).
     /// Folder mode also accepts the library statuses `"dependency"`,
-    /// `"standalone"`, `"broken"` and `"outdated"` (see `library::status_matches`).
+    /// `"standalone"`, `"broken"` and `"outdated"`, and Fix Missing's
+    /// `"preferred_source"` / `"avoided_source"` (see `library::status_matches`).
     #[serde(default)]
     pub(crate) status: Option<String>,
     /// `"sm"` (< 100 MB), `"md"` (100 MB–1 GB), or `"lg"` (> 1 GB).
