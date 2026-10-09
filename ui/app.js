@@ -9184,6 +9184,18 @@ function fmPref(pkg) {
   return pkg && pkg !== "SELF" ? (FM_PREFS.get(pkg) ?? 0) : 0;
 }
 
+// The preference a list sorts by: frozen while the same missing file stays
+// open, so marking a card doesn't move it away from the mouse.
+let fmOrderFor = null;
+let fmOrderPrefs = new Map();
+function fmOrderPref(pkg) {
+  if (fmOrderFor !== FM.selected) {
+    fmOrderFor = FM.selected;
+    fmOrderPrefs = new Map(FM_PREFS);
+  }
+  return pkg && pkg !== "SELF" ? (fmOrderPrefs.get(pkg) ?? 0) : 0;
+}
+
 // A candidate the page may choose by itself: not in a package you avoid.
 function fmAutoOk(c) {
   return Boolean(c) && (c.isSelf || fmPref(c.package_id) !== -1);
@@ -10649,7 +10661,7 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
     groups.get(pkg).push(c);
   }
   // Inside this package, then preferred, then the rest, then avoided.
-  const rank = (pkg) => (pkg === "SELF" ? 0 : fmPref(pkg) === 1 ? 1 : fmPref(pkg) === -1 ? 3 : 2);
+  const rank = (pkg) => (pkg === "SELF" ? 0 : fmOrderPref(pkg) === 1 ? 1 : fmOrderPref(pkg) === -1 ? 3 : 2);
   const entries = [...groups.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
   const html = entries
     .slice(0, limit)
@@ -10829,6 +10841,11 @@ function fmRenderStrip() {
        <span class="fm-strip-text"><b>${c.chosen} of ${c.total} chosen${coming ? ` · ${coming} by download` : ""}</b><small>${
          FM.flash ? escapeHtml(FM.flash) : c.chosen ? "Run Fixes rewrites these; the rest stay as they are." : "Fix as many or as few as you like."
        }</small></span>
+       ${
+         FM.prefChange && FM.prefChange.for === FM.selected
+           ? `<button type="button" class="ghost-button fm-small" data-fm-act="pref-undo" title="Put the preference and the choices back"><span class="material-symbols-outlined">undo</span>Undo</button>`
+           : ""
+       }
        ${FM.picks.size ? `<button type="button" class="ghost-button fm-small" data-fm-act="clear-picks" title="Clear every choice"><span class="material-symbols-outlined">close</span>Clear all</button>` : ""}
        <button type="button" class="accent-button fm-small" data-fm-act="apply" ${c.chosen && !FM.applying ? "" : "disabled"}>${
          FM.applying ? "Fixing…" : c.chosen ? `Run Fixes (${c.chosen})` : "Run Fixes"
@@ -10874,8 +10891,8 @@ function fmRenderDetail() {
       return { ...x, match: "db", isSelf, installed };
     })
     .sort((a, b) => {
-      const pa = a.isSelf ? 0 : fmPref(a.package_id);
-      const pb = b.isSelf ? 0 : fmPref(b.package_id);
+      const pa = a.isSelf ? 0 : fmOrderPref(a.package_id);
+      const pb = b.isSelf ? 0 : fmOrderPref(b.package_id);
       return Number(pa === -1) - Number(pb === -1) || Number(pb === 1) - Number(pa === 1) || covOf(b) - covOf(a) || Number(b.installed) - Number(a.installed);
     });
   const exactHolder = cands.find((c) => c.match === "crc");
@@ -11001,7 +11018,6 @@ function fmRenderDetail() {
 
   host.innerHTML = `
     <div class="fm-strip" id="fm-strip"></div>
-    ${fmOfferHtml()}
     <h2 class="sr-only">Replacement Sources</h2>
     <div class="detail-panel fm-detail-body">
       <div class="fm-ref-head fm-ref-title">
@@ -11123,10 +11139,13 @@ function fmPickRow(el) {
 }
 
 // Prefer a package as a replacement source (1), avoid it (-1), or clear
-// that (clicking the same one again). Choices already made don't change by
-// themselves: the panel offers to switch them.
+// that (clicking the same one again). It acts on the choices already made
+// right away: preferring switches them to it where it has the same file;
+// avoiding moves them to the next best copy (or keeps one with no other
+// copy, with its warning). Undo puts the preference and the choices back.
 async function fmSetPref(pkg, val) {
-  const next = fmPref(pkg) === val ? 0 : val;
+  const prev = fmPref(pkg);
+  const next = prev === val ? 0 : val;
   try {
     await invoke("set_replacement_pref", { packageId: pkg, pref: next });
   } catch (e) {
@@ -11135,66 +11154,56 @@ async function fmSetPref(pkg, val) {
   }
   if (next) FM_PREFS.set(pkg, next);
   else FM_PREFS.delete(pkg);
-  const name = pkgIdParts(pkg).name;
-  FM.offer = null;
-  if (next === 1) {
-    const keys = (FM.refs ?? [])
-      .filter((r) => {
-        const pick = FM.picks.get(fmKey(r));
-        return pick && pick.replacement_pkg !== pkg && pick.replacement_pkg !== "SELF" && fmCandidates(r).some((c) => !c.isSelf && c.package_id === pkg && c.match === "crc");
-      })
-      .map(fmKey);
-    if (keys.length) FM.offer = { kind: "prefer", pkg, keys };
-    fmFlash(`${name} is a preferred replacement source.`);
-  } else if (next === -1) {
-    const keys = (FM.refs ?? []).filter((r) => FM.picks.get(fmKey(r))?.replacement_pkg === pkg).map(fmKey);
-    if (keys.length) FM.offer = { kind: "avoid", pkg, keys };
-    fmFlash(`${name} will be avoided as a replacement source.`);
-  } else {
-    fmFlash(`${name}: no preference any more.`);
+  const before = new Map();
+  let moved = 0;
+  let kept = 0;
+  for (const ref of FM.refs ?? []) {
+    const key = fmKey(ref);
+    const pick = FM.picks.get(key);
+    if (!pick) continue;
+    if (next === 1 && pick.replacement_pkg !== pkg && pick.replacement_pkg !== "SELF") {
+      const c = fmCandidates(ref).find((x) => !x.isSelf && x.package_id === pkg && x.match === "crc");
+      if (c) {
+        before.set(key, pick);
+        FM.picks.set(key, fmPickFrom(c));
+        moved += 1;
+      }
+    } else if (next === -1 && pick.replacement_pkg === pkg) {
+      const b = fmBest(ref);
+      if (b && b.match === "crc" && fmAutoOk(b)) {
+        before.set(key, pick);
+        FM.picks.set(key, fmPickFrom(b));
+        moved += 1;
+      } else kept += 1;
+    }
   }
+  FM.prefChange = { pkg, prev, next, before, for: FM.selected };
+  const name = pkgIdParts(pkg).name;
+  fmFlash(
+    next === 1
+      ? `${name} is preferred.${moved ? ` ${pkgCount(moved, "choice", "choices")} switched to it.` : ""}`
+      : next === -1
+        ? `${name} is avoided.${moved ? ` ${pkgCount(moved, "choice", "choices")} moved to the next best copy.` : ""}${kept ? ` ${kept} kept: no other copy.` : ""}`
+        : `${name}: no preference any more.`,
+  );
   fmRefresh();
 }
 
-function fmOfferHtml() {
-  const o = FM.offer;
-  if (!o) return "";
-  const name = escapeHtml(pkgIdParts(o.pkg).name);
-  const n = o.keys.length;
-  return `<div class="fm-offer">
-      <span class="material-symbols-outlined">${o.kind === "prefer" ? "thumb_up" : "thumb_down"}</span>
-      <span class="fm-offer-text">${
-        o.kind === "prefer"
-          ? `Switch ${pkgCount(n, "choice", "choices")} to <b>${name}</b>? It has the same file.`
-          : `Move ${pkgCount(n, "choice", "choices")} off <b>${name}</b> to the next best copy?`
-      }</span>
-      <button type="button" class="accent-button fm-small" data-fm-act="offer-yes">${o.kind === "prefer" ? "Switch" : "Move them"}</button>
-      <button type="button" class="ghost-button fm-small" data-fm-act="offer-no">Keep</button>
-    </div>`;
-}
-
-function fmAcceptOffer() {
-  const o = FM.offer;
-  FM.offer = null;
-  if (!o) return;
-  let n = 0;
-  for (const key of o.keys) {
-    const ref = (FM.refs ?? []).find((r) => fmKey(r) === key);
-    if (!ref) continue;
-    if (o.kind === "prefer") {
-      const c = fmCandidates(ref).find((x) => !x.isSelf && x.package_id === o.pkg && x.match === "crc");
-      if (c) {
-        FM.picks.set(key, fmPickFrom(c));
-        n += 1;
-      }
-    } else {
-      FM.picks.delete(key);
-      const b = fmBest(ref);
-      if (b && b.match === "crc" && fmAutoOk(b)) FM.picks.set(key, fmPickFrom(b));
-      n += 1;
-    }
+// Undo the last preference click: the preference and the choices it moved.
+async function fmUndoPref() {
+  const ch = FM.prefChange;
+  if (!ch) return;
+  try {
+    await invoke("set_replacement_pref", { packageId: ch.pkg, pref: ch.prev });
+  } catch (e) {
+    showToast(`Couldn't undo that: ${String(e?.message || e)}`, "error");
+    return;
   }
-  fmFlash(o.kind === "prefer" ? `Switched ${pkgCount(n, "choice", "choices")}.` : `Moved ${pkgCount(n, "choice", "choices")}; any without another exact copy are cleared.`);
+  if (ch.prev) FM_PREFS.set(ch.pkg, ch.prev);
+  else FM_PREFS.delete(ch.pkg);
+  for (const [key, pick] of ch.before) FM.picks.set(key, pick);
+  FM.prefChange = null;
+  fmFlash(`Undone: ${pkgIdParts(ch.pkg).name} is as it was.`);
   fmRefresh();
 }
 
@@ -11386,12 +11395,8 @@ function fmOnClick(e) {
     case "replace":
       fmReplaceOriginal();
       break;
-    case "offer-yes":
-      fmAcceptOffer();
-      break;
-    case "offer-no":
-      FM.offer = null;
-      fmRenderDetail();
+    case "pref-undo":
+      fmUndoPref();
       break;
     case "show-backup":
       if (FM.replaced?.backupPath) invoke("show_in_explorer", { path: FM.replaced.backupPath }).catch(() => {});

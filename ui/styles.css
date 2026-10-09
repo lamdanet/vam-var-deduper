@@ -19182,29 +19182,6 @@ button.pkg-stat:focus-visible::after {
   font-size: 16px;
 }
 
-/* After a preference changes: switch the choices it affects? */
-.fm-offer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-  margin: 12px 20px 0;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--line));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--primary) 9%, transparent);
-  font-size: 12.5px;
-}
-
-.fm-offer > .material-symbols-outlined {
-  color: var(--primary);
-}
-
-.fm-offer-text {
-  flex: 1 1 200px;
-  min-width: 0;
-}
-
 /* A card's icon buttons (prefer, avoid, explore, copy) show on hover, on
    keyboard focus and on the chosen card; the Preferred / Avoid tags say
    what's set. The name keeps room before the buttons wrap. */
@@ -19212,12 +19189,14 @@ button.pkg-stat:focus-visible::after {
   min-width: 160px;
 }
 
+/* Their space is kept when hidden, so hovering never changes a card's
+   height. */
 .fm-cand-row .fm-cand-acts .fm-icon-btn {
-  display: none;
+  visibility: hidden;
 }
 
 .fm-cand-row:hover .fm-cand-acts .fm-icon-btn,
 .fm-cand-row:focus-within .fm-cand-acts .fm-icon-btn,
 .fm-cand-row.is-selected .fm-cand-acts .fm-icon-btn {
-  display: grid;
+  visibility: visible;
 }
