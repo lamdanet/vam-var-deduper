@@ -70,7 +70,7 @@ release time, it fills it with the commit messages since the last release.
   replacement source (thumbs up) or one to avoid (thumbs down): preferred packages are chosen
   over others wherever they have the same file, in every check, and avoided
   ones are never chosen by themselves; you can still pick one, with a
-  warning. The list works from the keyboard and with
+  warning. Settings lists them, to switch or remove. The list works from the keyboard and with
   screen readers. Package Explorer has a Check refs button and shows what
   the last check found, with Fix references. It replaces Missing
   Resources: the sidebar, Send to and the right-click menus open Fix
