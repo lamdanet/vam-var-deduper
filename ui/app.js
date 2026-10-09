@@ -11813,53 +11813,82 @@ function izFamily(pkg) {
   return String(pkg).replace(/\.(\d+|latest|min\d+)$/i, "").toLowerCase();
 }
 
-// The groups of the same package (a scene may name it by two versions).
-function izFamilyGroups(g) {
-  const fam = izFamily(g.source_pkg_id);
-  return (IZ.groups ?? []).filter((x) => izFamily(x.source_pkg_id) === fam);
+// What the check found, by package, worked out once per check: a big
+// package's list asks for these many times per redraw.
+let izMemo = { groups: undefined };
+function izIndex() {
+  if (izMemo.groups === IZ.groups) return izMemo;
+  const fam = new Map();
+  const famOf = new Map();
+  for (const g of IZ.groups ?? []) {
+    const f = izFamily(g.source_pkg_id);
+    famOf.set(g, f);
+    if (!fam.has(f)) fam.set(f, []);
+    fam.get(f).push(g);
+  }
+  izMemo = { groups: IZ.groups, fam, famOf, per: new Map(), shown: null, hidden: null };
+  return izMemo;
 }
 
-// What keeps the package needed even with every file copied in: its files
-// that clash, and references to it this page can't copy (a file it doesn't
-// have, or a version that isn't installed).
-function izKeptBy(g) {
-  const groups = izFamilyGroups(g);
-  const filled = new Set(izFills(g).map((f) => `${f.ref_pkg}:/${f.ref_path}`));
-  return {
-    clashes: groups.reduce((n, x) => n + (x.refs ?? []).filter(izClash).length, 0),
-    other: [...new Set(groups.flatMap((x) => x.other_refs ?? []))].filter((r) => !filled.has(r)),
-    plugin: [...new Set(groups.flatMap((x) => x.plugin_refs ?? []))],
-  };
-}
-
-// Files the package lacks that come from an exact copy elsewhere (another
-// package, or this one already): Copy in takes them from there.
-function izFills(g) {
+// A package's facts: its groups (a scene may name it by two versions), the
+// files it lacks that come from an exact copy elsewhere (another package, or
+// this one already), what keeps it needed even with every file copied in
+// (files that clash, references it can't copy, plugin scripts), and its
+// size with what comes from elsewhere.
+function izPkgFacts(g) {
+  const idx = izIndex();
+  const f = idx.famOf.get(g) ?? izFamily(g.source_pkg_id);
+  const hit = idx.per.get(f);
+  if (hit) return hit;
+  const groups = idx.fam.get(f) ?? [g];
   const seen = new Set();
-  return izFamilyGroups(g)
+  const fills = groups
     .flatMap((x) => x.fills ?? [])
-    .filter((f) => {
-      const k = `${f.ref_pkg}:/${f.ref_path}`;
+    .filter((x) => {
+      const k = `${x.ref_pkg}:/${x.ref_path}`;
       if (seen.has(k)) return false;
       seen.add(k);
       return true;
     });
+  const filled = new Set(fills.map((x) => `${x.ref_pkg}:/${x.ref_path}`));
+  const kept = {
+    clashes: groups.reduce((n, x) => n + (x.refs ?? []).filter(izClash).length, 0),
+    other: [...new Set(groups.flatMap((x) => x.other_refs ?? []))].filter((r) => !filled.has(r)),
+    plugin: [...new Set(groups.flatMap((x) => x.plugin_refs ?? []))],
+  };
+  const facts = {
+    groups,
+    fills,
+    kept,
+    drops: !kept.clashes && !kept.other.length && !kept.plugin.length,
+    size: {
+      files: groups.reduce((n, x) => n + (x.refs ?? []).length, 0) + fills.length,
+      bytes: groups.reduce((n, x) => n + Number(x.total_bundle_bytes ?? 0), 0) + fills.reduce((n, x) => n + (x.from_self ? 0 : Number(x.size ?? 0)), 0),
+      fills: fills.length,
+    },
+  };
+  idx.per.set(f, facts);
+  return facts;
 }
 
-// A package's files and bytes, with what comes from elsewhere.
+function izFamilyGroups(g) {
+  return izPkgFacts(g).groups;
+}
+
+function izKeptBy(g) {
+  return izPkgFacts(g).kept;
+}
+
+function izFills(g) {
+  return izPkgFacts(g).fills;
+}
+
 function izPkgSize(g) {
-  const groups = izFamilyGroups(g);
-  const fills = izFills(g);
-  return {
-    files: groups.reduce((n, x) => n + (x.refs ?? []).length, 0) + fills.length,
-    bytes: groups.reduce((n, x) => n + Number(x.total_bundle_bytes ?? 0), 0) + fills.reduce((n, f) => n + (f.from_self ? 0 : Number(f.size ?? 0)), 0),
-    fills: fills.length,
-  };
+  return izPkgFacts(g).size;
 }
 
 function izDropsIfAll(g) {
-  const k = izKeptBy(g);
-  return !k.clashes && !k.other.length && !k.plugin.length;
+  return izPkgFacts(g).drops;
 }
 
 // Why it's still needed, in a sentence (empty when nothing keeps it).
@@ -11898,18 +11927,24 @@ function izExclusive(g) {
 // comes in whole or not at all, and the page offers only those it can: every
 // reference to them can be copied. The rest are named in the summary.
 function izShown() {
-  return (IZ.groups ?? []).filter(izDropsIfAll);
+  const idx = izIndex();
+  if (!idx.shown) idx.shown = (IZ.groups ?? []).filter(izDropsIfAll);
+  return idx.shown;
 }
 
 // One group per package (a scene may name it by two versions).
 function izHiddenPkgs() {
-  const seen = new Set();
-  return (IZ.groups ?? []).filter((g) => {
-    const fam = izFamily(g.source_pkg_id);
-    if (izDropsIfAll(g) || seen.has(fam)) return false;
-    seen.add(fam);
-    return true;
-  });
+  const idx = izIndex();
+  if (!idx.hidden) {
+    const seen = new Set();
+    idx.hidden = (IZ.groups ?? []).filter((g) => {
+      const fam = idx.famOf.get(g);
+      if (izDropsIfAll(g) || seen.has(fam)) return false;
+      seen.add(fam);
+      return true;
+    });
+  }
+  return idx.hidden;
 }
 
 // Chosen: the package (all versions named) comes in, with every file of it
