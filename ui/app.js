@@ -9168,6 +9168,26 @@ const FM = {
 };
 // target path -> number of broken references the last check found.
 const FM_RESULTS = new Map();
+// package id -> 1 (a preferred replacement source) or -1 (one to avoid).
+const FM_PREFS = new Map();
+
+async function fmLoadPrefs() {
+  if (!invoke) return;
+  try {
+    const rows = await invoke("list_replacement_prefs");
+    FM_PREFS.clear();
+    for (const [id, pref] of rows ?? []) FM_PREFS.set(String(id), Number(pref));
+  } catch (_e) {}
+}
+
+function fmPref(pkg) {
+  return pkg && pkg !== "SELF" ? (FM_PREFS.get(pkg) ?? 0) : 0;
+}
+
+// A candidate the page may choose by itself: not in a package you avoid.
+function fmAutoOk(c) {
+  return Boolean(c) && (c.isSelf || fmPref(c.package_id) !== -1);
+}
 const FM_STORE = { inPlace: "fm.inPlace", backup: "fm.backup", outputDir: "fm.outputDir", recent: "fm.recent" };
 
 function fmKey(ref) {
@@ -9425,7 +9445,15 @@ function fmBest(ref) {
   const list = fmCandidates(ref);
   if (!list.length) return null;
   const cov = fmLocalCoverage();
-  const score = (c) => [c.match === "crc" ? 0 : 1, c.isSelf ? 0 : 1, -(cov.get(c.isSelf ? "SELF" : c.package_id) ?? 0), c.internal_path === ref.ref_path ? 0 : 1];
+  const pref = (c) => (c.isSelf ? 0 : fmPref(c.package_id));
+  const score = (c) => [
+    c.match === "crc" ? 0 : 1,
+    pref(c) === -1 ? 1 : 0,
+    c.isSelf ? 0 : 1,
+    pref(c) === 1 ? 0 : 1,
+    -(cov.get(c.isSelf ? "SELF" : c.package_id) ?? 0),
+    c.internal_path === ref.ref_path ? 0 : 1,
+  ];
   return list.sort((a, b) => {
     const x = score(a);
     const y = score(b);
@@ -9445,17 +9473,23 @@ function fmPickFrom(c) {
 
 function fmAutoPick() {
   let n = 0;
+  let avoided = 0;
   for (const ref of FM.refs ?? []) {
     const key = fmKey(ref);
     if (FM.picks.has(key) || FM.skipped.has(key) || !ref.ref_path) continue;
     const best = fmBest(ref);
-    // Only exact copies by themselves; a path match is a guess.
-    if (best?.match === "crc") {
+    // Only exact copies by themselves (a path match is a guess), and never
+    // from a package you avoid.
+    if (best?.match === "crc" && fmAutoOk(best)) {
       FM.picks.set(key, fmPickFrom(best));
       n += 1;
-    }
+    } else if (best?.match === "crc") avoided += 1;
   }
-  fmFlash(n ? `Chose ${pkgCount(n, "exact copy", "exact copies")}.` : "No more exact copies to choose.");
+  fmFlash(
+    `${n ? `Chose ${pkgCount(n, "exact copy", "exact copies")}.` : "No more exact copies to choose."}${
+      avoided ? ` ${avoided} left: only packages you avoid have them.` : ""
+    }`,
+  );
   fmRefresh();
 }
 
@@ -9744,7 +9778,7 @@ function fmDbMode() {
 
 // What the check found, sorted by how easy each is to fix, and what's ready.
 function fmSummary() {
-  const s = { ...fmCounts(), selfExact: 0, otherExact: 0, guess: 0, canDownload: 0, looking: 0, inDb: 0, notHelped: 0, stuck: 0, dlPkgs: new Set() };
+  const s = { ...fmCounts(), selfExact: 0, otherExact: 0, prefExact: 0, avoidOnly: 0, guess: 0, canDownload: 0, looking: 0, inDb: 0, notHelped: 0, stuck: 0, dlPkgs: new Set() };
   const looking = FM.lookingUp === FM.token;
   for (const r of FM.refs ?? []) {
     if (fmRefState(r) !== "open") continue;
@@ -9752,7 +9786,11 @@ function fmSummary() {
     if (b) {
       if (b.match !== "crc") s.guess += 1;
       else if (b.isSelf) s.selfExact += 1;
-      else s.otherExact += 1;
+      else if (!fmAutoOk(b)) s.avoidOnly += 1;
+      else {
+        s.otherExact += 1;
+        if (fmPref(b.package_id) === 1) s.prefExact += 1;
+      }
       continue;
     }
     const a = r.kind !== "transitive" ? FM.avail.get(r.ref_pkg) : null;
@@ -10250,12 +10288,17 @@ function fmRenderSummary() {
     return;
   }
   const exact = s.selfExact + s.otherExact;
-  const look = s.guess + s.inDb + s.notHelped + s.stuck;
+  const look = s.guess + s.inDb + s.notHelped + s.stuck + s.avoidOnly;
   const names = [...s.dlPkgs].map((p) => pkgIdParts(p).name);
   const dlNames = escapeHtml(names.slice(0, 2).join(", ") + (names.length > 2 ? ` and ${names.length - 2} more` : ""));
   const lines = [
     s.selfExact ? `<li><b>${s.selfExact}</b> ${s.selfExact === 1 ? "is" : "are"} already inside ${escapeHtml(fmSelfName())} — no download, no new dependency.</li>` : "",
-    s.otherExact ? `<li><b>${s.otherExact}</b> ${s.otherExact === 1 ? "has" : "have"} an exact copy in another package (it becomes a dependency).</li>` : "",
+    s.otherExact
+      ? `<li><b>${s.otherExact}</b> ${s.otherExact === 1 ? "has" : "have"} an exact copy in another package (it becomes a dependency)${
+          s.prefExact ? `, ${s.prefExact === s.otherExact ? "all" : s.prefExact} from packages you prefer` : ""
+        }.</li>`
+      : "",
+    s.avoidOnly ? `<li><b>${s.avoidOnly}</b> ${has(s.avoidOnly, "has", "have")} an exact copy only in packages you avoid — choose ${has(s.avoidOnly, "it", "them")} yourself if you want.</li>` : "",
     s.guess ? `<li><b>${s.guess}</b> ${s.guess === 1 ? "has" : "have"} a file with the same path, contents not compared — worth a look.</li>` : "",
     s.canDownload ? `<li><b>${s.canDownload}</b> ${has(s.canDownload, "comes", "come")} back by downloading ${dlNames} — nothing to rewrite.</li>` : "",
     s.inDb ? `<li><b>${s.inDb}</b> ${has(s.inDb, "has a copy", "have copies")} only in packages you don't have (from the database) — pick one to download.</li>` : "",
@@ -10380,10 +10423,11 @@ function fmRowSourceHtml(key, best) {
   const exact = best.match === "crc";
   const name = best.isSelf ? `copy inside ${fmSelfName()}` : `copy in ${pkgIdParts(best.package_id).name}`;
   const where = best.isSelf ? `the copy already inside ${fmSelfName()}` : `the copy in ${best.package_id}`;
+  const pref = best.isSelf ? 0 : fmPref(best.package_id);
   return `<span class="fm-row-right">
-      <span class="fm-row-src${exact ? "" : " is-guess"}" title="${escapeAttribute(`${exact ? "Exact copy" : "Same path, contents not compared"}: ${best.isSelf ? fmSelfName() : best.package_id}`)}">
-        <span class="material-symbols-outlined">${exact ? "check" : "help"}</span>
-        <span class="fm-row-src-name">${exact ? "" : "same path · "}${escapeHtml(name)}</span>
+      <span class="fm-row-src${exact ? "" : " is-guess"}${pref === 1 ? " is-pref" : pref === -1 ? " is-avoid" : ""}" title="${escapeAttribute(`${exact ? "Exact copy" : "Same path, contents not compared"}: ${best.isSelf ? fmSelfName() : best.package_id}`)}">
+        <span class="material-symbols-outlined">${pref === -1 ? "warning" : pref === 1 ? "star" : exact ? "check" : "help"}</span>
+        <span class="fm-row-src-name">${pref === -1 ? "only " : ""}${exact ? "" : "same path · "}${escapeHtml(name)}</span>
         ${best.isSelf ? "" : `<span class="fm-dep" title="${escapeAttribute(`${best.package_id} becomes a dependency`)}">+ dependency</span>`}
       </span>
     </span>`;
@@ -10604,7 +10648,9 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
     if (!groups.has(pkg)) groups.set(pkg, []);
     groups.get(pkg).push(c);
   }
-  const entries = [...groups.entries()];
+  // Inside this package, then preferred, then the rest, then avoided.
+  const rank = (pkg) => (pkg === "SELF" ? 0 : fmPref(pkg) === 1 ? 1 : fmPref(pkg) === -1 ? 3 : 2);
+  const entries = [...groups.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
   const html = entries
     .slice(0, limit)
     .map(([pkg, copies]) => {
@@ -10620,6 +10666,8 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
       const notHere = shown.match === "db" && !c.isSelf && !c.installed;
       const tags = [
         c.isSelf ? `<span class="chip chip-accent" title="The file is inside the package you're fixing">Already inside</span>` : "",
+        !c.isSelf && fmPref(pkg) === 1 ? `<span class="chip fm-chip-pref" title="You prefer it as a replacement source"><span class="material-symbols-outlined">star</span>Preferred</span>` : "",
+        !c.isSelf && fmPref(pkg) === -1 ? `<span class="chip fm-chip-avoid" title="You marked it to avoid as a replacement source"><span class="material-symbols-outlined">block</span>Avoid</span>` : "",
         shown.match === "path" ? `<span class="chip fm-chip-warn" title="Same path; contents not compared">Same path only</span>` : "",
         notHere ? `<span class="chip" title="Only in the database: download it to use it">Not installed</span>` : "",
       ].join("");
@@ -10657,7 +10705,7 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
         shown.internal_path !== ref.ref_path && !open ? `<span class="fm-cand-path" title="${escapeAttribute(shown.internal_path)}">${escapeHtml(shown.internal_path)}</span>` : "",
         copies.length > 1 && !open ? `<span class="fm-dim" title="Choose it to pick another copy">${pkgCount(copies.length, "copy", "copies")}</span>` : "",
       ].join("");
-      return `<div class="fm-cand-row${isChosen ? " is-selected" : ""}" ${pickAttrs(shown)}>
+      return `<div class="fm-cand-row${isChosen ? " is-selected" : ""}${!c.isSelf && fmPref(pkg) === -1 ? " is-avoided" : ""}" ${pickAttrs(shown)}>
           <div class="fm-cand-top">
             ${radio(shown, false)}
             <span class="fm-cand-tags">${tags}</span>
@@ -10668,6 +10716,14 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
                   : ""
               }
               ${get}
+              ${
+                c.isSelf
+                  ? ""
+                  : `<button type="button" class="fm-icon-btn fm-pref-btn${fmPref(pkg) === 1 ? " is-pref" : ""}" data-fm-pref="${escapeAttribute(pkg)}" data-fm-pref-val="1" aria-pressed="${fmPref(pkg) === 1}"
+                      title="${fmPref(pkg) === 1 ? "Preferred replacement source: click to clear" : "Prefer as a replacement source: chosen over other packages from now on"}"><span class="material-symbols-outlined">star</span></button>
+                    <button type="button" class="fm-icon-btn fm-pref-btn${fmPref(pkg) === -1 ? " is-avoid" : ""}" data-fm-pref="${escapeAttribute(pkg)}" data-fm-pref-val="-1" aria-pressed="${fmPref(pkg) === -1}"
+                      title="${fmPref(pkg) === -1 ? "Avoided as a replacement source: click to clear" : "Avoid as a replacement source: never chosen by itself, a warning when you choose it"}"><span class="material-symbols-outlined">block</span></button>`
+              }
               ${c.isSelf ? "" : `<button type="button" class="fm-icon-btn" data-fm-explore-pkg="${escapeAttribute(c.package_id)}" data-fm-explore-file="${escapeAttribute(c.installed === false ? "" : c.package_file || "")}" title="Explore ${escapeAttribute(c.package_id)}"><span class="material-symbols-outlined">space_dashboard</span></button>`}
               <button type="button" class="fm-icon-btn" data-fm-copy="${escapeAttribute(c.isSelf ? fmTargetId() : c.package_id)}" title="Copy the package id"><span class="material-symbols-outlined">content_copy</span></button>
             </span>
@@ -10817,7 +10873,11 @@ function fmRenderDetail() {
       const installed = isSelf || localPkgs.has(x.package_id) || (state.varPackagesItems ?? []).some((it) => it.package_id === x.package_id);
       return { ...x, match: "db", isSelf, installed };
     })
-    .sort((a, b) => covOf(b) - covOf(a) || Number(b.installed) - Number(a.installed));
+    .sort((a, b) => {
+      const pa = a.isSelf ? 0 : fmPref(a.package_id);
+      const pb = b.isSelf ? 0 : fmPref(b.package_id);
+      return Number(pa === -1) - Number(pb === -1) || Number(pb === 1) - Number(pa === 1) || covOf(b) - covOf(a) || Number(b.installed) - Number(a.installed);
+    });
   const exactHolder = cands.find((c) => c.match === "crc");
   const hasExact = exactHolder ? (exactHolder.isSelf ? `${fmSelfName()} itself` : exactHolder.package_id) : "";
   const words = FM_KIND_WORDS[ref.kind] ?? FM_KIND_WORDS.text_ref;
@@ -10848,29 +10908,39 @@ function fmRenderDetail() {
             </div>
             <button type="button" class="ghost-button fm-small" data-fm-unpick="${escapeAttribute(key)}"><span class="material-symbols-outlined">close</span>Clear</button>
           </div>
+          ${
+            fmPref(pick.replacement_pkg) === -1
+              ? `<p class="fm-chosen-warn"><span class="material-symbols-outlined">warning</span>You marked this package to avoid as a replacement source.</p>`
+              : ""
+          }
           ${applyBtns ? `<div class="fm-chosen-apply"><span>Use it for other missing files too:</span>${applyBtns}</div>` : ""}
         </div>`
       : "";
 
   // The suggestion says why it's the one.
   const bestCov = best ? covOf(best) : 0;
+  const bestPref = best && !best.isSelf ? fmPref(best.package_id) : 0;
   const suggestion =
     !pick && !fixed && best
-      ? `<div class="fm-best${best.match === "crc" ? "" : " is-guess"}">
+      ? `<div class="fm-best${best.match !== "crc" ? " is-guess" : bestPref === -1 ? " is-avoid" : ""}">
           <div class="fm-best-text">
-            <span class="fm-best-tag">Suggested</span>
+            <span class="fm-best-tag">${bestPref === -1 ? "The only exact copy" : bestPref === 1 ? "Suggested · preferred" : "Suggested"}</span>
             ${fmPkgLabelHtml(best.isSelf ? "SELF" : best.package_id, { inside: true })}
             <small>${escapeHtml(
               [
                 best.match === "crc" ? "Same contents as the missing file" : "Same path; contents not compared",
                 best.isSelf ? "the package has it, only the reference points elsewhere: no download, no new dependency" : "it becomes a dependency",
-                !best.isSelf && bestCov > 1 ? `it has ${bestCov} of your missing files, more than the others` : "",
+                bestPref === 1 ? "you prefer it as a replacement source" : "",
+                bestPref === -1 ? "you marked it to avoid as a replacement source, and no other package has it" : "",
+                !best.isSelf && bestPref !== -1 && bestCov > 1 ? `it has ${bestCov} of your missing files, more than the others` : "",
               ]
                 .filter(Boolean)
                 .join(" · "),
             )}</small>
           </div>
-          <button type="button" class="accent-button" data-fm-use="${escapeAttribute(key)}"><span class="material-symbols-outlined">check</span>Use it</button>
+          <button type="button" class="${bestPref === -1 ? "ghost-button" : "accent-button"}" data-fm-use="${escapeAttribute(key)}"><span class="material-symbols-outlined">check</span>${
+            bestPref === -1 ? "Use it anyway" : "Use it"
+          }</button>
         </div>`
       : "";
 
@@ -10931,6 +11001,7 @@ function fmRenderDetail() {
 
   host.innerHTML = `
     <div class="fm-strip" id="fm-strip"></div>
+    ${fmOfferHtml()}
     <h2 class="sr-only">Replacement Sources</h2>
     <div class="detail-panel fm-detail-body">
       <div class="fm-ref-head fm-ref-title">
@@ -11019,7 +11090,7 @@ function fmUseFor(refs, replacementPkg) {
     else continue;
     n += 1;
   }
-  fmFlash(`Chosen for ${pkgCount(n, "missing file", "missing files")}.`);
+  fmFlash(`Chosen for ${pkgCount(n, "missing file", "missing files")}.${fmPref(replacementPkg) === -1 ? " You marked this package to avoid." : ""}`);
   fmRefresh();
 }
 
@@ -11030,6 +11101,7 @@ function fmUseBest(key, { advance = false } = {}) {
   if (!best) return false;
   FM.skipped.delete(key);
   FM.picks.set(key, fmPickFrom(best));
+  if (!fmAutoOk(best)) fmFlash("Chosen, though you marked that package to avoid.");
   if (advance) fmSelectNextOpen(key);
   fmRefresh();
   return true;
@@ -11046,6 +11118,83 @@ function fmPickRow(el) {
     source: el.getAttribute("data-fm-src"),
     label: pkg === "SELF" ? `already inside ${fmSelfName()}` : pkg,
   });
+  if (fmPref(pkg) === -1) fmFlash("Chosen, though you marked that package to avoid.");
+  fmRefresh();
+}
+
+// Prefer a package as a replacement source (1), avoid it (-1), or clear
+// that (clicking the same one again). Choices already made don't change by
+// themselves: the panel offers to switch them.
+async function fmSetPref(pkg, val) {
+  const next = fmPref(pkg) === val ? 0 : val;
+  try {
+    await invoke("set_replacement_pref", { packageId: pkg, pref: next });
+  } catch (e) {
+    showToast(`Couldn't save that: ${String(e?.message || e)}`, "error");
+    return;
+  }
+  if (next) FM_PREFS.set(pkg, next);
+  else FM_PREFS.delete(pkg);
+  const name = pkgIdParts(pkg).name;
+  FM.offer = null;
+  if (next === 1) {
+    const keys = (FM.refs ?? [])
+      .filter((r) => {
+        const pick = FM.picks.get(fmKey(r));
+        return pick && pick.replacement_pkg !== pkg && pick.replacement_pkg !== "SELF" && fmCandidates(r).some((c) => !c.isSelf && c.package_id === pkg && c.match === "crc");
+      })
+      .map(fmKey);
+    if (keys.length) FM.offer = { kind: "prefer", pkg, keys };
+    fmFlash(`${name} is a preferred replacement source.`);
+  } else if (next === -1) {
+    const keys = (FM.refs ?? []).filter((r) => FM.picks.get(fmKey(r))?.replacement_pkg === pkg).map(fmKey);
+    if (keys.length) FM.offer = { kind: "avoid", pkg, keys };
+    fmFlash(`${name} will be avoided as a replacement source.`);
+  } else {
+    fmFlash(`${name}: no preference any more.`);
+  }
+  fmRefresh();
+}
+
+function fmOfferHtml() {
+  const o = FM.offer;
+  if (!o) return "";
+  const name = escapeHtml(pkgIdParts(o.pkg).name);
+  const n = o.keys.length;
+  return `<div class="fm-offer">
+      <span class="material-symbols-outlined">${o.kind === "prefer" ? "star" : "block"}</span>
+      <span class="fm-offer-text">${
+        o.kind === "prefer"
+          ? `Switch ${pkgCount(n, "choice", "choices")} to <b>${name}</b>? It has the same file.`
+          : `Move ${pkgCount(n, "choice", "choices")} off <b>${name}</b> to the next best copy?`
+      }</span>
+      <button type="button" class="accent-button fm-small" data-fm-act="offer-yes">${o.kind === "prefer" ? "Switch" : "Move them"}</button>
+      <button type="button" class="ghost-button fm-small" data-fm-act="offer-no">Keep</button>
+    </div>`;
+}
+
+function fmAcceptOffer() {
+  const o = FM.offer;
+  FM.offer = null;
+  if (!o) return;
+  let n = 0;
+  for (const key of o.keys) {
+    const ref = (FM.refs ?? []).find((r) => fmKey(r) === key);
+    if (!ref) continue;
+    if (o.kind === "prefer") {
+      const c = fmCandidates(ref).find((x) => !x.isSelf && x.package_id === o.pkg && x.match === "crc");
+      if (c) {
+        FM.picks.set(key, fmPickFrom(c));
+        n += 1;
+      }
+    } else {
+      FM.picks.delete(key);
+      const b = fmBest(ref);
+      if (b && b.match === "crc" && fmAutoOk(b)) FM.picks.set(key, fmPickFrom(b));
+      n += 1;
+    }
+  }
+  fmFlash(o.kind === "prefer" ? `Switched ${pkgCount(n, "choice", "choices")}.` : `Moved ${pkgCount(n, "choice", "choices")}; any without another exact copy are cleared.`);
   fmRefresh();
 }
 
@@ -11091,6 +11240,12 @@ function fmOnClick(e) {
   const t = e.target;
   const q = (sel) => t.closest?.(sel);
   let el;
+  if ((el = q("[data-fm-pref]"))) {
+    e.preventDefault();
+    e.stopPropagation();
+    fmSetPref(el.getAttribute("data-fm-pref"), Number(el.getAttribute("data-fm-pref-val")));
+    return;
+  }
   if ((el = q("[data-fm-explore-pkg]"))) {
     e.preventDefault();
     e.stopPropagation();
@@ -11230,6 +11385,13 @@ function fmOnClick(e) {
       break;
     case "replace":
       fmReplaceOriginal();
+      break;
+    case "offer-yes":
+      fmAcceptOffer();
+      break;
+    case "offer-no":
+      FM.offer = null;
+      fmRenderDetail();
       break;
     case "show-backup":
       if (FM.replaced?.backupPath) invoke("show_in_explorer", { path: FM.replaced.backupPath }).catch(() => {});
@@ -11375,6 +11537,9 @@ function setupFixMissing() {
     }, 250);
   });
   window.__refreshFixMissingView = () => fmRender();
+  fmLoadPrefs().then(() => {
+    if (Array.isArray(FM.refs)) fmRefresh();
+  });
   window.addEventListener("scroll", fmFitPanel, { passive: true, capture: true });
   window.addEventListener("resize", fmFitPanel);
   window.__TAURI__?.event
