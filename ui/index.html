@@ -98,6 +98,10 @@
                 <span class="material-symbols-outlined">download_for_offline</span>
                 <span class="sidebar-label">Internalize Resources</span>
               </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="dependency-usage">
+                <span class="material-symbols-outlined">donut_small</span>
+                <span class="sidebar-label">Dependency Usage</span>
+              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="reclaim-space">
                 <span class="material-symbols-outlined">savings</span>
                 <span class="sidebar-label">Reclaim Space</span>
@@ -1643,6 +1647,10 @@
            packages into it (rendered by app.js, Fix Missing's layout). -->
       <section id="internalize-resources-view" class="app-main missing-resources-view fm-view iz-view hidden"></section>
 
+      <!-- Dependency Usage: is each dependency of a package worth keeping,
+           across every package that uses it (rendered by app.js). -->
+      <section id="du-view" class="app-main missing-resources-view fm-view du-view hidden"></section>
+
       <!-- Settings View (hidden by default; revealed by sidebar Settings link) -->
       <!-- Download sources: paste a forum post or links, see the .var files
            they deliver (inside MEGA folders, Pixeldrain lists and .zip archives
@@ -2752,6 +2760,8 @@
             if (pkgView) pkgView.classList.add("hidden");
             var fmView = document.getElementById("fm-view");
             if (fmView) fmView.classList.add("hidden");
+            var duView = document.getElementById("du-view");
+            if (duView) duView.classList.add("hidden");
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
@@ -2766,6 +2776,9 @@
             } else if ((route === "fix-missing" || route === "missing-resources") && fmView) {
               fmView.classList.remove("hidden");
               if (window.__refreshFixMissingView) window.__refreshFixMissingView();
+            } else if (route === "dependency-usage" && duView) {
+              duView.classList.remove("hidden");
+              if (window.__refreshDependencyUsageView) window.__refreshDependencyUsageView();
             } else if (route === "pkg-explorer" && pkgView) {
               pkgView.classList.remove("hidden");
               if (window.__refreshPkgView) window.__refreshPkgView();

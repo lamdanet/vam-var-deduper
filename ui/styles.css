@@ -19324,6 +19324,297 @@ button.pkg-stat:focus-visible::after {
   right: 6px;
 }
 
+/* ---- Dependency Usage: a verdict per dependency, with the numbers ---- */
+
+.du-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.du-verdict .material-symbols-outlined {
+  font-size: 14px;
+}
+
+.du-verdict.is-go {
+  border-color: color-mix(in srgb, var(--accent-success) 55%, transparent);
+  background: color-mix(in srgb, var(--accent-success) 12%, transparent);
+  color: var(--accent-success);
+}
+
+.du-verdict.is-keep {
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: color-mix(in srgb, var(--primary) 70%, var(--text));
+}
+
+.du-verdict.is-none {
+  border-style: dashed;
+  color: var(--accent-warn);
+}
+
+.du-verdict.is-absent {
+  color: var(--text-dim);
+}
+
+.du-verdict b {
+  margin-left: 2px;
+}
+
+.fm-row.group-row.du-row {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.du-no-thumb {
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+}
+
+.du-row-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 4px;
+}
+
+.du-fact {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.du-mini {
+  height: 18px;
+  margin-left: 4px;
+  padding: 0 4px;
+  vertical-align: 1px;
+}
+
+.du-mini .material-symbols-outlined {
+  font-size: 12px;
+}
+
+/* All users' share of the package, and this package's part of it. */
+.du-bar {
+  position: relative;
+  flex: 1 1 80px;
+  max-width: 160px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--line);
+}
+
+.du-bar-all,
+.du-bar-me {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+}
+
+.du-bar-all {
+  background: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.du-bar-me {
+  background: var(--primary);
+}
+
+/* The Verdicts card's text keeps the card's side padding. */
+.details-card > .du-total,
+.details-card > .du-legend,
+.details-card > .du-note {
+  padding-inline: 20px;
+}
+
+.du-total {
+  margin: 4px 0 10px;
+  font-size: 13.5px;
+}
+
+.du-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.du-legend-line {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.du-legend-line .du-verdict {
+  justify-self: start;
+}
+
+.du-note {
+  margin: 12px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.du-why {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.du-why p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.du-why.is-go {
+  border-color: color-mix(in srgb, var(--accent-success) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent-success) 9%, transparent);
+}
+
+.du-why.is-go > .material-symbols-outlined {
+  color: var(--accent-success);
+}
+
+.du-why.is-keep {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.du-why.is-keep > .material-symbols-outlined {
+  color: var(--primary);
+}
+
+.du-why.is-none > .material-symbols-outlined {
+  color: var(--accent-warn);
+}
+
+.du-numbers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.du-numbers > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.du-numbers small {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.du-numbers b {
+  font-size: 14px;
+}
+
+.du-users {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.du-user {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.du-user.is-me {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.du-user-thumb {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--lib-thumb-bg);
+}
+
+.du-user-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.du-user-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.du-user-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.du-user-text b small {
+  margin-left: 4px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.du-user-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--line);
+}
+
+.du-user-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--primary);
+}
+
+.du-user-num {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.du-user-num small {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.du-more {
+  margin-top: 8px;
+}
+
 /* ---- Internalize Resources: Fix Missing's layout, packages as rows ---- */
 
 .fm-row.group-row.iz-row {

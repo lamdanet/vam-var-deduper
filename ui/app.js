@@ -8754,6 +8754,7 @@ function pkgMoreMenu(event) {
         { label: "Clean VARs", action: () => sendVarToTargetPage("db-find", item.file_path) },
         { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", item.file_path) },
         { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", item.file_path) },
+        { label: "Dependency Usage", action: () => sendVarToTargetPage("dependency-usage", item.file_path) },
       ],
     },
     { label: "Copy path", action: () => navigator.clipboard?.writeText(item.file_path).catch(() => {}) },
@@ -12850,6 +12851,728 @@ function setupInternalize() {
   izRender();
 }
 
+// ---- Dependency Usage ------------------------------------------------------------------
+// Is a dependency worth keeping? A package may use only a few files of a big
+// one, but whether copying them in (Internalize Resources) saves space depends
+// on every package that uses it: a shared library stays, a big package its
+// users barely touch can go. For each dependency of one package, every
+// package that depends on it is read for what it references, and the page
+// gives a verdict with the numbers behind it. Read-only.
+
+const DU = {
+  target: "",
+  item: null,
+  token: 0,
+  // DepUsageReport once analysed; null before.
+  report: null,
+  scanning: false,
+  progress: 0,
+  message: "",
+  error: "",
+  // the dependency the right panel shows (its declared key)
+  selected: null,
+  filter: "all",
+  query: "",
+  sheetOpen: false,
+  configOpen: null,
+  // the empty page's packages to start from: { loading, items, total, error }
+  start: null,
+  // keys whose users list shows everyone, not the first ten
+  usersOpen: new Set(),
+};
+const DU_RECENT = "du.recent";
+const DU_MB = 1048576;
+
+function duView() {
+  return $("du-view");
+}
+
+function duVisible() {
+  const v = duView();
+  return Boolean(v && !v.classList.contains("hidden"));
+}
+
+function duShowView() {
+  const view = duView();
+  if (!view) return;
+  document.querySelectorAll(".app-main").forEach((v) => v.classList.toggle("hidden", v !== view));
+  document.querySelectorAll("[data-sidebar-link]").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("data-sidebar-link") === "dependency-usage");
+  });
+}
+
+function duSelfName() {
+  return DU.item ? libTitle(DU.item) : "this package";
+}
+
+function duRecentGet() {
+  try {
+    const list = JSON.parse(fmStoreGet(DU_RECENT, "[]"));
+    return Array.isArray(list) ? list.filter((r) => r && typeof r.path === "string") : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+function duRecentAdd(path, note) {
+  const list = [{ path, note, at: Date.now() }, ...duRecentGet().filter((r) => r.path !== path)].slice(0, 8);
+  fmStoreSet(DU_RECENT, JSON.stringify(list));
+}
+
+function duOpen(target, { scan = false } = {}) {
+  const fp = typeof target === "string" ? target : target?.file_path;
+  if (!fp) return;
+  if (DU.target !== fp) {
+    DU.token += 1;
+    Object.assign(DU, {
+      target: fp,
+      item: libFindItem(fp) ?? pkgBareItem(fp),
+      report: null,
+      error: "",
+      selected: null,
+      filter: "all",
+      query: "",
+      configOpen: null,
+      usersOpen: new Set(),
+    });
+  }
+  duShowView();
+  duRender();
+  if (scan && !DU.scanning) duScan();
+}
+
+// The VAR Packages listing: the start page's list, and what the analysis
+// reads who depends on what from.
+async function duLoadStart() {
+  if (DU.start || !invoke) return;
+  const inputDir = vamAddonPackagesDir();
+  if (!inputDir) return;
+  DU.start = { loading: true, items: [], total: 0, error: "" };
+  try {
+    const page = await invoke("list_var_packages", {
+      inputDir,
+      additionalInputDirs: getAdditionalDirs("varPackages"),
+      offset: 0,
+      limit: 40,
+      search: null,
+      filters: {},
+      sort: "deps",
+      sortDir: "desc",
+      forceRescan: false,
+      deepScan: state.varPackagesScannedDeep !== false,
+      offloadDir: offloadDir() || null,
+    });
+    const items = (page?.items ?? []).filter((it) => it.dep_count > it.missing_dep_count && !it.offloaded);
+    items.sort((a, b) => b.dep_count - b.missing_dep_count - (a.dep_count - a.missing_dep_count));
+    DU.start = { loading: false, items, total: Number(page?.total ?? items.length), error: "" };
+  } catch (e) {
+    DU.start = { loading: false, items: [], total: 0, error: String(e?.message || e) };
+  }
+  if (!DU.target) duRenderDetails();
+}
+
+async function duScan() {
+  if (!invoke || !DU.target || DU.scanning) return;
+  const token = DU.token;
+  Object.assign(DU, { scanning: true, progress: 0, message: "Loading the package list…", error: "", report: null });
+  duRender();
+  try {
+    await duLoadStart();
+    if (DU.start?.error) throw new Error(DU.start.error);
+    const p = await fmPoll("start_dependency_usage_task", { targetVarPath: DU.target }, (fraction, message) => {
+      if (token !== DU.token) return;
+      DU.progress = fraction;
+      if (message) DU.message = message;
+      duRenderProgress();
+    });
+    if (token !== DU.token) return;
+    DU.report = p.dependency_usage_result ?? { deps: [] };
+    DU.configOpen = false;
+    const v = duCounts();
+    duRecentAdd(DU.target, v.go ? `${v.go} can go · ${formatBytesLocal(v.frees)}` : `${pkgCount(v.total, "dependency", "dependencies")}`);
+    if (!duDeps().some((d) => d.declared === DU.selected)) DU.selected = duSorted()[0]?.declared ?? null;
+  } catch (e) {
+    if (token !== DU.token) return;
+    DU.error = String(e?.message || e);
+  } finally {
+    if (token === DU.token) {
+      DU.scanning = false;
+      duRender();
+    }
+  }
+}
+
+// ---- Verdicts ------------------------------------------------------------------------------
+
+function duDeps() {
+  return DU.report?.deps ?? [];
+}
+
+// What a dependency is worth, library-wide:
+// "go"   — copying each user's files into it costs much less than the package;
+// "keep" — its users use much of it, together (a shared library) or alone;
+// "none" — no package references a file of it (it may still be needed: morphs
+//          and plugins load without a path);
+// "absent" — not in your folders.
+function duVerdict(d) {
+  if (!d.package_id) return { kind: "absent", frees: 0 };
+  const size = Number(d.size ?? 0);
+  const sum = Number(d.sum_bytes ?? 0);
+  if (!sum) return { kind: "none", frees: size };
+  const frees = size - sum;
+  if (frees >= Math.max(10 * DU_MB, size / 4)) return { kind: "go", frees };
+  return { kind: "keep", frees };
+}
+
+const DU_KINDS = {
+  go: ["Can go", "check_circle", "is-go"],
+  keep: ["Keep", "lock", "is-keep"],
+  none: ["No file referenced", "help", "is-none"],
+  absent: ["Not installed", "deployed_code", "is-absent"],
+};
+
+function duVerdictChip(d) {
+  const v = duVerdict(d);
+  const [label, icon, cls] = DU_KINDS[v.kind];
+  const extra = v.kind === "go" ? ` · frees ${formatBytesLocal(v.frees)}` : v.kind === "keep" && (d.users ?? []).length > 1 ? " · shared" : "";
+  return `<span class="du-verdict ${cls}"><span class="material-symbols-outlined">${icon}</span>${escapeHtml(label + extra)}</span>`;
+}
+
+// The reason, in one sentence.
+function duReason(d) {
+  const v = duVerdict(d);
+  const users = (d.users ?? []).length;
+  const others = users - 1;
+  const size = formatBytesLocal(Number(d.size ?? 0));
+  const sum = formatBytesLocal(Number(d.sum_bytes ?? 0));
+  const self = duSelfName();
+  if (v.kind === "absent") return `It isn't in your folders${d.other_version ? "" : ": nothing to measure"}.`;
+  if (v.kind === "none") {
+    return `${others ? `${users} packages list it` : `Only ${self} lists it`}, but none references a file of it. It may still be needed: morphs and plugins load without a path.`;
+  }
+  if (v.kind === "go") {
+    return others
+      ? `${users} packages use ${sum} of its ${size} in total: copied into each of them, it can go and frees ${formatBytesLocal(v.frees)}.`
+      : `Only ${self} uses it, and only ${sum} of its ${size}: copy that in and it can go.`;
+  }
+  if (Number(d.sum_bytes) > Number(d.size)) {
+    return `${users} packages use ${formatBytesLocal(Number(d.union_bytes ?? 0))} of it; copying into each would add ${sum}, ${formatBytesLocal(Number(d.sum_bytes) - Number(d.size))} more than keeping it. A shared library.`;
+  }
+  return others
+    ? `${users} packages use ${sum} of its ${size} together: copying out would free only ${formatBytesLocal(Math.max(0, v.frees))}.`
+    : `${self} uses ${sum} of its ${size}: most of it.`;
+}
+
+function duCounts() {
+  const c = { total: 0, go: 0, keep: 0, none: 0, absent: 0, frees: 0 };
+  for (const d of duDeps()) {
+    const v = duVerdict(d);
+    c.total += 1;
+    c[v.kind] += 1;
+    if (v.kind === "go") c.frees += v.frees;
+  }
+  return c;
+}
+
+// Can go first (by what it frees), then keep, no file referenced, not installed.
+function duSorted() {
+  const rank = { go: 0, keep: 1, none: 2, absent: 3 };
+  return [...duDeps()].sort((a, b) => {
+    const va = duVerdict(a);
+    const vb = duVerdict(b);
+    return rank[va.kind] - rank[vb.kind] || vb.frees - va.frees || Number(b.size ?? 0) - Number(a.size ?? 0);
+  });
+}
+
+function duFiltered() {
+  const q = DU.query;
+  return duSorted().filter((d) => {
+    const k = duVerdict(d).kind;
+    return (DU.filter === "all" || DU.filter === k) && (!q || `${d.declared} ${d.package_id ?? ""}`.toLowerCase().includes(q));
+  });
+}
+
+// ---- Render ----------------------------------------------------------------------------
+
+function duRender() {
+  const view = duView();
+  if (!view) return;
+  if (DU.configOpen == null || !DU.target) DU.configOpen = !DU.report;
+  view.innerHTML = `
+    <section class="dashboard-grid fm-top">
+      <article class="card source-card" id="du-source"></article>
+      <article class="card details-card" id="du-details"></article>
+    </section>
+    <section class="progress-card card${DU.scanning ? "" : " hidden"}" id="du-progress">
+      <div class="progress-head"><strong>Measuring</strong><span id="du-progress-pct">0%</span></div>
+      <div class="progress-track"><div class="progress-bar" id="du-progress-bar"></div></div>
+      <p class="panel-subtitle" id="du-progress-msg"></p>
+    </section>
+    <section class="content-grid fm-grid du-grid">
+      <article class="panel card fm-list-card du-list-card">
+        <div class="panel-head panel-head-groups">
+          <div class="panel-head-main">
+            <div class="groups-header-row">
+              <h2>Its dependencies</h2>
+              <div class="group-filter-stack">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">search</span>
+                  <input id="du-search" type="search" placeholder="Filter by package" value="${escapeAttribute(DU.query)}" />
+                </div>
+              </div>
+            </div>
+            <p class="panel-subtitle" id="du-list-subtitle"></p>
+            <div class="fm-list-tools" id="du-list-tools"></div>
+          </div>
+        </div>
+        <div id="du-list" class="group-list" role="listbox" aria-label="Its dependencies"></div>
+      </article>
+      <article class="panel card fm-detail-card du-detail-card" id="du-detail"></article>
+    </section>`;
+  $("du-search").addEventListener("input", (e) => {
+    DU.query = e.target.value.trim().toLowerCase();
+    duRenderList();
+  });
+  duRenderSource();
+  duRenderDetails();
+  duRenderProgress();
+  duRenderList();
+  duRenderDetail();
+}
+
+function duRenderProgress() {
+  const card = $("du-progress");
+  if (!card) return;
+  card.classList.toggle("hidden", !DU.scanning);
+  const pct = Math.round(DU.progress * 100);
+  const bar = $("du-progress-bar");
+  if (bar) bar.style.width = `${pct}%`;
+  const label = $("du-progress-pct");
+  if (label) label.textContent = `${pct}%`;
+  const msg = $("du-progress-msg");
+  if (msg) msg.textContent = `${DU.message || "Working…"} — the first time reads every package that uses one of them; later ones reuse that`;
+}
+
+function duInfoChip() {
+  if (DU.scanning) return `<span class="chip">Measuring…</span>`;
+  if (DU.error) return `<span class="chip missing-kind-text-ref" title="${escapeAttribute(DU.error)}">Failed</span>`;
+  if (!DU.report) return `<span class="chip">Not measured yet</span>`;
+  const c = duCounts();
+  return c.go
+    ? `<span class="chip fm-chip-good"><span class="material-symbols-outlined">check_circle</span>${c.go} can go · frees ${escapeHtml(formatBytesLocal(c.frees))}</span>`
+    : `<span class="chip">${pkgCount(c.total, "dependency", "dependencies")}: none worth removing</span>`;
+}
+
+function duRenderSource() {
+  const host = $("du-source");
+  if (!host) return;
+  if (DU.target && !DU.configOpen) {
+    const it = DU.item ?? pkgBareItem(DU.target);
+    const facts = [
+      it.size_bytes ? formatBytesLocal(it.size_bytes) : "",
+      it.dep_count ? pkgCount(it.dep_count, "dependency", "dependencies") : "",
+      it.used_by_count ? `used by ${pkgCount(it.used_by_count, "package", "packages")}` : "",
+    ].filter(Boolean);
+    const tags = fmTypeTags(it);
+    host.innerHTML = `
+      <header class="card-eyebrow fm-eyebrow">Package
+        <button type="button" class="fm-link" data-du-act="config" title="Pick another .var">Change</button></header>
+      <div class="fm-hero">
+        ${libThumbHtml(DU.target, libGradient(it.file_name || it.package_id), "fm-hero-thumb")}</div>
+        <div class="fm-hero-main">
+          <div class="fm-hero-title" title="${escapeAttribute(DU.target)}">
+            <h2>${escapeHtml(libTitle(it))}</h2>${libVersion(it) ? `<span class="fm-hero-ver">v${escapeHtml(libVersion(it))}</span>` : ""}
+          </div>
+          <div class="fm-hero-by">by <b>${escapeHtml(libCreator(it))}</b>${facts.length ? ` · ${escapeHtml(facts.join(" · "))}` : ""}</div>
+          ${tags ? `<div class="fm-hero-tags">${tags}</div>` : ""}
+          <div class="fm-info-chips">${duInfoChip()}</div>
+          <div class="fm-hero-acts">
+            <button type="button" class="ghost-button fm-small" data-du-act="explore" title="Open it in Package Explorer"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
+            <button type="button" class="ghost-button fm-small" data-du-act="internalize" title="Copy files in from its dependencies on Internalize Resources"><span class="material-symbols-outlined">download_for_offline</span>Internalize</button>
+            <button type="button" class="ghost-button fm-small" data-du-act="scan" ${DU.scanning ? "disabled" : ""}><span class="material-symbols-outlined">refresh</span>${DU.scanning ? "Measuring…" : "Measure again"}</button>
+          </div>
+        </div>
+      </div>`;
+    libThumbWatch(host);
+    return;
+  }
+  host.innerHTML = `
+    <header class="card-eyebrow fm-eyebrow">Package${
+      DU.target && DU.report ? `<button type="button" class="fm-link" data-du-act="config">Fold</button>` : ""
+    }</header>
+    <div class="source-body">
+      <div class="var-details-dropzone missing-target-dropzone fm-dropzone${DU.target ? " is-compact" : ""}" data-du-act="pick" role="button" tabindex="0">
+        <div class="var-details-dropzone-icon"><span class="material-symbols-outlined">upload_file</span></div>
+        <h4 class="var-details-dropzone-title">${DU.target ? "Drop another .var to measure it instead" : "Drag and drop a .var"}</h4>
+        <p class="var-details-dropzone-subtitle">${
+          DU.target ? "or click to pick one" : "Its dependencies are measured across every package that uses them."
+        }</p>
+        ${DU.target ? "" : `<div class="var-details-dropzone-actions"><button type="button" class="primary-button" data-du-act="pick">Select File</button></div>`}
+      </div>
+      <div class="action-row">
+        <button type="button" class="primary-button action-button fm-scan-btn" data-du-act="scan" ${DU.target && !DU.scanning ? "" : "disabled"}>${
+          DU.scanning ? "Measuring…" : DU.report ? "Measure again" : "Measure it"
+        }</button>
+      </div>
+    </div>`;
+}
+
+function duStartHtml() {
+  const recent = duRecentGet().slice(0, 5);
+  const known = new Set(recent.map((r) => r.path));
+  const st = DU.start;
+  const most = (st?.items ?? []).filter((it) => !known.has(it.file_path)).slice(0, 6);
+  const row = (path, item, note, good) => `<button type="button" class="fm-start-row" data-du-start="${escapeAttribute(path)}" title="${escapeAttribute(path)}">
+      <span class="fm-start-text"><b>${escapeHtml(libTitle(item))}</b><small>by ${escapeHtml(libCreator(item))}</small></span>
+      <span class="chip${good ? " fm-chip-good" : ""}">${escapeHtml(note)}</span>
+    </button>`;
+  const parts = [];
+  if (recent.length) {
+    parts.push(
+      `<h3 class="fm-start-h">Measured lately</h3>${recent
+        .map((r) => row(r.path, libFindItem(r.path) ?? pkgBareItem(r.path), r.note || "measured", /can go/.test(r.note || "")))
+        .join("")}`,
+    );
+  }
+  parts.push(
+    `<h3 class="fm-start-h">With the most dependencies</h3>${
+      !st || st.loading
+        ? `<p class="fm-none-line">Looking through your packages…</p>`
+        : st.error
+          ? `<p class="fm-none-line">Couldn't list them: ${escapeHtml(st.error)}</p>`
+          : most.length
+            ? most.map((it) => row(it.file_path, it, pkgCount(it.dep_count - it.missing_dep_count, "dependency installed", "dependencies installed"), false)).join("")
+            : `<p class="fm-none-line">None of your packages uses another one.</p>`
+    }`,
+  );
+  return `<div class="fm-start">${parts.join("")}<p class="fm-start-note">Pick one to measure it, or drop a .var on the left.</p></div>`;
+}
+
+// The verdicts, explained once.
+function duLegendHtml() {
+  const c = duCounts();
+  const line = (kind, n, text) => {
+    const [label, icon, cls] = DU_KINDS[kind];
+    return `<div class="du-legend-line"><span class="du-verdict ${cls}"><span class="material-symbols-outlined">${icon}</span>${label}${n != null ? ` <b>${n}</b>` : ""}</span><span>${text}</span></div>`;
+  };
+  return `<div class="du-legend">
+      ${line("go", DU.report ? c.go : null, "Copying what each package uses into it costs much less than the package: it can go.")}
+      ${line("keep", DU.report ? c.keep : null, "Its users use much of it, often together: removing it would cost more space than it saves.")}
+      ${line("none", DU.report ? c.none : null, "Listed, but no file of it is referenced. Morph packs and plugins can be needed this way.")}
+      ${DU.report && c.absent ? line("absent", c.absent, "Not in your folders.") : ""}
+    </div>`;
+}
+
+function duRenderDetails() {
+  const host = $("du-details");
+  if (!host) return;
+  if (!DU.target) {
+    duLoadStart();
+    host.innerHTML = `<header class="card-eyebrow">Start from</header>${duStartHtml()}`;
+    return;
+  }
+  const c = duCounts();
+  const head = DU.report
+    ? c.go
+      ? `<p class="du-total"><b>${c.go} of ${pkgCount(c.total, "dependency", "dependencies")} can go</b>, freeing up to ${escapeHtml(formatBytesLocal(c.frees))} once their files are copied into the packages that use them.</p>`
+      : `<p class="du-total"><b>None of its ${pkgCount(c.total, "dependency", "dependencies")} is worth removing.</b></p>`
+    : `<p class="fm-details-hint">${DU.scanning ? "Measuring…" : "Measure the package to see which of its dependencies are worth keeping."}</p>`;
+  host.innerHTML = `<header class="card-eyebrow">Verdicts</header>${head}${duLegendHtml()}${
+    DU.report ? `<p class="du-note">Counted from ${pkgCount(Number(DU.report.packages_read ?? 0), "package", "packages")} in your folders. Bytes include what a file needs: a clothing item's .vaj and textures.</p>` : ""
+  }`;
+}
+
+// A bar: the whole package, what its users use together, this package's part.
+function duBarHtml(d) {
+  const size = Math.max(1, Number(d.size ?? 0));
+  const pct = (b) => `${Math.min(100, (Number(b) / size) * 100).toFixed(1)}%`;
+  return `<span class="du-bar" title="${escapeAttribute(
+    `${formatBytesLocal(Number(d.target_bytes ?? 0))} used by ${duSelfName()} · ${formatBytesLocal(Number(d.union_bytes ?? 0))} by all its users together · ${formatBytesLocal(Number(d.size ?? 0))} in all`,
+  )}"><span class="du-bar-all" style="width:${pct(d.union_bytes)}"></span><span class="du-bar-me" style="width:${pct(d.target_bytes)}"></span></span>`;
+}
+
+function duRenderList() {
+  const host = $("du-list");
+  const subtitle = $("du-list-subtitle");
+  const tools = $("du-list-tools");
+  if (!host) return;
+  if (!DU.report) {
+    host.className = "group-list empty";
+    host.innerHTML = DU.scanning ? "Measuring…" : DU.error ? escapeHtml(DU.error) : DU.target ? "Measure the package to list its dependencies." : "Pick a .var above, or one of the packages on the right.";
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  const deps = duDeps();
+  if (!deps.length) {
+    host.className = "group-list empty";
+    host.innerHTML = `<span class="fm-clean"><span class="material-symbols-outlined">check_circle</span>It has no dependencies.</span>`;
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  host.className = "group-list";
+  if (subtitle) subtitle.textContent = `${pkgCount(deps.length, "dependency", "dependencies")}`;
+  if (tools) {
+    const n = (k) => deps.filter((d) => duVerdict(d).kind === k).length;
+    tools.innerHTML = `<div class="fm-filter-row">${[
+      ["all", "All", deps.length],
+      ["go", "Can go", n("go")],
+      ["keep", "Keep", n("keep")],
+      ["none", "No file referenced", n("none")],
+      ["absent", "Not installed", n("absent")],
+    ]
+      .filter(([k, , count]) => k === "all" || count)
+      .map(([k, label, count]) => `<button type="button" class="fm-filter${DU.filter === k ? " is-active" : ""}" data-du-filter="${k}">${label} <small>${count}</small></button>`)
+      .join("")}</div>`;
+  }
+  const rows = duFiltered();
+  if (!rows.length) {
+    host.innerHTML = `<p class="fm-none">No dependency matches.</p>`;
+    return;
+  }
+  const focusKey = rows.some((d) => d.declared === DU.selected) ? DU.selected : rows[0].declared;
+  host.innerHTML = rows
+    .map((d) => {
+      const id = d.package_id ?? d.declared;
+      const p = pkgIdParts(id);
+      const sub = [p.creator, p.ver].filter(Boolean).join(" · ");
+      const users = (d.users ?? []).length;
+      const pref = fmPref(d.package_id);
+      return `<div class="group-row missing-row fm-row du-row${d.declared === DU.selected ? " active focused" : ""}" data-du-row="${escapeAttribute(d.declared)}"
+          role="option" aria-selected="${d.declared === DU.selected}" tabindex="${d.declared === focusKey ? 0 : -1}">
+          ${d.file_path ? `${libThumbHtml(d.file_path, libGradient(id), "iz-row-thumb du-row-thumb")}</div>` : `<span class="iz-row-thumb du-row-thumb du-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>`}
+          <span class="fm-row-text">
+            <span class="fm-row-name" title="${escapeAttribute(id)}">${escapeHtml(p.name)}${sub ? ` <small class="iz-row-sub">${escapeHtml(sub)}</small>` : ""}${
+              pref === 1 ? ` <span class="chip fm-chip-pref du-mini" title="Your preferred replacement source in Fix Missing"><span class="material-symbols-outlined">thumb_up</span></span>` : pref === -1 ? ` <span class="chip fm-chip-avoid du-mini" title="A replacement source you avoid in Fix Missing"><span class="material-symbols-outlined">thumb_down</span></span>` : ""
+            }</span>
+            <span class="du-row-line">${duVerdictChip(d)}${
+              d.package_id
+                ? `<span class="du-fact">${escapeHtml(formatBytesLocal(Number(d.size ?? 0)))} · ${pkgCount(users, "user", "users")}</span>${duBarHtml(d)}`
+                : ""
+            }</span>
+          </span>
+        </div>`;
+    })
+    .join("");
+  libThumbWatch(host);
+}
+
+function duRenderDetail() {
+  const host = $("du-detail");
+  if (!host) return;
+  const d = duDeps().find((x) => x.declared === DU.selected);
+  if (!d) {
+    host.innerHTML = `<div class="panel-head"><div><h2>Who uses it</h2>
+        <p class="panel-subtitle">${duDeps().length ? "Select a dependency to see who uses how much of it." : "Every package that uses a dependency, and how much of it."}</p></div></div>
+      <div class="detail-empty">No dependency selected.</div>`;
+    duSheetSync(host);
+    return;
+  }
+  const id = d.package_id ?? d.declared;
+  const p = pkgIdParts(id);
+  const v = duVerdict(d);
+  const size = Number(d.size ?? 0);
+  const users = d.users ?? [];
+  const showAll = DU.usersOpen.has(d.declared);
+  const shown = showAll ? users : users.slice(0, 10);
+  const max = Math.max(1, size);
+  const userRow = (u) => `<div class="du-user${u.is_target ? " is-me" : ""}">
+      ${libThumbHtml(u.file_path, libGradient(u.package_id), "du-user-thumb")}</div>
+      <span class="du-user-text"><b title="${escapeAttribute(u.package_id)}">${escapeHtml(pkgIdParts(u.package_id).name)}${u.is_target ? ` <small>this package</small>` : ""}</b>
+        <span class="du-user-bar"><span style="width:${Math.min(100, (Number(u.bytes) / max) * 100).toFixed(1)}%"></span></span></span>
+      <span class="du-user-num">${u.bytes ? escapeHtml(formatBytesLocal(Number(u.bytes))) : "no file"}<small>${u.files ? pkgCount(u.files, "file", "files") : ""}</small></span>
+    </div>`;
+  const numbers = d.package_id
+    ? `<div class="du-numbers">
+        <div><small>Package</small><b>${escapeHtml(formatBytesLocal(size))}</b></div>
+        <div><small>${escapeHtml(duSelfName())} uses</small><b>${escapeHtml(formatBytesLocal(Number(d.target_bytes ?? 0)))}</b></div>
+        <div><small>All users together</small><b>${escapeHtml(formatBytesLocal(Number(d.union_bytes ?? 0)))}</b></div>
+        <div title="Every user given its own copy of what it uses"><small>Copied into each</small><b>${escapeHtml(formatBytesLocal(Number(d.sum_bytes ?? 0)))}</b></div>
+      </div>`
+    : "";
+  host.innerHTML = `
+    <h2 class="sr-only">Who uses it</h2>
+    <div class="detail-panel fm-detail-body">
+      <div class="iz-pkg-head">
+        ${d.file_path ? `${libThumbHtml(d.file_path, libGradient(id), "iz-pkg-thumb")}</div>` : `<span class="iz-pkg-thumb du-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>`}
+        <div class="iz-pkg-text">
+          <b title="${escapeAttribute(id)}">${escapeHtml(p.name)}</b>
+          <small>${escapeHtml([p.creator, p.ver, d.package_id ? formatBytesLocal(size) : "not installed"].filter(Boolean).join(" · "))}${d.other_version ? " · another version than the one listed" : ""}</small>
+          <span class="iz-pkg-chips">${duVerdictChip(d)}</span>
+        </div>
+      </div>
+      ${
+        d.package_id
+          ? `<div class="fm-ref-acts">
+              <button type="button" class="ghost-button fm-small" data-du-explore="${escapeAttribute(d.file_path)}"><span class="material-symbols-outlined">space_dashboard</span>Explore package</button>
+              <button type="button" class="ghost-button fm-small" data-du-show="${escapeAttribute(d.file_path)}" title="${escapeAttribute(d.file_path)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+            </div>`
+          : ""
+      }
+      <div class="du-why ${DU_KINDS[v.kind][2]}">
+        <span class="material-symbols-outlined">${DU_KINDS[v.kind][1]}</span>
+        <p>${escapeHtml(duReason(d))}</p>
+      </div>
+      ${numbers}
+      ${
+        users.length
+          ? `<section class="fm-sources">
+              <h3 class="iz-files-h">Who uses it <small>${users.length}</small></h3>
+              <div class="du-users">${shown.map(userRow).join("")}</div>
+              ${users.length > shown.length ? `<button type="button" class="fm-link du-more" data-du-users="${escapeAttribute(d.declared)}">Show all ${users.length}</button>` : ""}
+            </section>`
+          : ""
+      }
+    </div>`;
+  libThumbWatch(host);
+  duSheetSync(host);
+}
+
+function duFitPanel() {
+  const card = $("du-detail");
+  if (!card || !duVisible()) return;
+  const grid = document.querySelector(".du-grid");
+  const pos = getComputedStyle(card).position;
+  if (pos === "fixed") {
+    const list = document.querySelector(".du-list-card")?.getBoundingClientRect();
+    if (list) {
+      card.style.left = `${Math.round(list.left)}px`;
+      card.style.width = `${Math.round(list.width)}px`;
+      card.style.right = "auto";
+    }
+    card.style.maxHeight = "";
+    if (grid) grid.style.paddingBottom = `${Math.round(card.getBoundingClientRect().height) + 24}px`;
+    return;
+  }
+  card.style.left = "";
+  card.style.width = "";
+  card.style.right = "";
+  if (grid) grid.style.paddingBottom = "";
+  if (pos !== "sticky") {
+    card.style.maxHeight = "";
+    return;
+  }
+  const header = document.querySelector(".app-header")?.getBoundingClientRect().bottom ?? 56;
+  const top = Math.max(card.getBoundingClientRect().top, header + 12);
+  card.style.maxHeight = `${Math.max(260, Math.floor(window.innerHeight - top - 12))}px`;
+}
+
+// A narrow window: the panel is a sheet, open while a row is picked.
+function duSheetSync(host) {
+  host.classList.toggle("is-open", DU.sheetOpen || !duDeps().length);
+  host.classList.toggle("is-empty", !duDeps().length);
+  requestAnimationFrame(duFitPanel);
+}
+
+function duFocusRow(key) {
+  const row = duView()?.querySelector(`[data-du-row="${CSS.escape(key)}"]`);
+  row?.focus({ preventScroll: true });
+  row?.scrollIntoView({ block: "nearest" });
+}
+
+// ---- Events ---------------------------------------------------------------------------------
+
+function duOnClick(e) {
+  const t = e.target;
+  const q = (sel) => t.closest?.(sel);
+  let el;
+  if ((el = q("[data-du-explore]"))) {
+    pkgOpen(el.getAttribute("data-du-explore"));
+    return;
+  }
+  if ((el = q("[data-du-show]"))) {
+    invoke("show_in_explorer", { path: el.getAttribute("data-du-show") }).catch(() => {});
+    return;
+  }
+  if ((el = q("[data-du-users]"))) {
+    DU.usersOpen.add(el.getAttribute("data-du-users"));
+    duRenderDetail();
+    return;
+  }
+  if ((el = q("[data-du-start]"))) {
+    duOpen(el.getAttribute("data-du-start"), { scan: true });
+    return;
+  }
+  if ((el = q("[data-du-row]"))) {
+    DU.selected = el.getAttribute("data-du-row");
+    DU.sheetOpen = true;
+    duRenderList();
+    duRenderDetail();
+    duFocusRow(DU.selected);
+    return;
+  }
+  if ((el = q("[data-du-filter]"))) {
+    DU.filter = el.getAttribute("data-du-filter");
+    duRenderList();
+    return;
+  }
+  if (!(el = q("[data-du-act]"))) return;
+  switch (el.getAttribute("data-du-act")) {
+    case "pick":
+      invoke("pick_var_file")
+        .then((picked) => picked && duOpen(picked, { scan: true }))
+        .catch(() => {});
+      break;
+    case "config":
+      DU.configOpen = !DU.configOpen;
+      duRenderSource();
+      break;
+    case "scan":
+      duScan();
+      break;
+    case "explore":
+      if (DU.target) pkgOpen(DU.item?.__lib ? DU.item : DU.target);
+      break;
+    case "internalize":
+      if (DU.target) izOpen(DU.target, { scan: true });
+      break;
+    default:
+      break;
+  }
+}
+
+function setupDependencyUsage() {
+  const view = duView();
+  if (!view) return;
+  view.addEventListener("click", duOnClick);
+  view.addEventListener("keydown", (e) => {
+    const row = e.target.closest?.("[data-du-row]");
+    if (row && e.target === row && ["ArrowDown", "ArrowUp", "Home", "End", " ", "Enter"].includes(e.key)) {
+      e.preventDefault();
+      const rows = [...view.querySelectorAll("[data-du-row]")];
+      const i = rows.indexOf(row);
+      const next =
+        e.key === "Home" ? rows[0] : e.key === "End" ? rows[rows.length - 1] : e.key === "ArrowDown" ? rows[i + 1] : e.key === "ArrowUp" ? rows[i - 1] : row;
+      if (next) {
+        DU.selected = next.getAttribute("data-du-row");
+        DU.sheetOpen = true;
+        duRenderList();
+        duRenderDetail();
+        duFocusRow(DU.selected);
+      }
+      return;
+    }
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches?.(".fm-dropzone")) {
+      e.preventDefault();
+      invoke("pick_var_file")
+        .then((picked) => picked && duOpen(picked, { scan: true }))
+        .catch(() => {});
+    }
+  });
+  window.__refreshDependencyUsageView = () => duRender();
+  window.addEventListener("scroll", duFitPanel, { passive: true, capture: true });
+  window.addEventListener("resize", duFitPanel);
+  window.__TAURI__?.event
+    ?.listen?.("tauri://drag-drop", (event) => {
+      if (!duVisible() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
+      const varPath = (event?.payload?.paths ?? []).map(String).find((p) => /\.var$/i.test(p));
+      if (varPath) duOpen(varPath, { scan: true });
+    })
+    .catch(() => {});
+  duRender();
+}
+
 // ---- Drop .var files on the window (dropin.rs) ---------------------------------------
 // Anywhere except the pages that take a single .var (Package Explorer, Missing
 // Resources, Internalize): the dropped packages are checked and copied — or
@@ -12858,7 +13581,7 @@ function setupInternalize() {
 const DROP_STORE = "dropin.moveFiles";
 
 function dropTakenByPage() {
-  return ["pkg-view", "fm-view", "internalize-resources-view"].some(
+  return ["pkg-view", "fm-view", "internalize-resources-view", "du-view"].some(
     (id) => $(id) && !$(id).classList.contains("hidden"),
   );
 }
@@ -15092,6 +15815,7 @@ function libContextMenu(event, item) {
             { label: "Clean VARs", action: () => sendVarToTargetPage("db-find", filePath) },
             { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", filePath) },
             { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", filePath) },
+            { label: "Dependency Usage", action: () => sendVarToTargetPage("dependency-usage", filePath) },
           ],
         },
         { separator: true },
@@ -18614,6 +19338,12 @@ function sendVarToTargetPage(page, path) {
   if (page === "fix-missing" || page === "missing-resources") {
     fmOpen(target, { scan: true });
     addLog(`Sent target VAR to Fix Missing: ${target}`);
+    return;
+  }
+
+  if (page === "dependency-usage") {
+    duOpen(target, { scan: true });
+    addLog(`Sent target VAR to Dependency Usage: ${target}`);
     return;
   }
 
@@ -25025,6 +25755,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupPackageExplorer();
   setupFixMissing();
   setupInternalize();
+  setupDependencyUsage();
   // The Hub package index: shortly after start-up, then every 30 minutes.
   setTimeout(() => hubIndexRefresh(false), 1500);
   setInterval(() => hubIndexRefresh(false), 30 * 60 * 1000);
