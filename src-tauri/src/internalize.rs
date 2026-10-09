@@ -69,6 +69,8 @@ pub(crate) fn scan_target_var_for_external_refs(
     let mut target_crcs: BTreeMap<String, u32> = BTreeMap::new();
     // family (lowercase) → references to it that can't be copied in.
     let mut unusable: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // family (lowercase) → (the package as named, references to its scripts).
+    let mut plugins: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
 
     for index in 0..archive.len() {
         let mut entry = archive
@@ -107,6 +109,14 @@ pub(crate) fn scan_target_var_for_external_refs(
                 continue;
             }
             let path_norm = normalize_zip_path(&path);
+            if is_script_path(&path_norm) {
+                plugins
+                    .entry(family_of(&pkg))
+                    .or_insert_with(|| (pkg.clone(), BTreeSet::new()))
+                    .1
+                    .insert(format!("{pkg}:/{path_norm}"));
+                continue;
+            }
             let key = (pkg.clone(), path_norm.clone());
             let entry = refs.entry(key).or_insert_with(|| ExternalRef {
                 ref_path: path_norm.clone(),
@@ -225,12 +235,38 @@ pub(crate) fn scan_target_var_for_external_refs(
             other_users: Vec::new(),
             other_refs: Vec::new(),
             fills: Vec::new(),
+            plugin_refs: Vec::new(),
         });
     }
 
+    // A plugin whose files the target uses nothing else of still shows: the
+    // page says why it isn't offered.
+    for (family, (pkg, _)) in &plugins {
+        if groups.iter().any(|g| family_of(&g.source_pkg_id) == *family) {
+            continue;
+        }
+        if let Some(prepared) = resolve_pkg_entry(pkg, scan) {
+            groups.push(ExternalRefGroup {
+                source_pkg_id: pkg.clone(),
+                source_var_path: prepared.file_path.to_string_lossy().to_string(),
+                source_var_size: fs::metadata(&prepared.file_path).map(|m| m.len()).unwrap_or(0),
+                refs: Vec::new(),
+                total_bundle_bytes: 0,
+                used_by_others: None,
+                other_users: Vec::new(),
+                other_refs: Vec::new(),
+                fills: Vec::new(),
+                plugin_refs: Vec::new(),
+            });
+        }
+    }
     for group in &mut groups {
-        if let Some(refs) = unusable.get(&family_of(&group.source_pkg_id)) {
+        let family = family_of(&group.source_pkg_id);
+        if let Some(refs) = unusable.get(&family) {
             group.other_refs = refs.iter().cloned().collect();
+        }
+        if let Some((_, refs)) = plugins.get(&family) {
+            group.plugin_refs = refs.iter().cloned().collect();
         }
     }
 
@@ -770,4 +806,10 @@ pub(crate) fn fill_from_copies(groups: &mut [ExternalRefGroup], broken: &[Broken
         }
     }
     Ok(())
+}
+
+/// A plugin's scripts: a .cslist (a list of scripts), .cs or .dll.
+fn is_script_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".cslist") || lower.ends_with(".cs") || lower.ends_with(".dll")
 }

@@ -1462,6 +1462,11 @@ pub(crate) struct ExternalRefGroup {
     /// Exact copies elsewhere of files in `other_refs`: Copy in takes those
     /// files from there, so the package can still go.
     pub(crate) fills: Vec<RefFill>,
+    /// References to its plugin scripts (.cslist, .cs, .dll). A plugin isn't
+    /// copied in: a .cslist names more scripts, and scripts load their own
+    /// package's files from code, out of sight of the check. While any is
+    /// left, the target still needs the package.
+    pub(crate) plugin_refs: Vec<String>,
 }
 
 /// A file the target references from a package that doesn't have it, and an

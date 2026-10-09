@@ -6915,3 +6915,39 @@ fn internalize_takes_a_missing_file_from_another_package() {
     assert_eq!(raw, b"gone-bytes", "landed where the reference points");
     fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+#[test]
+fn internalize_leaves_plugins_as_dependencies() {
+    use crate::internalize::scan_target_var_for_external_refs;
+
+    let dir = repo_root().join("tmp_internalize_plugin_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    write_test_var_with_deps(
+        &vars.join("T.Scene.1.var"),
+        &["P.Plugin.1", "Q.Tool.1"],
+        &[(
+            "Saves/scene/s.json",
+            &br#"{ "plugin#0": "P.Plugin.1:/Custom/Scripts/P/p.cslist", "lut": "P.Plugin.1:/Custom/Assets/P/lut.png", "plugin#1": "Q.Tool.1:/Custom/Scripts/Q/q.cs" }"#[..],
+        )],
+    );
+    write_test_var_with_deps(
+        &vars.join("P.Plugin.1.var"),
+        &[],
+        &[("Custom/Scripts/P/p.cslist", &b"Internal/a.cs"[..]), ("Custom/Scripts/P/Internal/a.cs", &b"class A {}"[..]), ("Custom/Assets/P/lut.png", &b"lut"[..])],
+    );
+    write_test_var_with_deps(&vars.join("Q.Tool.1.var"), &[], &[("Custom/Scripts/Q/q.cs", &b"class Q {}"[..])]);
+    let target = vars.join("T.Scene.1.var");
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], None, |_, _| {}).expect("scan");
+
+    let groups = scan_target_var_for_external_refs(&target, &scanned).expect("refs");
+    let p = groups.iter().find(|g| g.source_pkg_id == "P.Plugin.1").expect("P");
+    assert_eq!(p.refs.iter().map(|r| r.ref_path.as_str()).collect::<Vec<_>>(), vec!["Custom/Assets/P/lut.png"], "the .cslist isn't offered");
+    assert_eq!(p.plugin_refs, vec!["P.Plugin.1:/Custom/Scripts/P/p.cslist".to_string()]);
+    let q = groups.iter().find(|g| g.source_pkg_id == "Q.Tool.1").expect("a plugin used for nothing else still shows");
+    assert!(q.refs.is_empty());
+    assert_eq!(q.plugin_refs, vec!["Q.Tool.1:/Custom/Scripts/Q/q.cs".to_string()]);
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
