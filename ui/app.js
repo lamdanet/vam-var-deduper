@@ -10709,10 +10709,10 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
         return `role="radio" tabindex="0" aria-checked="${Boolean(checked)}" data-fm-pickrow="${escapeAttribute(key)}" data-fm-pkg="${escapeAttribute(pkg)}"
           data-fm-path="${escapeAttribute(x.internal_path)}" data-fm-src="${x.isSelf ? "self" : x.match ?? "db"}"`;
       };
-      const radio = (x, alt) => {
+      const radio = (x, alt, onThumb = false) => {
         const checked = pick && pick.replacement_pkg === pkg && pick.replacement_path === x.internal_path;
         return `<span class="fm-cand-pick${alt ? " is-alt" : ""}">
-            <span class="material-symbols-outlined fm-cand-radio">${checked ? "radio_button_checked" : "radio_button_unchecked"}</span>
+            ${onThumb ? "" : `<span class="material-symbols-outlined fm-cand-radio">${checked ? "radio_button_checked" : "radio_button_unchecked"}</span>`}
             ${
               alt
                 ? `<span class="fm-cand-alt-text"><span class="fm-cand-alt-path">${escapeHtml(x.internal_path)}</span>${
@@ -10728,9 +10728,18 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
         shown.internal_path !== ref.ref_path && !open ? `<span class="fm-cand-path" title="${escapeAttribute(shown.internal_path)}">${escapeHtml(shown.internal_path)}</span>` : "",
         copies.length > 1 && !open ? `<span class="fm-dim" title="Choose it to pick another copy">${pkgCount(copies.length, "copy", "copies")}</span>` : "",
       ].join("");
-      return `<div class="fm-cand-row${isChosen ? " is-selected" : ""}${!c.isSelf && fmPref(pkg) === -1 ? " is-avoided" : ""}" ${pickAttrs(shown)}>
+      // A copy in your folders shows its package's picture (one only in
+      // the database has no file to read it from).
+      const thumbFile = shown.match === "db" ? "" : c.isSelf ? FM.target : c.package_file || "";
+      const thumb = thumbFile
+        ? `${libThumbHtml(thumbFile, libGradient(c.isSelf ? fmTargetId() : pkg), "fm-cand-thumb")}<span class="material-symbols-outlined fm-cand-radio fm-cand-thumb-mark">${
+            isChosen && pick.replacement_path === shown.internal_path ? "radio_button_checked" : "radio_button_unchecked"
+          }</span></div>`
+        : "";
+      return `<div class="fm-cand-row${thumb ? " has-thumb" : ""}${isChosen ? " is-selected" : ""}${!c.isSelf && fmPref(pkg) === -1 ? " is-avoided" : ""}" ${pickAttrs(shown)}>
+          ${thumb}
           <div class="fm-cand-top">
-            ${radio(shown, false)}
+            ${radio(shown, false, Boolean(thumb))}
             <span class="fm-cand-tags">${tags}</span>
             <span class="fm-cand-acts">
               ${
@@ -11064,6 +11073,7 @@ function fmRenderDetail() {
       }
       ${sources}
     </div>`;
+  libThumbWatch(host);
   fmSheetSync(host);
   fmRenderStrip();
 }

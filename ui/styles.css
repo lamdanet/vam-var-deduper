@@ -19528,3 +19528,70 @@ button.pkg-stat:focus-visible::after {
 .iz-list-card:focus-within #iz-list-subtitle .fm-keys {
   opacity: 1;
 }
+
+/* ---- Fix Missing: a copy in your folders shows its package's picture ---- */
+
+.fm-cand-row.has-thumb {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
+.fm-cand-row.has-thumb > .fm-cand-thumb {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+}
+
+.fm-cand-row.has-thumb > :not(.fm-cand-thumb) {
+  grid-column: 2;
+}
+
+.fm-cand-row.has-thumb > .fm-cand-alts {
+  grid-column: 1 / -1;
+}
+
+.fm-cand-thumb {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--lib-thumb-bg);
+}
+
+.fm-cand-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Its radio on the picture's corner; the path lines up under the name. */
+.fm-cand-thumb-mark {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  font-size: 17px;
+}
+
+.fm-cand-row:hover .fm-cand-thumb-mark {
+  color: var(--primary);
+}
+
+.fm-cand-row.has-thumb .fm-cand-sub {
+  padding-left: 0;
+}
+
+.fm-cand-row.is-selected .fm-cand-thumb-mark {
+  color: var(--accent-success);
+}
+
+/* The picture takes some width: the name may shrink a little more before
+   the (hidden) buttons wrap to a line of their own. */
+.fm-cand-row.has-thumb .fm-cand-top > .fm-cand-pick {
+  min-width: 120px;
+}
