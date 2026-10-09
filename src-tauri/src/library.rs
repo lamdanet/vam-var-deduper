@@ -820,6 +820,7 @@ pub(crate) fn users_of(
 /// `list_missing_dependencies` lists).
 pub(crate) fn apply_graph(items: &mut [VarPackageListItem]) -> u64 {
     let index = LibIndex::build(items);
+    let sizes: Vec<u64> = items.iter().map(|it| it.size_bytes).collect();
     let mut used_by = vec![0u32; items.len()];
     let mut unresolved: HashSet<String> = HashSet::new();
     for (i, item) in items.iter_mut().enumerate() {
@@ -846,6 +847,7 @@ pub(crate) fn apply_graph(items: &mut [VarPackageListItem]) -> u64 {
             }
         }
         item.missing_dep_count = missing;
+        item.dep_bytes = targets.iter().map(|&t| sizes[t]).sum();
         for t in targets {
             used_by[t] += 1;
         }

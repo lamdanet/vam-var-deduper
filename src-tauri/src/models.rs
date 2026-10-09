@@ -1038,6 +1038,8 @@ pub(crate) struct VarPackageListItem {
     pub(crate) dep_count: u32,
     /// Dependencies that no version of resolves inside the scanned folders.
     pub(crate) missing_dep_count: u32,
+    /// The installed packages it depends on, their sizes added up (each once).
+    pub(crate) dep_bytes: u64,
     /// How many scanned packages declare this one as a dependency.
     pub(crate) used_by_count: u32,
     /// A higher numbered version of the same package sits in the scanned set.

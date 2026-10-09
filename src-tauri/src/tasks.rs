@@ -1875,6 +1875,8 @@ pub(crate) enum VarPackageSort {
     Type,
     Items,
     Deps,
+    /// Folder mode only: the installed dependencies' total size.
+    DepSize,
 }
 
 impl VarPackageSort {
@@ -1888,6 +1890,7 @@ impl VarPackageSort {
             Some("type") => Self::Type,
             Some("items") => Self::Items,
             Some("deps") => Self::Deps,
+            Some("dep_size") => Self::DepSize,
             _ => Self::Name,
         }
     }
@@ -1923,7 +1926,11 @@ pub(crate) fn var_package_order_by_sql(sort: VarPackageSort, desc: bool) -> Stri
     match sort {
         // package_id is already unique, so it needs no tiebreaker. The library
         // keys have no database column, so they order by name there.
-        VarPackageSort::Name | VarPackageSort::Type | VarPackageSort::Items | VarPackageSort::Deps => {
+        VarPackageSort::Name
+        | VarPackageSort::Type
+        | VarPackageSort::Items
+        | VarPackageSort::Deps
+        | VarPackageSort::DepSize => {
             format!("p.package_id COLLATE NOCASE {dir}")
         }
         VarPackageSort::Size => {
@@ -1959,6 +1966,7 @@ pub(crate) fn compare_var_packages(
         }
         VarPackageSort::Items => a.item_count.cmp(&b.item_count),
         VarPackageSort::Deps => a.dep_count.cmp(&b.dep_count),
+        VarPackageSort::DepSize => a.dep_bytes.cmp(&b.dep_bytes),
     };
     let primary = if desc { primary.reverse() } else { primary };
     // Tiebreaker stays ASCENDING in both directions, matching the SQL — this is

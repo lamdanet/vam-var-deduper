@@ -5632,6 +5632,20 @@ fn library_dependency_graph() {
 }
 
 #[test]
+fn library_dependency_bytes() {
+    let sized = |id: &str, deps: &[&str], size: u64| VarPackageListItem { size_bytes: size, ..lib_item(id, deps) };
+    let mut items = vec![
+        // C.Hair named twice (two versions) counts once; D.Gone isn't installed.
+        sized("A.Scene.1", &["B.Look.2", "C.Hair.latest", "C.Hair.4", "D.Gone.1"], 1),
+        sized("B.Look.2", &[], 300),
+        sized("C.Hair.4", &[], 40),
+    ];
+    crate::library::apply_graph(&mut items);
+    assert_eq!(items[0].dep_bytes, 340);
+    assert_eq!(items[1].dep_bytes, 0);
+}
+
+#[test]
 fn library_dependency_resolution_specs() {
     use crate::library::{DepResolution, LibIndex};
     let items = vec![lib_item("X.Pkg.2", &[]), lib_item("X.Pkg.7", &[])];
