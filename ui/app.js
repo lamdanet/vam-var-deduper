@@ -11814,13 +11814,56 @@ function izPickedIn(g) {
   return (g.refs ?? []).filter((r) => IZ.picks.has(izKey(g.source_pkg_id, r.ref_path))).length;
 }
 
-// Every file can come in, so the dependency can go (a clashing file keeps
-// pointing at the package).
-function izDroppable(g) {
-  return !(g.refs ?? []).some(izClash);
+// A package's version-less family: Pkg.latest and Pkg.3 are one dependency.
+function izFamily(pkg) {
+  return String(pkg).replace(/\.(\d+|latest|min\d+)$/i, "").toLowerCase();
 }
 
-// Only this package uses it (null: not known).
+// The groups of the same package (a scene may name it by two versions).
+function izFamilyGroups(g) {
+  const fam = izFamily(g.source_pkg_id);
+  return (IZ.groups ?? []).filter((x) => izFamily(x.source_pkg_id) === fam);
+}
+
+// What keeps the package needed even with every file copied in: its files
+// that clash, and references to it this page can't copy (a file it doesn't
+// have, or a version that isn't installed).
+function izKeptBy(g) {
+  const groups = izFamilyGroups(g);
+  return {
+    clashes: groups.reduce((n, x) => n + (x.refs ?? []).filter(izClash).length, 0),
+    other: [...new Set(groups.flatMap((x) => x.other_refs ?? []))],
+  };
+}
+
+function izDropsIfAll(g) {
+  const k = izKeptBy(g);
+  return !k.clashes && !k.other.length;
+}
+
+// With the choices so far, the package isn't needed any more.
+function izDropped(g) {
+  return izDropsIfAll(g) && izFamilyGroups(g).every((x) => (x.refs ?? []).length && izPickedIn(x) === (x.refs ?? []).length);
+}
+
+// Why it's still needed, in a sentence (empty when nothing keeps it).
+function izKeptText(g, { suffix = true } = {}) {
+  const k = izKeptBy(g);
+  const self = izSelfName();
+  const parts = [];
+  if (k.other.length) {
+    const first = k.other.slice(0, 2).map((r) => r.slice(r.indexOf(":/") + 2).split("/").pop());
+    parts.push(
+      `${self} also references ${pkgCount(k.other.length, "file", "files")} of it that can't be copied in (${first.join(", ")}${k.other.length > 2 ? "…" : ""}: missing from it — see Fix Missing)`,
+    );
+  }
+  if (k.clashes) parts.push(`${pkgCount(k.clashes, "file clashes", "files clash")} with one already inside`);
+  if (!parts.length) return "";
+  const why = parts.join("; and ");
+  return suffix ? `${why}, so ${self} still needs it.` : `${why[0].toUpperCase()}${why.slice(1)}.`;
+}
+
+// Whether other packages in your folders list it as a dependency (null: not known).
 function izExclusive(g) {
   return g.used_by_others == null ? null : g.used_by_others === 0;
 }
@@ -11834,7 +11877,8 @@ function izBytesOf(g, refs) {
 }
 
 function izTotals() {
-  const t = { files: 0, copyable: 0, chosen: 0, bytes: 0, drops: [], partial: [], removable: [], freed: 0 };
+  const t = { files: 0, copyable: 0, chosen: 0, bytes: 0, drops: [], partial: [] };
+  const seen = new Set();
   for (const g of IZ.groups ?? []) {
     const refs = g.refs ?? [];
     const picked = refs.filter((r) => IZ.picks.has(izKey(g.source_pkg_id, r.ref_path)));
@@ -11842,25 +11886,19 @@ function izTotals() {
     t.copyable += refs.filter((r) => !izClash(r)).length;
     t.chosen += picked.length;
     t.bytes += izBytesOf(g, picked);
-    if (!picked.length) continue;
-    if (picked.length === refs.length) {
-      t.drops.push(g.source_pkg_id);
-      if (izExclusive(g)) {
-        t.removable.push(g.source_pkg_id);
-        t.freed += Number(g.source_var_size ?? 0);
-      }
-    } else t.partial.push(g.source_pkg_id);
+    // Once per package, whatever versions name it.
+    const fam = izFamily(g.source_pkg_id);
+    if (!picked.length || seen.has(fam)) continue;
+    seen.add(fam);
+    if (izDropped(g)) t.drops.push(g.source_pkg_id);
+    else t.partial.push(g.source_pkg_id);
   }
   return t;
 }
 
-// The list's order: packages only this one uses first (copying them in
-// frees the most), then by what removing them would free.
+// The list's order: as the check found them, the most to copy first.
 function izSorted() {
-  const rank = (g) => (izExclusive(g) === true && izDroppable(g) ? 0 : izExclusive(g) == null ? 1 : 2);
-  return [...(IZ.groups ?? [])].sort(
-    (a, b) => rank(a) - rank(b) || Number(b.source_var_size ?? 0) - Number(b.total_bundle_bytes ?? 0) - (Number(a.source_var_size ?? 0) - Number(a.total_bundle_bytes ?? 0)),
-  );
+  return [...(IZ.groups ?? [])];
 }
 
 function izFiltered() {
@@ -11925,7 +11963,6 @@ async function izApply() {
   }
   if (!selections.length) return;
   const name = libTitle(IZ.item);
-  const totals = izTotals();
   if (!backup) {
     const ok = await showAppConfirm(`Copy ${pkgCount(selections.length, "file", "files")} into ${name} without a backup?`);
     if (!ok) return;
@@ -11952,16 +11989,7 @@ async function izApply() {
       },
     );
     const report = p.internalize_report ?? {};
-    const dropped = new Set(report.dependencies_removed ?? []);
-    done = {
-      ...report,
-      count: selections.length,
-      name,
-      // Dropped, and nothing else uses them: they can go.
-      removable: totals.removable
-        .filter((pkg) => dropped.has(pkg))
-        .map((pkg) => ({ pkg, file: izGroup(pkg)?.source_var_path ?? "", size: Number(izGroup(pkg)?.source_var_size ?? 0) })),
-    };
+    done = { ...report, count: selections.length, name };
     vpRefreshAfterMutation().catch(() => {});
   } catch (e) {
     showToast(`Copying in failed: ${String(e?.message || e)}`, "error", 8000);
@@ -12198,8 +12226,7 @@ function izPlanHtml() {
           ? `${line("input", "Copy", `${pkgCount(t.chosen, "file", "files")} with what they need, about ${escapeHtml(formatBytesLocal(t.bytes))}`)}
              ${line("edit", "Rewrite", `the references in ${escapeHtml([...files].join(", ") || "meta.json")}`)}
              ${t.drops.length ? line("link_off", "No longer need", few(t.drops, (pkg) => fmPkgLabelHtml(pkg))) : ""}
-             ${t.partial.length ? line("link", "Still need", `${few(t.partial, (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">some of their files stay where they are</small>`) : ""}
-             ${t.removable.length ? line("delete_sweep", "Can remove", `${few(t.removable, (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">nothing else uses ${t.removable.length === 1 ? "it" : "them"}: ${escapeHtml(formatBytesLocal(t.freed))}</small>`) : ""}
+             ${t.partial.length ? line("link", "Still need", `${few(t.partial, (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">references to ${t.partial.length === 1 ? "it" : "them"} stay: files not chosen, missing from ${t.partial.length === 1 ? "it" : "them"}, or clashing</small>`) : ""}
              ${line("save", "Write", escapeHtml(where))}`
           : ""
       }
@@ -12212,12 +12239,6 @@ function izRenderDetails() {
   const groups = IZ.groups ?? [];
   const folded = Boolean(IZ.target && !IZ.configOpen);
   const fix = IZ.lastFix;
-  const removeHtml = (fix?.removable ?? [])
-    .map(
-      (r) => `<div class="iz-report-remove">${fmPkgLabelHtml(r.pkg)}<span class="fm-dim">${escapeHtml(formatBytesLocal(r.size))}</span>
-          <button type="button" class="ghost-button fm-small" data-iz-explore-pkg="${escapeAttribute(r.pkg)}" data-iz-explore-file="${escapeAttribute(r.file)}" title="Open it in Package Explorer, to remove it from there"><span class="material-symbols-outlined">space_dashboard</span>Explore</button></div>`,
-    )
-    .join("");
   const report = fix
     ? `<div class="fm-report">
         <span class="material-symbols-outlined">check_circle</span>
@@ -12226,7 +12247,6 @@ function izRenderDetails() {
           <small>${pkgCount(Number(fix.entries_copied ?? 0), "file", "files")} added (${escapeHtml(formatBytesLocal(Number(fix.bytes_added ?? 0)))}), ${pkgCount(Number(fix.files_rewritten ?? 0), "file", "files")} inside it rewritten.</small>
           ${(fix.entries_skipped_collision ?? []).length ? `<small>${pkgCount(fix.entries_skipped_collision.length, "file was", "files were")} already inside, so not copied again.</small>` : ""}
           ${(fix.dependencies_removed ?? []).length ? `<small class="fm-report-pkgs">No longer depends on ${fix.dependencies_removed.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
-          ${removeHtml ? `<small>Nothing else uses ${fix.removable.length === 1 ? "this one" : "these"}, so ${fix.removable.length === 1 ? "it" : "they"} can go:</small>${removeHtml}` : ""}
           ${(fix.errors ?? []).map((e) => `<small class="fm-report-err">${escapeHtml(e)}</small>`).join("")}
           <small>${
             fix.backup_path
@@ -12275,7 +12295,7 @@ function izRenderDetails() {
   libThumbWatch(host);
 }
 
-// After a check: which packages can go, which stay.
+// After a check: what it found, as facts.
 function izRenderSummary() {
   const host = $("iz-summary");
   if (!host) return;
@@ -12284,50 +12304,38 @@ function izRenderSummary() {
     host.innerHTML = "";
     return;
   }
-  const only = groups.filter((g) => izExclusive(g) === true && izDroppable(g));
-  const shared = groups.filter((g) => izExclusive(g) === false);
-  const openOnly = only.filter((g) => (g.refs ?? []).some((r) => !izClash(r) && !IZ.picks.has(izKey(g.source_pkg_id, r.ref_path))));
-  const clashes = groups.reduce((n, g) => n + (g.refs ?? []).filter(izClash).length, 0);
-  const bytes = only.reduce((n, g) => n + Number(g.total_bundle_bytes ?? 0), 0);
-  const frees = only.reduce((n, g) => n + Number(g.source_var_size ?? 0), 0);
   const self = escapeHtml(izSelfName());
+  const fams = new Map();
+  for (const g of groups) if (!fams.has(izFamily(g.source_pkg_id))) fams.set(izFamily(g.source_pkg_id), g);
+  const pkgs = [...fams.values()];
+  const only = pkgs.filter((g) => izExclusive(g) === true).length;
+  const listed = pkgs.filter((g) => izExclusive(g) === false).length;
+  const kept = pkgs.filter((g) => izKeptBy(g).other.length).length;
+  const clashes = groups.reduce((n, g) => n + (g.refs ?? []).filter(izClash).length, 0);
   const lines = [
-    only.length
-      ? `<li><b>${only.length}</b> ${only.length === 1 ? "is" : "are"} used only by ${self}: copy ${only.length === 1 ? "its" : "their"} files in (about ${escapeHtml(
-          formatBytesLocal(bytes),
-        )}) and ${only.length === 1 ? "it" : "they"} can be removed, freeing ${escapeHtml(formatBytesLocal(frees))}.</li>`
-      : "",
-    shared.length
-      ? `<li><b>${shared.length}</b> ${shared.length === 1 ? "is" : "are"} used by other packages too: copying makes ${self} stand on its own, but ${shared.length === 1 ? "it stays" : "they stay"} installed.</li>`
+    only ? `<li><b>${only}</b> ${only === 1 ? "is" : "are"} listed as a dependency by no other package in your folders.</li>` : "",
+    listed ? `<li><b>${listed}</b> ${listed === 1 ? "is" : "are"} listed by other packages too, which still need ${listed === 1 ? "it" : "them"}.</li>` : "",
+    kept
+      ? `<li><b>${kept}</b> ${kept === 1 ? "stays" : "stay"} a dependency whatever you copy: ${self} also references files missing from ${kept === 1 ? "it" : "them"} (see Fix Missing).</li>`
       : "",
     clashes ? `<li><b>${clashes}</b> ${clashes === 1 ? "file clashes" : "files clash"} with a different file already inside ${self} at the same path — left out.</li>` : "",
   ].join("");
-  if (!lines) {
-    host.innerHTML = "";
-    return;
-  }
-  host.innerHTML = `<div class="fm-summary">
-      <span class="material-symbols-outlined">lightbulb</span>
-      <div><ul>${lines}</ul>
-        ${
-          openOnly.length
-            ? `<div class="fm-summary-acts"><button type="button" class="ghost-button fm-small fm-summary-main" data-iz-act="choose-only"><span class="material-symbols-outlined">done_all</span>Choose the ${
-                openOnly.length === 1 ? "one" : openOnly.length
-              } only ${self} uses</button></div>`
-            : ""
-        }
-      </div>
-    </div>`;
+  host.innerHTML = lines
+    ? `<div class="fm-summary">
+        <span class="material-symbols-outlined">info</span>
+        <div><ul>${lines}</ul></div>
+      </div>`
+    : "";
 }
 
-// Who else uses a package, as a chip.
+// Whether other packages list it as a dependency, as a chip.
 function izUsageChip(g) {
   const ex = izExclusive(g);
   if (ex == null) return "";
-  if (ex) return `<span class="chip fm-chip-good" title="No other package in your folders depends on it">only used here</span>`;
+  if (ex) return `<span class="chip" title="No other package in your folders lists it as a dependency">listed only here</span>`;
   const names = (g.other_users ?? []).map((id) => pkgIdParts(id).name);
   const more = Number(g.used_by_others) - names.length;
-  return `<span class="chip fm-chip-muted" title="${escapeAttribute(`Also used by ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}`)}">used by ${pkgCount(Number(g.used_by_others), "other", "others")}</span>`;
+  return `<span class="chip" title="${escapeAttribute(`Also listed as a dependency by ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}`)}">listed by ${pkgCount(Number(g.used_by_others), "other", "others")}</span>`;
 }
 
 function izRenderList() {
@@ -12368,8 +12376,8 @@ function izRenderList() {
     tools.innerHTML = `
       <div class="fm-filter-row">${[
         ["all", "All"],
-        known ? ["only", "Only used here"] : null,
-        known ? ["shared", "Used by others"] : null,
+        known ? ["only", "Listed only here"] : null,
+        known ? ["shared", "Listed by others"] : null,
         ["todo", "Not chosen"],
         ["chosen", "Chosen"],
       ]
@@ -12393,7 +12401,9 @@ function izRenderList() {
       const icon = all ? "check_circle" : picked ? "incomplete_circle" : "fiber_manual_record";
       const sub = [p.creator, p.ver].filter(Boolean).join(" · ");
       const right = all
-        ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed" title="Every file it gives is chosen: ${escapeAttribute(izSelfName())} won't need it">copy in · no longer needed</span>
+        ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(
+            izDropped(g) ? `Every file is chosen: ${izSelfName()} won't need it any more` : izKeptText(g) || "Every file is chosen",
+          )}">${izDropped(g) ? "copy in · no longer needed" : "all chosen · still needed"}</span>
             <button type="button" class="fm-icon-btn fm-row-clear" data-iz-row-clear="${escapeAttribute(pkg)}" title="Clear these choices" aria-label="Clear these choices"><span class="material-symbols-outlined">close</span></button></span>`
         : picked
           ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed">${picked} of ${refs.length} chosen</span>
@@ -12517,33 +12527,34 @@ function izRenderDetail() {
   const ex = izExclusive(g);
   const self = escapeHtml(izSelfName());
   const name = escapeHtml(p.name);
-  const size = escapeHtml(formatBytesLocal(Number(g.source_var_size ?? 0)));
-  const usage =
-    ex === true && !izDroppable(g)
-      ? `Nothing else uses it, but a file that clashes keeps ${self} needing it.`
-      : ex === true
-      ? `Nothing else uses it: once its files are in, you can remove it and free ${size}.`
+  const listing =
+    ex === true
+      ? "No other package in your folders lists it as a dependency."
       : ex === false
-        ? `${pkgCount(Number(g.used_by_others), "other package uses", "other packages use")} it${
+        ? `${pkgCount(Number(g.used_by_others), "other package lists", "other packages list")} it as a dependency${
             (g.other_users ?? []).length ? ` (${escapeHtml((g.other_users ?? []).slice(0, 3).map((id) => pkgIdParts(id).name).join(", "))}${Number(g.used_by_others) > 3 ? "…" : ""})` : ""
-          }, so it stays installed either way.`
+          }.`
         : "";
+  const keptText = escapeHtml(izKeptText(g));
+  const after = izDropsIfAll(g) ? `Then ${self} no longer needs ${name}.` : keptText;
   const verdict = all
     ? `<div class="fm-chosen">
         <div class="fm-chosen-main">
           <span class="material-symbols-outlined">check_circle</span>
-          <div class="fm-chosen-text"><small>Every file chosen</small><b>${self} won't need ${name} any more.</b><small>${usage}</small></div>
+          <div class="fm-chosen-text"><small>Every file chosen</small><b>${
+            izDropped(g) ? `${self} won't need ${name} any more.` : `${self} still needs ${name}.`
+          }</b><small>${izDropped(g) ? listing : escapeHtml(izKeptText(g, { suffix: false }))}</small></div>
           <button type="button" class="ghost-button fm-small" data-iz-row-clear="${escapeAttribute(pkg)}"><span class="material-symbols-outlined">close</span>Clear</button>
         </div>
       </div>`
     : copyable.length
-      ? `<div class="fm-best">
+      ? `<div class="fm-best iz-copy-box">
           <div class="fm-best-text">
-            <span class="fm-best-tag">${ex === true && izDroppable(g) ? "Worth copying in" : "Copy in"}</span>
+            <span class="fm-best-tag">Copy in</span>
             <b>${picked ? `The other ${copyable.length - picked}` : `All ${pkgCount(copyable.length, "file", "files")}`}, about ${escapeHtml(formatBytesLocal(izBytesOf(g, copyable.filter((r) => !IZ.picks.has(izKey(pkg, r.ref_path))))))}</b>
-            <small>${copyable.length === refs.length ? `Then ${self} no longer needs ${name}. ` : ""}${usage}</small>
+            <small>${[after, listing].filter(Boolean).join(" ")}</small>
           </div>
-          <button type="button" class="accent-button" data-iz-choose="${escapeAttribute(pkg)}"><span class="material-symbols-outlined">done_all</span>${picked ? "Choose the rest" : "Choose all"}</button>
+          <button type="button" class="ghost-button" data-iz-choose="${escapeAttribute(pkg)}"><span class="material-symbols-outlined">done_all</span>${picked ? "Choose the rest" : "Choose all"}</button>
         </div>`
       : `<p class="fm-none-line">Every file clashes with a different one already inside ${self}.</p>`;
   const local = libFindItem(g.source_var_path);
@@ -12765,13 +12776,6 @@ function izOnClick(e) {
     case "add-folder":
       addAdditionalDir("missing").then(izRenderSource);
       break;
-    case "choose-only": {
-      const only = (IZ.groups ?? []).filter((g) => izExclusive(g) === true && izDroppable(g));
-      const n = izChooseAll(only);
-      izFlash(`Chose ${pkgCount(n, "file", "files")} from ${pkgCount(only.length, "package", "packages")} only ${izSelfName()} uses.`);
-      izRefresh();
-      break;
-    }
     case "clear-picks":
       IZ.picks.clear();
       izRefresh();

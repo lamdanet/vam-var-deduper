@@ -19605,6 +19605,17 @@ button.pkg-stat:focus-visible::after {
 
 /* ---- Internalize Resources: Fix Missing's layout, packages as rows ---- */
 
+/* The Copy in box states facts: no green, no gradient button. */
+.fm-best.iz-copy-box {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.fm-best.iz-copy-box .fm-best-tag {
+  color: var(--text-muted);
+}
+
+
 .fm-row.group-row.iz-row {
   grid-template-columns: 22px 44px minmax(0, 1fr) auto;
 }
