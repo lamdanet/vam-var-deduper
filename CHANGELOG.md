@@ -98,11 +98,12 @@ release time, it fills it with the commit messages since the last release.
   details** everywhere in the app opens it; you can also drop a `.var` on
   the page
 
-- **Dependency Usage** (new page): pick a package and see, for each of its
-  dependencies, whether it's worth keeping, measured across every package
-  that uses it. A big package its users barely touch can go (and how much
-  space that frees); a shared library many packages use much of should
-  stay. Shows who uses how much of it
+- **Dependency Usage** (new page): is a package worth keeping as a
+  dependency? Pick one and see every package that uses it, how much of it
+  each one uses, how much nobody uses, and what removing it would cost or
+  free once each user has its own copy of what it uses. A big package its
+  users barely touch can go; a shared library should stay, and is a good
+  replacement source to prefer in Fix Missing
 
 ### Changed
 - Package Explorer replaces the VAR Details page, which is gone: everything
