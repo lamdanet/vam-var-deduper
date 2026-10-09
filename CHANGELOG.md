@@ -130,6 +130,9 @@ release time, it fills it with the commit messages since the last release.
   backup in the same folder as Fix Missing's, and checks it again afterwards
 
 ### Fixed
+- Internalize Resources no longer promises a dependency goes when the
+  package still references a file missing from it, and drops one a
+  scene names by another version (`.latest`) than meta.json lists
 - Fixing a missing resource with a copy inside the package itself wrote a
   reference to the package by name and made it depend on itself; it now
   writes `SELF:/`, as VaM expects
