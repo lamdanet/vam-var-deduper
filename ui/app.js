@@ -11125,16 +11125,14 @@ function fmUseBest(key, { advance = false } = {}) {
 function fmPickRow(el) {
   const key = el.getAttribute("data-fm-pickrow");
   const pkg = el.getAttribute("data-fm-pkg");
-  const sig = `${key}|${pkg}|${el.getAttribute("data-fm-path")}`;
-  const now = Date.now();
-  if (FM.lastPick?.sig === sig && now - FM.lastPick.at < 450) {
-    FM.lastPick = null;
+  // Clicking the card that's already chosen clears the choice.
+  const cur = FM.picks.get(key);
+  if (cur && cur.replacement_pkg === pkg && cur.replacement_path === el.getAttribute("data-fm-path")) {
     FM.picks.delete(key);
     fmFlash("Choice cleared.");
     fmRefresh();
     return;
   }
-  FM.lastPick = { sig, at: now };
   FM.skipped.delete(key);
   FM.picks.set(key, {
     replacement_pkg: pkg,

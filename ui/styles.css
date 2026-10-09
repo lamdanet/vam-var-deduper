@@ -19212,7 +19212,7 @@ button.pkg-stat:focus-visible::after {
   color: var(--accent-danger);
 }
 
-/* A double click on a card clears its choice; it doesn't select text. */
+/* Clicking cards doesn't select their text. */
 .fm-cand-row,
 .fm-cand-alt {
   user-select: none;
