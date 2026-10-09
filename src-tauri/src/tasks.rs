@@ -6458,12 +6458,13 @@ fn finish_apply_missing_resources_fix_task(
 /// exists inside that source pkg are returned. Requires a cached scan over
 /// `input_dir` (so the source vars can be resolved without re-scanning every
 /// time the user opens the page).
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn scan_internalize_candidates(
     input_dir: String,
     additional_input_dirs: Option<Vec<String>>,
     target_var_path: String,
     state: State<'_, AppState>,
+    db: State<'_, Db>,
 ) -> Result<Vec<ExternalRefGroup>, String> {
     let input_path = Path::new(&input_dir);
     let target_path = Path::new(&target_var_path);
@@ -6486,6 +6487,14 @@ pub(crate) fn scan_internalize_candidates(
 
     let mut groups =
         scan_target_var_for_external_refs(target_path, &scanned).map_err(|err| err.to_string())?;
+    // Files a source package doesn't have: an exact copy elsewhere lets Copy
+    // in bring them too (the missing-file check, as Fix Missing runs it).
+    if groups.iter().any(|g| !g.other_refs.is_empty()) {
+        let broken = crate::fix_var::scan_target_var_for_broken_refs(target_path, &scanned, &db)
+            .map_err(|err| err.to_string())?;
+        crate::internalize::fill_from_copies(&mut groups, &broken, target_path)
+            .map_err(|err| err.to_string())?;
+    }
     // Who else needs each source package, from the VAR Packages listing: the
     // one only this package uses can go once its files are copied in.
     if let Ok(cache) = state.var_packages_folder_cache.lock() {

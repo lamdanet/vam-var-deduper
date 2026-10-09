@@ -32,8 +32,8 @@ use crate::{
     },
     naming,
     models::{
-        ExternalRef, ExternalRefGroup, InternalizeReport, InternalizeSelection, ScannedData,
-        META_PATH,
+        BrokenRef, ExternalRef, ExternalRefGroup, InternalizeReport, InternalizeSelection,
+        RefFill, ScannedData, META_PATH,
     },
     scan::{extract_vaj_self_paths, extract_vaj_support_paths},
     utils::{decode_text, dump_json_bytes, normalize_zip_path, read_json_bytes},
@@ -224,6 +224,7 @@ pub(crate) fn scan_target_var_for_external_refs(
             used_by_others: None,
             other_users: Vec::new(),
             other_refs: Vec::new(),
+            fills: Vec::new(),
         });
     }
 
@@ -338,14 +339,11 @@ pub(crate) fn apply_internalize(
         return Ok(report);
     }
 
-    // Group selections by source pkg so we open each source archive once.
-    let mut by_pkg: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for sel in selections {
-        by_pkg
-            .entry(sel.source_pkg_id.clone())
-            .or_default()
-            .push(normalize_zip_path(&sel.ref_path));
-    }
+    let target_id = target_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
 
     // Build the cross-copy set: internal_path → bytes. Same path picked up
     // from two source vars / two refs (e.g. a shared texture) is read once.
@@ -355,6 +353,33 @@ pub(crate) fn apply_internalize(
     // Track which selected source pkgs we actually copied something from, so
     // meta.json can decide whether to drop them.
     let mut touched_source_pkgs: BTreeSet<String> = BTreeSet::new();
+
+    // Group the reads by the package they come from, so each archive opens
+    // once: (path to read, path it lands at, package the reference names).
+    // A file the source package lacks comes from the copy the scan found; one
+    // the target already has is only pointed at.
+    let mut by_pkg: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
+    for sel in selections {
+        let ref_path = normalize_zip_path(&sel.ref_path);
+        match (sel.from_pkg.as_deref(), sel.from_path.as_deref()) {
+            (Some(from), Some(from_path)) if from == "SELF" || from == target_id => {
+                touched_source_pkgs.insert(sel.source_pkg_id.clone());
+                replacements.insert(
+                    format!("{}:/{}", sel.source_pkg_id, ref_path),
+                    format!("SELF:/{}", normalize_zip_path(from_path)),
+                );
+            }
+            (Some(from), Some(from_path)) => by_pkg.entry(from.to_string()).or_default().push((
+                normalize_zip_path(from_path),
+                ref_path,
+                sel.source_pkg_id.clone(),
+            )),
+            _ => by_pkg
+                .entry(sel.source_pkg_id.clone())
+                .or_default()
+                .push((ref_path.clone(), ref_path, sel.source_pkg_id.clone())),
+        }
+    }
 
     for (pkg, mut paths) in by_pkg.into_iter() {
         let Some(prepared) = resolve_pkg_entry(&pkg, scan) else {
@@ -386,16 +411,31 @@ pub(crate) fn apply_internalize(
         paths.sort();
         paths.dedup();
 
-        for ref_path in &paths {
-            if !entry_sizes.contains_key(ref_path) {
+        for (read_path, dest_path, ref_pkg) in &paths {
+            if !entry_sizes.contains_key(read_path) {
                 report
                     .errors
-                    .push(format!("source pkg {pkg} has no entry at {ref_path}"));
+                    .push(format!("source pkg {pkg} has no entry at {read_path}"));
                 continue;
             }
-            touched_source_pkgs.insert(pkg.clone());
+            touched_source_pkgs.insert(ref_pkg.clone());
 
-            let bundle = expand_bundle_for_ref(ref_path, &entry_sizes, &mut source_archive);
+            // A copy at another path comes alone, landing where the reference
+            // points (the scan offers only single files for that).
+            if read_path != dest_path {
+                if !copy_bytes.contains_key(dest_path) {
+                    let mut entry = source_archive
+                        .by_name(read_path)
+                        .with_context(|| format!("missing {read_path} in {pkg}"))?;
+                    let mut raw = Vec::new();
+                    entry.read_to_end(&mut raw)?;
+                    copy_bytes.insert(dest_path.clone(), raw);
+                }
+                replacements.insert(format!("{ref_pkg}:/{dest_path}"), format!("SELF:/{dest_path}"));
+                continue;
+            }
+
+            let bundle = expand_bundle_for_ref(read_path, &entry_sizes, &mut source_archive);
             for member in &bundle {
                 if !copy_bytes.contains_key(member) {
                     let mut entry = source_archive
@@ -413,7 +453,7 @@ pub(crate) fn apply_internalize(
                 // appear (e.g. inside a .vap that references textures by full
                 // package-qualified path); list the swap so we don't leave
                 // half-rewritten refs behind.
-                let old_ref = format!("{}:/{}", pkg, member);
+                let old_ref = format!("{}:/{}", ref_pkg, member);
                 let new_ref = format!("SELF:/{}", member);
                 replacements.insert(old_ref, new_ref);
             }
@@ -650,4 +690,84 @@ pub(crate) fn apply_internalize(
 /// `Creator.Pack.3` are the same dependency.
 fn family_of(pkg: &str) -> String {
     naming::package_base(pkg).to_ascii_lowercase()
+}
+
+/// For each source package's references it can't copy (the file isn't in it),
+/// an exact copy elsewhere, from the missing-file check (`broken`): one the
+/// target already holds, else another package's. Only an exact copy (same
+/// contents) counts; at another path only a single file, since a .vam's
+/// siblings and textures would land at the wrong paths. A file the target
+/// holds with other contents at that path clashes and gets none.
+pub(crate) fn fill_from_copies(groups: &mut [ExternalRefGroup], broken: &[BrokenRef], target_path: &Path) -> Result<()> {
+    let target_id = target_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let file = fs::File::open(target_path)
+        .with_context(|| format!("failed to open {}", target_path.display()))?;
+    let mut archive = ZipArchive::new(file)?;
+    let mut target_crcs: BTreeMap<String, u32> = BTreeMap::new();
+    for index in 0..archive.len() {
+        if let Ok(e) = archive.by_index(index) {
+            target_crcs.insert(normalize_zip_path(e.name()), e.crc32());
+        }
+    }
+    for group in groups.iter_mut() {
+        if group.other_refs.is_empty() {
+            continue;
+        }
+        let wanted: BTreeSet<&String> = group.other_refs.iter().collect();
+        for b in broken {
+            let (Some(path), Some(crc)) = (b.ref_path.as_deref(), b.expected_crc32) else {
+                continue;
+            };
+            let ref_path = normalize_zip_path(path);
+            let key = format!("{}:/{}", b.ref_pkg, ref_path);
+            if !wanted.contains(&key) {
+                continue;
+            }
+            match target_crcs.get(&ref_path) {
+                Some(own) if *own == crc => {
+                    group.fills.push(RefFill {
+                        ref_pkg: b.ref_pkg.clone(),
+                        ref_path: ref_path.clone(),
+                        from_pkg: "SELF".into(),
+                        from_path: ref_path.clone(),
+                        size: b.expected_size.unwrap_or(0),
+                        from_self: true,
+                    });
+                    continue;
+                }
+                Some(_) => continue,
+                None => {}
+            }
+            let single = |p: &str| {
+                let lower = p.to_ascii_lowercase();
+                ![".vam", ".vmi", ".vaj", ".vab", ".vmb"].iter().any(|ext| lower.ends_with(ext))
+            };
+            let exact = b.local_candidates.iter().map(|c| &c.resource).filter(|r| {
+                r.crc32 == Some(crc)
+                    && b.expected_size.is_none_or(|s| s == r.size)
+                    && (normalize_zip_path(&r.internal_path) == ref_path || single(&r.internal_path))
+            });
+            // The target's own copy first: nothing to read.
+            let pick = exact
+                .clone()
+                .find(|r| r.package_id.eq_ignore_ascii_case(&target_id))
+                .or_else(|| exact.clone().next());
+            if let Some(r) = pick {
+                let from_self = r.package_id.eq_ignore_ascii_case(&target_id);
+                group.fills.push(RefFill {
+                    ref_pkg: b.ref_pkg.clone(),
+                    ref_path,
+                    from_pkg: if from_self { "SELF".into() } else { r.package_id.clone() },
+                    from_path: normalize_zip_path(&r.internal_path),
+                    size: r.size,
+                    from_self,
+                });
+            }
+        }
+    }
+    Ok(())
 }

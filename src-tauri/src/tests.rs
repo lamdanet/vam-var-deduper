@@ -6695,7 +6695,7 @@ fn internalize_flags_clashes_and_keeps_every_backup() {
     assert!(top.conflicts.is_empty() && top.already_inside.is_empty());
     assert_eq!(top.bundle_paths.len(), 2, "the .vaj comes along");
 
-    let pick = |path: &str| InternalizeSelection { source_pkg_id: "S.Pack.1".into(), ref_path: path.into() };
+    let pick = |path: &str| InternalizeSelection { source_pkg_id: "S.Pack.1".into(), ref_path: path.into(), from_pkg: None, from_path: None };
     let first = apply_internalize(&target, None, &scanned, &[pick("Custom/Clothing/x/top.vam")], Some(&backups))
         .expect("first apply");
     assert_eq!(first.entries_copied, 2);
@@ -6824,7 +6824,7 @@ fn internalize_drops_a_dependency_named_by_another_version() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].other_refs, vec!["S.Pack.1:/Custom/missing.png".to_string()], "the missing file keeps it needed");
 
-    let pick = InternalizeSelection { source_pkg_id: "S.Pack.latest".into(), ref_path: "Custom/a.png".into() };
+    let pick = InternalizeSelection { source_pkg_id: "S.Pack.latest".into(), ref_path: "Custom/a.png".into(), from_pkg: None, from_path: None };
     let report = apply_internalize(&target, None, &scanned, std::slice::from_ref(&pick), None).expect("apply");
     assert!(report.dependencies_removed.is_empty(), "the missing file still points at it");
 
@@ -6840,5 +6840,78 @@ fn internalize_drops_a_dependency_named_by_another_version() {
     assert!(scan_target_var_for_external_refs(&target, &scanned).expect("refs")[0].other_refs.is_empty());
     let report = apply_internalize(&target, None, &scanned, &[pick], None).expect("apply");
     assert_eq!(report.dependencies_removed, vec!["S.Pack.1".to_string()]);
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
+fn internalize_takes_a_missing_file_from_another_package() {
+    use crate::internalize::{apply_internalize, fill_from_copies, scan_target_var_for_external_refs};
+    use crate::models::{BrokenKind, BrokenRef, BrokenRefCandidate, InternalizeSelection, ResourceRef};
+
+    let dir = repo_root().join("tmp_internalize_fill_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    write_test_var_with_deps(
+        &vars.join("T.Scene.1.var"),
+        &["S.Pack.1"],
+        &[("Saves/scene/s.json", &br#"{ "a": "S.Pack.1:/Custom/a.png", "gone": "S.Pack.1:/Custom/gone.png" }"#[..])],
+    );
+    write_test_var_with_deps(&vars.join("S.Pack.1.var"), &[], &[("Custom/a.png", &b"aaaa"[..])]);
+    write_test_var_with_deps(&vars.join("O.Other.1.var"), &[], &[("Textures/elsewhere.png", &b"gone-bytes"[..])]);
+    let target = vars.join("T.Scene.1.var");
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], None, |_, _| {}).expect("scan");
+
+    let mut groups = scan_target_var_for_external_refs(&target, &scanned).expect("refs");
+    assert_eq!(groups[0].other_refs, vec!["S.Pack.1:/Custom/gone.png".to_string()]);
+    // What the missing-file check reports: the file's contents, and a copy.
+    let crc = zip::ZipArchive::new(fs::File::open(vars.join("O.Other.1.var")).expect("open"))
+        .expect("zip")
+        .by_name("Textures/elsewhere.png")
+        .expect("entry")
+        .crc32();
+    let broken = vec![BrokenRef {
+        kind: BrokenKind::Transitive,
+        ref_pkg: "S.Pack.1".into(),
+        ref_path: Some("Custom/gone.png".into()),
+        expected_crc32: Some(crc),
+        expected_size: Some(10),
+        source_files_in_target: vec!["Saves/scene/s.json".into()],
+        local_candidates: vec![BrokenRefCandidate {
+            resource: ResourceRef {
+                package_id: "O.Other.1".into(),
+                package_file: vars.join("O.Other.1.var").to_string_lossy().to_string(),
+                internal_path: "Textures/elsewhere.png".into(),
+                crc32: Some(crc),
+                size: 10,
+                effective_size: 10,
+            },
+        }],
+    }];
+    fill_from_copies(&mut groups, &broken, &target).expect("fill");
+    let fill = &groups[0].fills[0];
+    assert_eq!((fill.from_pkg.as_str(), fill.from_path.as_str()), ("O.Other.1", "Textures/elsewhere.png"));
+
+    let selections = vec![
+        InternalizeSelection { source_pkg_id: "S.Pack.1".into(), ref_path: "Custom/a.png".into(), from_pkg: None, from_path: None },
+        InternalizeSelection {
+            source_pkg_id: "S.Pack.1".into(),
+            ref_path: "Custom/gone.png".into(),
+            from_pkg: Some(fill.from_pkg.clone()),
+            from_path: Some(fill.from_path.clone()),
+        },
+    ];
+    let report = apply_internalize(&target, None, &scanned, &selections, None).expect("apply");
+    assert_eq!(report.dependencies_removed, vec!["S.Pack.1".to_string()], "nothing points at it any more");
+    assert_eq!(report.entries_copied, 2);
+
+    let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
+    let mut text = String::new();
+    zip.by_name("Saves/scene/s.json").expect("scene").read_to_string(&mut text).expect("read");
+    assert!(text.contains("SELF:/Custom/gone.png") && !text.contains("S.Pack.1:/"), "{text}");
+    let mut raw = Vec::new();
+    zip.by_name("Custom/gone.png").expect("copied").read_to_end(&mut raw).expect("read");
+    assert_eq!(raw, b"gone-bytes", "landed where the reference points");
     fs::remove_dir_all(&dir).expect("cleanup");
 }

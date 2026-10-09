@@ -1459,12 +1459,35 @@ pub(crate) struct ExternalRefGroup {
     /// installed as written — as `Pkg:/path`. While any is left, the target
     /// still needs the package.
     pub(crate) other_refs: Vec<String>,
+    /// Exact copies elsewhere of files in `other_refs`: Copy in takes those
+    /// files from there, so the package can still go.
+    pub(crate) fills: Vec<RefFill>,
+}
+
+/// A file the target references from a package that doesn't have it, and an
+/// exact copy of it (same contents) in another package, or in the target.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RefFill {
+    /// The reference as the target writes it.
+    pub(crate) ref_pkg: String,
+    pub(crate) ref_path: String,
+    /// Where the copy is; `from_self` when the target already has it.
+    pub(crate) from_pkg: String,
+    pub(crate) from_path: String,
+    pub(crate) size: u64,
+    pub(crate) from_self: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct InternalizeSelection {
     pub(crate) source_pkg_id: String,
     pub(crate) ref_path: String,
+    /// Copy the file from this package (or `SELF`) instead: the source
+    /// package doesn't have it (a `RefFill`).
+    #[serde(default)]
+    pub(crate) from_pkg: Option<String>,
+    #[serde(default)]
+    pub(crate) from_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
