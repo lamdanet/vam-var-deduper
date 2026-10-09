@@ -889,7 +889,7 @@ function formatBytesLocal(size) {
     value /= 1024;
     unitIndex += 1;
   }
-  return `${value.toFixed(1)} ${units[unitIndex]}`;
+  return unitIndex === 0 ? `${Math.round(value)} B` : `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 // ============================================================
@@ -11734,15 +11734,13 @@ async function izLoadStart() {
       limit: 40,
       search: null,
       filters: {},
-      sort: "deps",
+      sort: "dep_size",
       sortDir: "desc",
       forceRescan: false,
       deepScan: state.varPackagesScannedDeep !== false,
       offloadDir: offloadDir() || null,
     });
-    const items = (page?.items ?? []).filter((it) => it.dep_count > it.missing_dep_count && !it.offloaded);
-    // The installed ones are what this page can copy from.
-    items.sort((a, b) => b.dep_count - b.missing_dep_count - (a.dep_count - a.missing_dep_count));
+    const items = (page?.items ?? []).filter((it) => Number(it.dep_bytes) > 0 && !it.offloaded);
     IZ.start = { loading: false, items, total: Number(page?.total ?? items.length), error: "" };
   } catch (e) {
     IZ.start = { loading: false, items: [], total: 0, error: String(e?.message || e) };
@@ -12234,13 +12232,15 @@ function izStartHtml() {
     );
   }
   parts.push(
-    `<h3 class="fm-start-h">With the most dependencies</h3>${
+    `<h3 class="fm-start-h">With the biggest dependencies</h3>${
       !st || st.loading
         ? `<p class="fm-none-line">Looking through your packages…</p>`
         : st.error
           ? `<p class="fm-none-line">Couldn't list them: ${escapeHtml(st.error)}</p>`
           : most.length
-            ? most.map((it) => row(it.file_path, it, pkgCount(it.dep_count - it.missing_dep_count, "dependency installed", "dependencies installed"))).join("")
+            ? most
+                .map((it) => row(it.file_path, it, `${formatBytesLocal(Number(it.dep_bytes))} in ${pkgCount(it.dep_count - it.missing_dep_count, "dependency", "dependencies")}`))
+                .join("")
             : `<p class="fm-none-line">None of your packages uses another one.</p>`
     }`,
   );
@@ -12251,8 +12251,20 @@ function izStartHtml() {
 function izPlanHtml() {
   const t = izTotals();
   if (!t.chosenPkgs) {
-    return `<div class="fm-plan is-empty"><span class="material-symbols-outlined">edit_note</span>
-        <span>Choose packages to copy in, and this shows what it will change.</span></div>`;
+    if (!t.pkgs) {
+      return `<div class="fm-plan is-empty"><span class="material-symbols-outlined">edit_note</span>
+          <span>Choose packages to copy in, and this shows what it will change.</span></div>`;
+    }
+    let bytes = 0;
+    const seen = new Set();
+    for (const g of izShown()) {
+      if (seen.has(izFamily(g.source_pkg_id))) continue;
+      seen.add(izFamily(g.source_pkg_id));
+      bytes += izPkgSize(g).bytes;
+    }
+    return `<div class="fm-plan is-empty iz-plan-offer"><span class="material-symbols-outlined">edit_note</span>
+        <span>Nothing chosen yet. ${pkgCount(t.pkgs, "package", "packages")} can be copied in: ${pkgCount(t.files, "file", "files")}, about ${escapeHtml(formatBytesLocal(bytes))}.</span>
+        <button type="button" class="ghost-button fm-small" data-iz-act="choose-all"><span class="material-symbols-outlined">done_all</span>Choose all (${t.pkgs})</button></div>`;
   }
   const few = (list, html) => `${list.slice(0, 3).map(html).join("")}${list.length > 3 ? `<small class="fm-plan-more">and ${list.length - 3} more</small>` : ""}`;
   const files = new Set();
@@ -12877,6 +12889,13 @@ function izOnClick(e) {
     case "fix-missing":
       if (IZ.target) fmOpen(IZ.target, { scan: true });
       break;
+    case "choose-all": {
+      const list = izShown();
+      for (const g of list) izSetChosen(g, true);
+      izFlash(`Chose ${pkgCount(new Set(list.map((g) => izFamily(g.source_pkg_id))).size, "package", "packages")}.`);
+      izRefresh();
+      break;
+    }
     case "pick-backup":
       invoke("pick_folder")
         .then((dir) => {
@@ -12931,6 +12950,33 @@ function setupInternalize() {
         .then((picked) => picked && izOpen(picked, { scan: true }))
         .catch(() => {});
     }
+  });
+  view.addEventListener("contextmenu", (e) => {
+    const row = e.target.closest?.("[data-iz-row]");
+    if (!row) return;
+    e.preventDefault();
+    hideContextMenu();
+    const g = izShown().find((x) => x.source_pkg_id === row.getAttribute("data-iz-row"));
+    if (!g) return;
+    IZ.selected = g.source_pkg_id;
+    izRenderRefs();
+    const chosen = izChosen(g);
+    const copy = (text) => () => navigator.clipboard?.writeText(text).catch(() => {});
+    showContextMenu(e.clientX, e.clientY, [
+      {
+        label: chosen ? "Clear this choice" : "Choose it",
+        action: () => {
+          izSetChosen(g, !chosen);
+          izRefresh();
+        },
+      },
+      { separator: true },
+      { label: "Explore package", action: () => fmExplore(g.source_pkg_id, g.installed === false ? "" : g.source_var_path) },
+      ...(g.installed === false ? [] : [{ label: "Show in Explorer", action: () => invoke("show_in_explorer", { path: g.source_var_path }).catch(() => {}) }]),
+      { separator: true },
+      { label: "Copy package id", action: copy(g.source_pkg_id) },
+      ...(g.installed === false ? [] : [{ label: "Copy file path", action: copy(g.source_var_path) }]),
+    ]);
   });
   window.__refreshInternalizeResourcesView = () => izRender();
   window.addEventListener("scroll", izFitPanel, { passive: true, capture: true });

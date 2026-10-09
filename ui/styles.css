@@ -19605,6 +19605,15 @@ button.pkg-stat:focus-visible::after {
 
 /* ---- Internalize Resources: Fix Missing's layout, packages as rows ---- */
 
+/* The Copy in card before a choice: what can be copied, and Choose all. */
+.fm-plan.is-empty.iz-plan-offer {
+  flex-wrap: wrap;
+}
+
+.iz-plan-offer > span:not(.material-symbols-outlined) {
+  flex: 1 1 200px;
+}
+
 /* A package that isn't installed has no picture. */
 .iz-no-thumb {
   display: grid;
