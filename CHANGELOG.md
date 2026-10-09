@@ -127,7 +127,10 @@ release time, it fills it with the commit messages since the last release.
   package comes in whole, so every copy drops the dependency; one it can't
   copy in whole isn't offered, and the summary says why. A file missing from
   a package comes from an exact copy in another package when there is one;
-  otherwise the summary opens Fix Missing. Plugins stay dependencies. It
+  otherwise the summary opens Fix Missing. A dependency that isn't installed
+  can be made unnecessary the same way: when every file used from it has an
+  exact copy, those are copied in and the package works without it, with no
+  download. Plugins stay dependencies. It
   fixes the original, with a backup in the same folder as Fix Missing's,
   and checks it again
 
