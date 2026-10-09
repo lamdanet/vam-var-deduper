@@ -76,7 +76,8 @@ release time, it fills it with the commit messages since the last release.
   (Preferred source, Avoided source) and sets them from the right-click
   menu, for one package or a selection. The list works from the keyboard and with
   screen readers. Package Explorer has a Check refs button and shows what
-  the last check found, with Fix references. It replaces Missing
+  the last check found, with Fix references. Checking a package with many
+  missing files takes seconds, not a quarter of a minute. It replaces Missing
   Resources: the sidebar, Send to and the right-click menus open Fix
   Missing
 - **Package Explorer**: a new page that shows one package in pictures. It
