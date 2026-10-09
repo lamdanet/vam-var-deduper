@@ -9234,7 +9234,7 @@ function fmPrefsChanged() {
 function fmAutoOk(c) {
   return Boolean(c) && (c.isSelf || fmPref(c.package_id) !== -1);
 }
-const FM_STORE = { inPlace: "fm.inPlace", backup: "fm.backup", outputDir: "fm.outputDir", recent: "fm.recent", prefTip: "fm.prefTip" };
+const FM_STORE = { inPlace: "fm.inPlace", backup: "fm.backup", outputDir: "fm.outputDir", recent: "fm.recent", prefTip: "fm.prefTip", autoReplace: "fm.autoReplace" };
 
 function fmKey(ref) {
   return `${ref.ref_pkg}|${ref.ref_path ?? ""}`;
@@ -9268,6 +9268,12 @@ function fmRecentGet() {
 function fmRecentAdd(path, count) {
   const list = [{ path, count, at: Date.now() }, ...fmRecentGet().filter((r) => r.path !== path)].slice(0, 8);
   fmStoreSet(FM_STORE.recent, JSON.stringify(list));
+}
+
+// Writing a fixed copy: then check it and, if it's clean, put it in place
+// of the original (with a backup) in the same click. On unless turned off.
+function fmAutoReplace() {
+  return fmStoreGet(FM_STORE.autoReplace, "1") === "1";
 }
 
 function fmInPlace() {
@@ -9656,6 +9662,7 @@ async function fmApply() {
   const isCopy = Boolean(FM.fixedFrom);
   const inPlace = isCopy || fmInPlace();
   const outputDir = isCopy ? "" : fmOutputDir();
+  let auto = null;
   if (!inPlace && !outputDir) {
     fmFlash("Choose a folder for the fixed copy first.");
     fmRenderStrip();
@@ -9708,28 +9715,58 @@ async function fmApply() {
     FM.report = { ...(p.fix_report ?? {}), inPlace, isCopy, count: fixes.length };
     FM.fixedKeys = new Set(FM.picks.keys());
     if (inPlace) vpRefreshAfterMutation().catch(() => {});
+    if (!inPlace && !isCopy && fmAutoReplace() && FM.report.output_path && !(FM.report.errors ?? []).length) {
+      auto = {
+        original: FM.target,
+        copy: FM.report.output_path,
+        left: new Set((FM.refs ?? []).filter((r) => !FM.picks.has(fmKey(r))).map(fmKey)),
+        report: FM.report,
+      };
+    }
   } catch (e) {
     showToast(`The fix failed: ${String(e?.message || e)}`, "error", 8000);
   } finally {
     FM.applying = false;
     fmRender();
   }
+  if (auto) await fmAutoFinish(auto);
+}
+
+// "Then check it and put it in place": the fixed copy is checked, and only
+// if nothing is missing in it beyond what was left unchosen does it take the
+// original's place, with a backup. Otherwise it stays on the fixed copy.
+async function fmAutoFinish({ original, copy, left, report }) {
+  fmOpen(copy, { fixedFrom: original });
+  fmFlash("Checking the fixed copy…");
+  await fmScan();
+  if (FM.target !== copy || FM.error || !Array.isArray(FM.refs)) return;
+  const extra = FM.refs.filter((r) => !left.has(fmKey(r)));
+  if (extra.length) {
+    showToast(
+      `The fixed copy has ${pkgCount(extra.length, "missing file", "missing files")} the original didn't, so it wasn't put in place. Have a look.`,
+      "error",
+      9000,
+    );
+    return;
+  }
+  await fmReplaceOriginal({ ask: false, backup: true, report });
 }
 
 // The last step of a fix to a copy: the copy takes the original's place.
-async function fmReplaceOriginal() {
+async function fmReplaceOriginal({ ask = true, backup = fmBackup(), report = null } = {}) {
   const original = FM.fixedFrom;
   const fixed = FM.target;
   if (!invoke || !original || !fixed || FM.replacing || FM.scanning) return;
   const name = libTitle(libFindItem(original) ?? pkgBareItem(original));
-  const backup = fmBackup();
   const left = (FM.refs ?? []).length;
-  const ok = await showAppConfirm(
-    `Put the fixed copy in place of ${name}?${left ? ` It still has ${pkgCount(left, "missing file", "missing files")}.` : ""}${
-      backup ? " A backup of the original is kept." : " No backup is kept."
-    }`,
-  );
-  if (!ok) return;
+  if (ask) {
+    const ok = await showAppConfirm(
+      `Put the fixed copy in place of ${name}?${left ? ` It still has ${pkgCount(left, "missing file", "missing files")}.` : ""}${
+        backup ? " A backup of the original is kept." : " No backup is kept."
+      }`,
+    );
+    if (!ok) return;
+  }
   FM.replacing = true;
   fmRenderDetails();
   try {
@@ -9737,7 +9774,7 @@ async function fmReplaceOriginal() {
     vpRefreshAfterMutation().catch(() => {});
     // Back on the original, checked again to show it's fixed.
     fmOpen(original);
-    FM.replaced = { name, backupPath: backupPath ?? null };
+    FM.replaced = { name, backupPath: backupPath ?? null, report };
     fmScan();
   } catch (e) {
     showToast(`Couldn't put the fixed copy in place: ${String(e?.message || e)}`, "error", 8000);
@@ -10173,7 +10210,9 @@ function fmPlanHtml() {
     : fmInPlace()
       ? `${libTitle(FM.item)} itself${fmBackup() ? ", keeping a backup" : ""}`
       : dir
-        ? `a copy in ${dir.split(/[\\/]/).filter(Boolean).pop()}\\changed`
+        ? `a copy in ${dir.split(/[\\/]/).filter(Boolean).pop()}\\changed${
+            fmAutoReplace() ? `, check it, then put it in place of ${libTitle(FM.item)} (backup kept)` : ""
+          }`
         : "a copy (choose its folder above)";
   const line = (icon, label, body) => `<div class="fm-plan-line"><span class="material-symbols-outlined">${icon}</span><span class="fm-plan-label">${label}</span><span class="fm-plan-body">${body}</span></div>`;
   return `<div class="fm-plan">
@@ -10243,6 +10282,13 @@ function fmRenderDetails() {
     ? `<div class="fm-report">
         <span class="material-symbols-outlined">check_circle</span>
         <div><b>${escapeHtml(FM.replaced.name)} is now the fixed version.</b>
+          ${
+            FM.replaced.report
+              ? `<small>Fixed ${pkgCount(Number(FM.replaced.report.fixes_applied ?? FM.replaced.report.count), "missing file", "missing files")}; the fixed copy was checked first.</small>
+                ${(FM.replaced.report.dependencies_added ?? []).length ? `<small class="fm-report-pkgs">Now depends on ${FM.replaced.report.dependencies_added.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
+                ${(FM.replaced.report.dependencies_removed ?? []).length ? `<small class="fm-report-pkgs">No longer depends on ${FM.replaced.report.dependencies_removed.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}`
+              : ""
+          }
           <small>${
             FM.replaced.backupPath
               ? `The original is backed up: <span title="${escapeAttribute(FM.replaced.backupPath)}">${escapeHtml(FM.replaced.backupPath.split(/[\\/]/).slice(-3).join("\\"))}</span>`
@@ -10262,7 +10308,13 @@ function fmRenderDetails() {
           <label class="radio-pill" title="Rewrite the package itself">
             <input type="radio" name="fm-out" value="inplace" ${inPlace ? "checked" : ""} /><span>Fix the original</span></label>
         </div>
-        ${inPlace ? `<label class="check-row"><input id="fm-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>Keep a backup of the original</span></label>` : fmFolderButton()}
+        ${
+          inPlace
+            ? `<label class="check-row"><input id="fm-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>Keep a backup of the original</span></label>`
+            : `${fmFolderButton()}
+              <label class="check-row fm-auto-replace" title="Run Fixes writes the copy, checks it, and puts it in place of the original only if nothing new is missing in it. The original goes to the folder's backup.">
+                <input id="fm-autoreplace" type="checkbox" ${fmAutoReplace() ? "checked" : ""} /><span>Then check it and put it in place of the original (keeps a backup)</span></label>`
+        }
       </div>`
     : "";
   let cta = "";
@@ -10291,6 +10343,10 @@ function fmRenderDetails() {
     ${folded || !FM.target ? "" : `<div class="var-info-panel">${fmInfoHtml()}</div>`}
     ${replaced}${report}${replace}${settings}${refs.length && !FM.report && !(FM.fixedFrom && !FM.picks.size) ? fmPlanHtml() : ""}${cta}`;
   $("fm-backup")?.addEventListener("change", (e) => fmStoreSet(FM_STORE.backup, e.target.checked ? "1" : "0"));
+  $("fm-autoreplace")?.addEventListener("change", (e) => {
+    fmStoreSet(FM_STORE.autoReplace, e.target.checked ? "1" : "0");
+    fmRenderDetails();
+  });
   libThumbWatch(host);
 }
 
@@ -11442,7 +11498,7 @@ function fmOnClick(e) {
       if (FM.report?.output_path) fmOpen(FM.report.output_path, { scan: true, fixedFrom: FM.target });
       break;
     case "replace":
-      fmReplaceOriginal();
+      fmReplaceOriginal({});
       break;
     case "show-backup":
       if (FM.replaced?.backupPath) invoke("show_in_explorer", { path: FM.replaced.backupPath }).catch(() => {});
