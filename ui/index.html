@@ -90,10 +90,6 @@
                 <span class="material-symbols-outlined">data_object</span>
                 <span class="sidebar-label" id="sidebar-resource-list-label">Resource List</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="missing-resources">
-                <span class="material-symbols-outlined">link_off</span>
-                <span class="sidebar-label">Missing Resources</span>
-              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="fix-missing">
                 <span class="material-symbols-outlined">healing</span>
                 <span class="sidebar-label">Fix Missing</span>
@@ -1643,238 +1639,6 @@
         </div>
       </section>
 
-      <!-- Missing Resources View (hidden by default; revealed by sidebar link) -->
-      <section id="missing-resources-view" class="app-main missing-resources-view hidden">
-        <!-- Top Grid: Source Config + VAR Details (mirrors Overview) -->
-        <section class="dashboard-grid">
-          <!-- Source Configuration -->
-          <article class="card source-card">
-            <header class="card-eyebrow">Source Configuration</header>
-            <div class="source-body">
-              <div class="var-details-dropzone missing-target-dropzone" id="missing-target-dropzone">
-                <div class="var-details-dropzone-icon">
-                  <span class="material-symbols-outlined">upload_file</span>
-                </div>
-                <h4 class="var-details-dropzone-title">Drag and drop target VAR</h4>
-                <p class="var-details-dropzone-subtitle">The .var file you want to fix.</p>
-                <div class="var-details-dropzone-actions">
-                  <button id="missing-pick-target" class="primary-button" type="button">Select File</button>
-                </div>
-              </div>
-              <div class="path-grid">
-                <div class="path-row">
-                  <span class="path-label">Target VAR Path</span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">description</span>
-                      <input id="missing-target-var" type="text" placeholder="No file selected" spellcheck="false" />
-                    </div>
-                  </div>
-                </div>
-                <div class="path-row">
-                  <span class="path-label">VAR Folder</span>
-                  <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
-                  <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
-                  <input id="missing-input-dir" type="hidden" />
-                </div>
-                <div class="path-row">
-                  <span class="path-label" id="missing-additional-dirs-label"></span>
-                  <div class="additional-dirs">
-                    <div id="missing-additional-dirs" class="additional-dirs-list"></div>
-                    <button id="missing-add-folder-button" class="ghost-button" type="button"></button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="profile-row" id="missing-mode-row">
-                <span class="profile-row-label" id="missing-mode-label"
-                      title="Which replacement candidates to show for each missing resource. Local only: candidates found in the scanned VAR folder. Database: local plus everything in the resource index. Either way, every missing reference is listed — even ones with no candidate at all.">Mode</span>
-                <div class="radio-group" role="radiogroup" aria-labelledby="missing-mode-label">
-                  <label class="radio-pill">
-                    <input type="radio" name="missing-mode" value="local" checked />
-                    <span>Local only</span>
-                  </label>
-                  <label class="radio-pill">
-                    <input type="radio" name="missing-mode" value="db" />
-                    <span>Database</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="action-row">
-                <button id="missing-scan-button" class="primary-button action-button" type="button">Scan Target VAR</button>
-              </div>
-            </div>
-          </article>
-
-          <!-- VAR Details + Run CTA -->
-          <article class="card details-card">
-            <header class="card-eyebrow">VAR Details</header>
-            <div id="missing-var-info-panel" class="var-info-panel">
-              <p id="missing-var-info-empty" class="var-info-empty">No target VAR selected.</p>
-              <div id="missing-var-info-body" class="var-info-body hidden">
-                <div class="var-info-text">
-                  <h2 class="var-info-title">
-                    <span id="missing-var-info-label"></span>
-                  </h2>
-                  <div class="var-info-grid">
-                    <div class="var-info-row">
-                      <span class="var-info-key">Size</span>
-                      <span id="missing-var-info-size-val"></span>
-                    </div>
-                    <div class="var-info-row">
-                      <span class="var-info-key">Modified</span>
-                      <span id="missing-var-info-time-val"></span>
-                    </div>
-                    <div id="missing-var-info-scene-row" class="var-info-row hidden">
-                      <span class="var-info-key">Scene</span>
-                      <span id="missing-var-info-scene-val" class="var-info-val-mono"></span>
-                    </div>
-                  </div>
-                </div>
-                <div id="missing-var-info-thumb" class="var-info-thumb hidden">
-                  <img id="missing-var-info-scene-img" alt="scene preview" />
-                </div>
-              </div>
-            </div>
-
-            <!-- Run-time settings: output folder + replace/backup toggles
-                 belong with the Run Fixes button, not the scan controls. -->
-            <div class="missing-run-settings">
-              <div class="path-grid">
-                <div class="path-row">
-                  <span class="path-label">Output Folder</span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">folder_open</span>
-                      <input id="missing-output-dir" type="text" placeholder="D:\Vars_fixed" spellcheck="false" />
-                    </div>
-                    <button id="missing-pick-output" class="ghost-button" type="button">Browse</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="toggle-row">
-                <label class="check-row"
-                       title="When on, the rewritten VAR overwrites the original file at its current location. When off, the fixed VAR is written to <Output Folder>/changed/<filename>.var and the original is left untouched.">
-                  <input id="missing-replace-in-place" type="checkbox" />
-                  <span>Replace in place</span>
-                </label>
-                <label class="check-row"
-                       title="When on, the original VAR is copied to <Output Folder>/backup/ (or a sibling fix-var-backup folder if no Output Folder is set) before Replace in place overwrites it. Disabled when Replace in place is off — in that mode the original is already preserved in its source folder.">
-                  <input id="missing-backup" type="checkbox" checked />
-                  <span>Backup before fix</span>
-                </label>
-              </div>
-            </div>
-
-            <div class="run-cta">
-              <div class="run-cta-text">
-                <span class="run-cta-eyebrow">Final Step</span>
-                <span class="run-cta-sub">Apply chosen replacements</span>
-              </div>
-              <button id="missing-run-button" class="accent-button action-button" type="button" disabled>Run Fixes</button>
-            </div>
-          </article>
-        </section>
-
-        <!-- Progress -->
-        <section id="missing-progress-card" class="progress-card card hidden">
-          <div class="progress-head">
-            <strong id="missing-progress-title">Scanning</strong>
-            <span id="missing-progress-percent">0%</span>
-          </div>
-          <div class="progress-track">
-            <div id="missing-progress-bar" class="progress-bar"></div>
-          </div>
-          <p id="missing-progress-message" class="panel-subtitle"></p>
-        </section>
-
-        <p class="missing-resources-status" id="missing-status"></p>
-
-        <!-- Two-panel grid: Missing Resources list + Replacement Sources -->
-        <section class="content-grid">
-          <article class="panel card">
-            <div class="panel-head panel-head-groups">
-              <div class="panel-head-main">
-                <div class="groups-header-row">
-                  <h2>Missing Resources</h2>
-                  <div class="group-filter-stack">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">search</span>
-                      <input id="missing-list-filter" type="search" placeholder="Filter by package / path / kind" />
-                    </div>
-                  </div>
-                </div>
-                <p class="panel-subtitle" id="missing-list-subtitle">Scan a target VAR to populate this list.</p>
-              </div>
-            </div>
-            <div id="missing-list" class="group-list empty"></div>
-            <div id="missing-list-pagination" class="group-pagination hidden"></div>
-          </article>
-
-          <article class="panel card">
-            <div class="panel-head">
-              <div>
-                <h2 id="missing-detail-title">Replacement Sources</h2>
-                <p class="panel-subtitle" id="missing-detail-subtitle">
-                  Select a missing resource to view candidates.
-                </p>
-              </div>
-            </div>
-            <div id="missing-detail-empty" class="detail-empty">
-              No missing resource selected.
-            </div>
-            <div id="missing-detail-panel" class="detail-panel hidden">
-              <div class="detail-meta">
-                <div class="detail-block">
-                  <span>Broken reference</span>
-                  <code id="missing-detail-ref"></code>
-                </div>
-                <div class="detail-chip-row">
-                  <span class="chip" id="missing-detail-kind"></span>
-                  <span class="chip" id="missing-detail-crc"></span>
-                </div>
-              </div>
-              <section class="missing-source-files-section">
-                <h3>Referenced in</h3>
-                <ul id="missing-source-files" class="missing-source-files"></ul>
-              </section>
-              <section class="keep-actions">
-                <h3>Local candidates</h3>
-                <div id="missing-local-candidates" class="keep-options"></div>
-                <div id="missing-db-section">
-                  <div class="missing-db-header">
-                    <h3>Database candidates</h3>
-                    <input id="missing-db-search" type="search" class="missing-db-search"
-                           placeholder="Filter by package id or path…" spellcheck="false" />
-                  </div>
-                  <div id="missing-db-scroll" class="missing-db-scroll">
-                    <div id="missing-db-candidates" class="keep-options"></div>
-                    <div id="missing-db-sentinel" class="missing-db-sentinel" aria-hidden="true"></div>
-                  </div>
-                </div>
-              </section>
-              <section class="quick-actions">
-                <button id="missing-apply-scope-button" class="ghost-button" type="button" disabled
-                        title="Apply the current replacement package to every broken ref sharing the same broken package as the current one (where that package has a matching candidate).">
-                  Apply to same broken pkg
-                </button>
-                <button id="missing-apply-filtered-button" class="ghost-button" type="button" disabled
-                        title="Apply the current replacement package to every broken ref currently visible after the filter (where that package has a matching candidate).">
-                  Apply to filtered refs
-                </button>
-                <button id="missing-apply-global-button" class="ghost-button" type="button" disabled
-                        title="Apply the current replacement package to every broken ref in the list (where that package has a matching candidate).">
-                  Apply to all refs
-                </button>
-                <button id="missing-clear-button" class="ghost-button" type="button" disabled>Clear Choices</button>
-              </section>
-            </div>
-          </article>
-        </section>
-      </section>
-
       <!-- Internalize Resources View — inverse of Missing Resources. For
            every *valid* external `Pkg:/path` ref in the target VAR, the user
            can pick to copy the referenced bundle (vam + vaj + vab + textures)
@@ -2227,7 +1991,7 @@
                 <p class="settings-path-hint">
                   Offload moves packages (and the dependencies you pick) out of AddonPackages into this folder, so
                   VaM stops loading them; Restore moves them back. Unticked, a package keeps the subfolder it had.
-                  VAR Packages, Clean Duplicates, Missing Resources, Internalize and the other scans include this folder.
+                  VAR Packages, Clean Duplicates, Fix Missing, Internalize and the other scans include this folder.
                 </p>
               </div>
 
@@ -2253,7 +2017,7 @@
                   <span>Move them into AddonPackages instead of copying</span>
                 </label>
                 <p class="settings-path-hint">
-                  Drop .var files or folders anywhere (except Package Explorer, Missing Resources and Internalize, which take
+                  Drop .var files or folders anywhere (except Package Explorer, Fix Missing and Internalize, which take
                   one .var) to add them to your library. Each is checked first; ones already in the library are skipped.
                 </p>
               </div>
@@ -3166,10 +2930,9 @@
             var resourceList = document.getElementById("resource-list-view");
             var reclaim = document.getElementById("reclaim-space-view");
             var uniqueResources = document.getElementById("unique-resources-view");
-            var missingResources = document.getElementById("missing-resources-view");
             var internalizeResources = document.getElementById("internalize-resources-view");
             var dbfPage = document.getElementById("dbf-page");
-            if (!settings || !buildDb || !varPackages || !resourceList || !reclaim || !uniqueResources || !missingResources || !internalizeResources || !dbfPage) return;
+            if (!settings || !buildDb || !varPackages || !resourceList || !reclaim || !uniqueResources || !internalizeResources || !dbfPage) return;
             // Hub (after VaM Backstage's Hub page) is hidden with the rest.
             var hubView = document.getElementById("hub-view");
             if (hubView) hubView.classList.add("hidden");
@@ -3185,13 +2948,12 @@
             resourceList.classList.add("hidden");
             reclaim.classList.add("hidden");
             uniqueResources.classList.add("hidden");
-            missingResources.classList.add("hidden");
             internalizeResources.classList.add("hidden");
             dbfPage.classList.add("hidden");
             if (route === "hub" && hubView) {
               hubView.classList.remove("hidden");
               if (window.__refreshHubView) window.__refreshHubView();
-            } else if (route === "fix-missing" && fmView) {
+            } else if ((route === "fix-missing" || route === "missing-resources") && fmView) {
               fmView.classList.remove("hidden");
               if (window.__refreshFixMissingView) window.__refreshFixMissingView();
             } else if (route === "pkg-explorer" && pkgView) {
@@ -3219,9 +2981,6 @@
             } else if (route === "unique-resources") {
               uniqueResources.classList.remove("hidden");
               if (window.__refreshUniqueResourcesView) window.__refreshUniqueResourcesView();
-            } else if (route === "missing-resources") {
-              missingResources.classList.remove("hidden");
-              if (window.__refreshMissingResourcesView) window.__refreshMissingResourcesView();
             } else if (route === "internalize-resources") {
               internalizeResources.classList.remove("hidden");
               if (window.__refreshInternalizeResourcesView) window.__refreshInternalizeResourcesView();
