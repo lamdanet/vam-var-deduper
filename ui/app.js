@@ -9180,6 +9180,8 @@ const FM = {
   recheck: false,
   // the last fix of this package: its report, shown after the check that follows
   lastFix: null,
+  // the Run Fixes preview shows every change, not its one-line summary
+  planOpen: false,
   // keys whose database list shows every package, not the first five
   dbShow: new Set(),
   // a narrow window: Replacement Sources is a sheet, open or folded to its strip
@@ -9956,8 +9958,6 @@ function fmRenderSource() {
 // What the check found, as chips: the count stands out, the rest is plain.
 function fmInfoChips() {
   const refs = FM.refs ?? [];
-  const absent = new Set(refs.filter((r) => r.kind !== "transitive").map((r) => r.ref_pkg)).size;
-  const inside = refs.filter((r) => r.kind === "transitive").length;
   const summary = FM.scanning
     ? `<span class="chip">Checking…</span>`
     : FM.error
@@ -9967,9 +9967,7 @@ function fmInfoChips() {
         : !Array.isArray(FM.refs)
           ? `<span class="chip">Not checked yet</span>`
           : refs.length
-            ? `<span class="chip fm-chip-warn"><span class="material-symbols-outlined">report</span>${pkgCount(refs.length, "missing file", "missing files")}</span>${
-                absent ? `<span class="chip fm-chip-info"><span class="material-symbols-outlined">deployed_code</span>${pkgCount(absent, "package not installed", "packages not installed")}</span>` : ""
-              }${inside ? `<span class="chip fm-chip-info"><span class="material-symbols-outlined">folder_off</span>${pkgCount(inside, "file", "files")} missing in installed packages</span>` : ""}`
+            ? `<span class="chip fm-chip-warn"><span class="material-symbols-outlined">report</span>${pkgCount(refs.length, "missing file", "missing files")}</span>`
             : `<span class="chip chip-accent"><span class="material-symbols-outlined">check_circle</span>Nothing missing</span>`;
   return summary;
 }
@@ -10137,31 +10135,31 @@ function fmPlanHtml() {
   const drops = [...new Set(chosen.map((r) => r.ref_pkg))].filter((pkg) => refs.filter((r) => r.ref_pkg === pkg).every((r) => FM.picks.has(fmKey(r))));
   const dir = fmBackupDir();
   const where = `${libTitle(FM.item)} itself${
-    !fmBackup() ? ", without a backup" : dir ? `, after backing it up to ${dir.split(/[\\/]/).filter(Boolean).pop()}` : " (choose a folder for the backup)"
+    !fmBackup() ? ", without a backup" : dir ? `, after backing it up to …\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : " (choose a folder for the backup)"
   }`;
   const line = (icon, label, body) => `<div class="fm-plan-line"><span class="material-symbols-outlined">${icon}</span><span class="fm-plan-label">${label}</span><span class="fm-plan-body">${body}</span></div>`;
-  return `<div class="fm-plan">
-      <div class="fm-plan-h">Run Fixes will</div>
-      ${line("edit", "Rewrite", `${pkgCount(chosen.length, "reference", "references")} in ${escapeHtml(files.join(", ") || "meta.json")}`)}
-      ${line("add_link", "Add", adds.length ? few(adds, (pkg) => fmPkgLabelHtml(pkg)) : `<span class="fm-dim">no new dependency</span>`)}
-      ${drops.length ? line("link_off", "No longer need", few(drops, (pkg) => fmPkgLabelHtml(pkg))) : ""}
-      ${line("save", "Write", escapeHtml(where))}
+  const summary = [
+    `rewrites ${pkgCount(chosen.length, "reference", "references")}`,
+    adds.length ? `adds ${pkgCount(adds.length, "dependency", "dependencies")}` : "no new dependency",
+    drops.length ? `${drops.length} no longer needed` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const open = FM.planOpen;
+  return `<div class="fm-plan${open ? "" : " is-folded"}">
+      <button type="button" class="fm-plan-toggle" data-fm-act="plan" aria-expanded="${open}" title="${open ? "Fold" : "What it changes, in detail"}">
+        <span class="fm-plan-h">Run Fixes</span><span class="fm-plan-sum">${escapeHtml(summary)}</span>
+        <span class="material-symbols-outlined">${open ? "expand_less" : "expand_more"}</span>
+      </button>
+      ${
+        open
+          ? `${line("edit", "Rewrite", `${pkgCount(chosen.length, "reference", "references")} in ${escapeHtml(files.join(", ") || "meta.json")}`)}
+             ${line("add_link", "Add", adds.length ? few(adds, (pkg) => fmPkgLabelHtml(pkg)) : `<span class="fm-dim">no new dependency</span>`)}
+             ${drops.length ? line("link_off", "No longer need", few(drops, (pkg) => fmPkgLabelHtml(pkg))) : ""}
+             ${line("save", "Write", escapeHtml(where))}`
+          : ""
+      }
     </div>`;
-}
-
-// The backup folder as its name, with the full path on hover.
-function fmFolderButton() {
-  const dir = fmBackupDir();
-  if (!dir) {
-    return `<button type="button" class="fm-folder-btn is-empty" data-fm-act="pick-backup"><span class="material-symbols-outlined">create_new_folder</span>
-        <span class="fm-folder-btn-text"><b>Choose a folder for the backups</b></span></button>`;
-  }
-  const parts = dir.split(/[\\/]/).filter(Boolean);
-  return `<button type="button" class="fm-folder-btn" data-fm-act="pick-backup" title="${escapeAttribute(`${dir}\nBackups go here, never over an earlier one. Click to choose another folder.`)}">
-      <span class="material-symbols-outlined">folder_open</span>
-      <span class="fm-folder-btn-text"><b>${escapeHtml(parts[parts.length - 1] ?? dir)}</b><small>${escapeHtml(parts.length > 1 ? `…\\${parts.slice(-3, -1).join("\\")}` : "")}</small></span>
-      <span class="fm-link">Change</span>
-    </button>`;
 }
 
 function fmRenderDetails() {
@@ -10173,6 +10171,7 @@ function fmRenderDetails() {
   const report = fix
     ? `<div class="fm-report">
         <span class="material-symbols-outlined">check_circle</span>
+        <button type="button" class="fm-icon-btn fm-report-close" data-fm-act="fix-report-close" title="Close" aria-label="Close"><span class="material-symbols-outlined">close</span></button>
         <div><b>Fixed ${pkgCount(Number(fix.fixes_applied ?? fix.count), "missing file", "missing files")} in ${escapeHtml(fix.name)}.</b>
           <small>${pkgCount(Number(fix.files_rewritten ?? 0), "file", "files")} inside the package rewritten.</small>
           ${(fix.dependencies_added ?? []).length ? `<small class="fm-report-pkgs">Now depends on ${fix.dependencies_added.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
@@ -10188,11 +10187,20 @@ function fmRenderDetails() {
       </div>`
     : "";
   // The fix rewrites the package itself: keep a backup (and where), or not.
+  const dir = fmBackupDir();
   const settings = refs.length
-    ? `<div class="missing-run-settings fm-backup-settings">
+    ? `<div class="fm-backup-line">
         <label class="check-row" title="A copy of the package as it is now, before the fix rewrites it">
-          <input id="fm-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>Keep a backup of the original</span></label>
-        ${fmBackup() ? fmFolderButton() : ""}
+          <input id="fm-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>${fmBackup() ? "Keep a backup in" : "Keep a backup of the original"}</span></label>
+        ${
+          fmBackup()
+            ? `<button type="button" class="fm-folder-chip-btn${dir ? "" : " is-empty"}" data-fm-act="pick-backup"
+                title="${escapeAttribute(dir ? `${dir}\nBackups go here, never over an earlier one. Click to choose another folder.` : "Choose where backups go")}">
+                <span class="material-symbols-outlined">folder_open</span><span class="fm-folder-chip-text">${escapeHtml(
+                  dir ? `…\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : "choose a folder",
+                )}</span><span class="material-symbols-outlined">expand_more</span></button>`
+            : ""
+        }
       </div>`
     : "";
   let cta = "";
@@ -10835,7 +10843,7 @@ function fmRenderStrip() {
   const coming = c.downloading + c.downloaded;
   host.innerHTML = `<span class="fm-ring" title="${c.ready} of ${c.total} have a replacement or a download">${pkgRing(c.ready / c.total, c.ready === c.total ? "var(--accent-success)" : "var(--primary)", { size: 38, track: "var(--line)" })}<b>${c.chosen}</b></span>
        <span class="fm-strip-text"><b>${c.chosen} of ${c.total} chosen${coming ? ` · ${coming} by download` : ""}</b><small>${
-         FM.flash ? escapeHtml(FM.flash) : c.chosen ? "Run Fixes rewrites these; the rest stay as they are." : "Fix as many or as few as you like."
+         FM.flash ? escapeHtml(FM.flash) : c.chosen ? "The rest stay as they are." : "Fix as many or as few as you like."
        }</small></span>
        ${FM.picks.size ? `<button type="button" class="ghost-button fm-small" data-fm-act="clear-picks" title="Clear every choice"><span class="material-symbols-outlined">close</span>Clear all</button>` : ""}
        <button type="button" class="accent-button fm-small" data-fm-act="apply" ${c.chosen && !FM.applying ? "" : "disabled"}>${
@@ -11035,7 +11043,7 @@ function fmRenderDetail() {
       <div class="fm-ref-acts">
         <button type="button" class="ghost-button fm-small" data-fm-explore-pkg="${escapeAttribute(ref.ref_pkg)}" data-fm-explore-file="${escapeAttribute(
           (state.varPackagesItems ?? []).find((it) => it.package_id === ref.ref_pkg)?.file_path ?? "",
-        )}" title="${escapeAttribute(`Open ${ref.ref_pkg} in Package Explorer`)}"><span class="material-symbols-outlined">space_dashboard</span>Explore ${escapeHtml(pkgIdParts(ref.ref_pkg).name)}</button>
+        )}" title="${escapeAttribute(`Open ${ref.ref_pkg} in Package Explorer`)}"><span class="material-symbols-outlined">space_dashboard</span>Explore package</button>
         <button type="button" class="ghost-button fm-small" data-fm-act="details" aria-expanded="${showDetails}"><span class="material-symbols-outlined">${
           showDetails ? "expand_less" : "info"
         }</span>${showDetails ? "Hide details" : "Details"}</button>
@@ -11418,6 +11426,14 @@ function fmOnClick(e) {
       break;
     case "show-file":
       invoke("show_in_explorer", { path: FM.target }).catch(() => {});
+      break;
+    case "fix-report-close":
+      FM.lastFix = null;
+      fmRenderDetails();
+      break;
+    case "plan":
+      FM.planOpen = !FM.planOpen;
+      fmRenderDetails();
       break;
     case "show-backup":
       if (FM.lastFix?.backup_path) invoke("show_in_explorer", { path: FM.lastFix.backup_path }).catch(() => {});

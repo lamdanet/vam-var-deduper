@@ -19224,3 +19224,102 @@ button.pkg-stat:focus-visible::after {
 .lib-status-avoid {
   color: var(--accent-danger);
 }
+
+/* ---- Fix Missing: a shorter Fix card ---- */
+
+/* The backup on one line: the checkbox and its folder. */
+.fm-backup-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px 12px;
+}
+
+.fm-backup-line .check-row {
+  margin: 0;
+}
+
+.fm-folder-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fm-folder-chip-btn:hover {
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--line));
+}
+
+.fm-folder-chip-btn .material-symbols-outlined {
+  flex: 0 0 auto;
+  font-size: 16px;
+  color: var(--primary);
+}
+
+.fm-folder-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-folder-chip-btn.is-empty {
+  border-style: dashed;
+  color: var(--accent-warn);
+}
+
+/* The Run Fixes preview: one line, opening for the details. */
+.fm-plan.is-folded {
+  padding: 8px 12px;
+}
+
+.fm-plan-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fm-plan-sum {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.fm-plan-toggle > .material-symbols-outlined {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+/* The last fix's report closes. */
+.fm-report {
+  position: relative;
+}
+
+.fm-report-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
