@@ -227,7 +227,7 @@ pub(crate) fn scan_target_var_for_external_refs(
 /// cache. Other extensions stand alone. Members are only included if they
 /// actually exist in the source archive — the user might have a partial bundle
 /// upstream and we don't want to lie about what we'd copy.
-fn expand_bundle_for_ref(
+pub(crate) fn expand_bundle_for_ref(
     ref_path: &str,
     entry_sizes: &BTreeMap<String, (u64, u32)>,
     source_archive: &mut ZipArchive<fs::File>,

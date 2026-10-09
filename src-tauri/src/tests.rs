@@ -6732,3 +6732,65 @@ fn users_of_leaves_out_the_asking_package() {
     assert_eq!(users[1], Some(Vec::new()));
     assert_eq!(users[2], None, "not in the listing");
 }
+
+#[test]
+fn dependency_usage_adds_up_every_user() {
+    use crate::dep_usage::{analyze_dependency_usage, RefCache};
+
+    let dir = repo_root().join("tmp_dep_usage_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let big = vec![b'x'; 5000];
+    write_test_var_with_deps(
+        &dir.join("D.Big.1.var"),
+        &[],
+        &[
+            ("Custom/a.png", &b"aaaa"[..]),
+            ("Custom/big.png", &big[..]),
+            ("Custom/Clothing/x.vam", &b"{}"[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
+        ],
+    );
+    write_test_var_with_deps(
+        &dir.join("T.Scene.1.var"),
+        &["D.Big.1"],
+        &[("Saves/scene/s.json", &br#"{ "t": "D.Big.1:/Custom/a.png" }"#[..])],
+    );
+    write_test_var_with_deps(
+        &dir.join("U.Look.1.var"),
+        &["D.Big.latest"],
+        &[("Saves/Person/l.json", &br#"{ "c": "D.Big.latest:/Custom/Clothing/x.vam", "a": "D.Big.1:/Custom/a.png" }"#[..])],
+    );
+    write_test_var_with_deps(&dir.join("V.Other.1.var"), &[], &[("Saves/scene/v.json", &b"{}"[..])]);
+
+    let item = |id: &str, deps: &[&str]| {
+        let path = dir.join(format!("{id}.var"));
+        let mut it = lib_item(id, deps);
+        it.file_path = path.to_string_lossy().to_string();
+        it.size_bytes = fs::metadata(&path).expect("size").len();
+        it
+    };
+    let items = vec![
+        item("D.Big.1", &[]),
+        item("T.Scene.1", &["D.Big.1"]),
+        item("U.Look.1", &["D.Big.latest"]),
+        item("V.Other.1", &[]),
+    ];
+    let cache = Mutex::new(RefCache::default());
+    let report = analyze_dependency_usage(&dir.join("T.Scene.1.var"), &items, &cache, |_, _| {}).expect("analyze");
+
+    assert_eq!(report.target_package_id, "T.Scene.1");
+    assert_eq!(report.deps.len(), 1);
+    let d = &report.deps[0];
+    assert_eq!(d.package_id.as_deref(), Some("D.Big.1"));
+    assert_eq!(d.users.len(), 2, "the scene and the look; V doesn't depend on it");
+    assert!(d.users[0].is_target, "the analysed package comes first");
+    assert_eq!(d.target_bytes, 4, "just a.png");
+    let look = &d.users[1];
+    assert_eq!(look.package_id, "U.Look.1");
+    assert_eq!((look.files, look.bytes), (3, 4 + 2 + 2), "a.png and the .vam with its .vaj");
+    assert_eq!(d.sum_bytes, 4 + 8);
+    assert_eq!(d.union_bytes, 8, "a.png counted once");
+    fs::remove_dir_all(&dir).expect("cleanup");
+}

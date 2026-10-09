@@ -393,6 +393,9 @@ pub(crate) struct ProgressPayload {
     pub(crate) fix_report: Option<FixReport>,
     #[serde(default)]
     pub(crate) internalize_report: Option<InternalizeReport>,
+    /// Result payload for `start_dependency_usage_task` (Dependency Usage).
+    #[serde(default)]
+    pub(crate) dependency_usage_result: Option<DepUsageReport>,
     /// Result payload for `start_scan_missing_resources_task`. Background
     /// scan that walks every text payload in the target VAR, harvests
     /// `Pkg:/path` refs, classifies them against the local scan + DB, and
@@ -932,6 +935,9 @@ pub(crate) struct AppState {
     /// snapshot under the live key and be served forever. The walker snapshots
     /// this counter first and refuses to commit if it moved.
     pub(crate) var_packages_cache_generation: Arc<AtomicU64>,
+    /// Each package's `Pkg:/path` references, for Dependency Usage; checked
+    /// against the file's size and modified time.
+    pub(crate) dep_refs_cache: Arc<Mutex<crate::dep_usage::RefCache>>,
 }
 
 impl AppState {
@@ -947,6 +953,7 @@ impl AppState {
             var_info_cache: Arc::new(Mutex::new(None)),
             recycle_support: Arc::new(Mutex::new(HashMap::new())),
             var_packages_cache_generation: Arc::new(AtomicU64::new(0)),
+            dep_refs_cache: Arc::new(Mutex::new(crate::dep_usage::RefCache::default())),
         }
     }
 }
@@ -1501,3 +1508,44 @@ pub(crate) struct OffloadFailure {
 /// Every running task's progress by task id, shared between the UI's polling
 /// and the task's worker thread.
 pub(crate) type TaskMap = Arc<Mutex<HashMap<u64, ProgressPayload>>>;
+
+/// One package that uses a dependency, and how much of it it references.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct DepUser {
+    pub(crate) package_id: String,
+    pub(crate) file_path: String,
+    /// The files it references, with what they need (a .vam's .vaj, textures).
+    pub(crate) bytes: u64,
+    pub(crate) files: u32,
+    /// The package the analysis is for.
+    pub(crate) is_target: bool,
+}
+
+/// One dependency of the analysed package, across every package that uses it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct DepUsage {
+    /// As meta.json lists it.
+    pub(crate) declared: String,
+    /// The package in the folders it resolves to; `None` when not installed.
+    pub(crate) package_id: Option<String>,
+    pub(crate) file_path: Option<String>,
+    pub(crate) size: u64,
+    /// Only another version of it is installed.
+    pub(crate) other_version: bool,
+    /// The analysed package first, then the others by bytes.
+    pub(crate) users: Vec<DepUser>,
+    /// Distinct files all users reference.
+    pub(crate) union_bytes: u64,
+    /// What copying each user's files into it would add, all users together.
+    pub(crate) sum_bytes: u64,
+    pub(crate) target_bytes: u64,
+    pub(crate) target_files: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct DepUsageReport {
+    pub(crate) target_package_id: String,
+    /// Packages whose references were read.
+    pub(crate) packages_read: u32,
+    pub(crate) deps: Vec<DepUsage>,
+}
