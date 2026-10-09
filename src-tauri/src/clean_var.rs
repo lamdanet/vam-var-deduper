@@ -12,7 +12,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc, Mutex},
     thread,
 };
@@ -23,6 +23,7 @@ use tauri::State;
 
 use crate::{
     db::{self, Db},
+    dep_usage::{read_refs_many, RefCache},
     execute::{prepare_package_changes, rewrite_package, sum_removed_bytes},
     fix_var::free_backup_path,
     models::{AppState, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
@@ -60,6 +61,10 @@ pub(crate) struct CleanItem {
     pub(crate) bundle: Vec<String>,
     /// Installed packages first.
     pub(crate) copies: Vec<CleanSource>,
+    /// Other packages that reference it (or what goes with it) in this
+    /// package by path: removing it would break them, so it stays.
+    #[serde(default)]
+    pub(crate) used_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -70,6 +75,8 @@ pub(crate) struct CleanReport {
     /// (offered as content, not used): left alone.
     pub(crate) unreferenced_files: u32,
     pub(crate) unreferenced_bytes: u64,
+    /// The packages read to see who uses its files.
+    pub(crate) users_read: u32,
 }
 
 /// The same file, however its path is spelled (a package outside the
@@ -89,11 +96,44 @@ fn is_scene(path: &str) -> bool {
     lower.starts_with("saves/scene/") || lower.contains("/saves/scene/")
 }
 
+/// The target's files other packages in the folders reference by path (any
+/// version of it, `.latest` too): lowercase path -> those packages. Its users are the
+/// packages listing it as a dependency; a reference only works while the
+/// file is there, so these can't go.
+pub(crate) fn used_by_others(
+    scanned: &ScannedData,
+    target_id: &str,
+    cache: &Mutex<RefCache>,
+) -> (BTreeMap<String, Vec<String>>, u32) {
+    let family = naming::package_base(target_id).to_ascii_lowercase();
+    let users: Vec<(&String, PathBuf)> = scanned
+        .packages
+        .values()
+        .filter(|p| p.package_id != target_id)
+        .filter(|p| {
+            p.dependencies
+                .as_object()
+                .is_some_and(|m| m.keys().any(|k| naming::package_base(k).eq_ignore_ascii_case(&family)))
+        })
+        .map(|p| (&p.package_id, p.file_path.clone()))
+        .collect();
+    let paths: Vec<PathBuf> = users.iter().map(|(_, f)| f.clone()).collect();
+    let refs = read_refs_many(&paths, cache, |_, _| {});
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for ((id, _), r) in users.iter().zip(refs) {
+        for path in r.get(&family).into_iter().flatten() {
+            out.entry(path.to_ascii_lowercase()).or_default().push((*id).clone());
+        }
+    }
+    (out, users.len() as u32)
+}
+
 /// What the target uses itself that has exact copies elsewhere.
 pub(crate) fn clean_candidates(
     target_path: &Path,
     scanned: &ScannedData,
     db: Option<&Db>,
+    cache: &Mutex<RefCache>,
 ) -> Result<CleanReport> {
     let target_str = target_path.to_string_lossy().to_string();
     let target = scanned
@@ -183,6 +223,7 @@ pub(crate) fn clean_candidates(
             bundle: bundle_of(&path),
             path,
             copies,
+            used_by: Vec::new(),
         });
     }
 
@@ -237,10 +278,22 @@ pub(crate) fn clean_candidates(
                         size: r.effective_size.max(r.size),
                         bundle: bundle_of(&r.internal_path),
                         copies: extra,
+                        used_by: Vec::new(),
                     });
                 }
             }
         }
+    }
+
+    // Who else uses each file (with what goes with it) from this package.
+    let (used, read) = used_by_others(scanned, &target_id, cache);
+    report.users_read = read;
+    for item in &mut report.items {
+        let mut by: BTreeSet<String> = BTreeSet::new();
+        for path in std::iter::once(&item.path).chain(item.bundle.iter()) {
+            by.extend(used.get(&path.to_ascii_lowercase()).into_iter().flatten().cloned());
+        }
+        item.used_by = by.into_iter().collect();
     }
 
     report.items.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
@@ -267,7 +320,7 @@ pub(crate) fn clean_var_candidates(
     let scanned = load_cached_scan_with_target(&state.scan_cache, Path::new(&input_dir), &additional, Some(target_path))
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No folder scan yet: check the package again.".to_string())?;
-    clean_candidates(target_path, &scanned, include_db.then_some(&*db)).map_err(|e| e.to_string())
+    clean_candidates(target_path, &scanned, include_db.then_some(&*db), &state.dep_refs_cache).map_err(|e| e.to_string())
 }
 
 /// What Clean did to the package.
@@ -288,6 +341,7 @@ pub(crate) fn apply_clean(
     keep_map: &BTreeMap<String, String>,
     backup_dir: Option<&Path>,
     db: Option<&Db>,
+    cache: &Mutex<RefCache>,
 ) -> Result<CleanResult> {
     let target_id = scanned
         .packages
@@ -319,6 +373,12 @@ pub(crate) fn apply_clean(
         .ok_or_else(|| anyhow!("the package isn't in the scan"))?;
     if package.removed_paths.is_empty() && package.required_dependencies.is_empty() {
         bail!("nothing to change");
+    }
+    // Never remove a file another package references here (the page doesn't
+    // offer one): it would break that package.
+    let (used, _) = used_by_others(&scanned, &target_id, cache);
+    if let Some((path, users)) = package.removed_paths.iter().find_map(|p| used.get(&p.to_ascii_lowercase()).map(|u| (p, u))) {
+        bail!("{} uses {path} from this package: it can't go", users.join(", "));
     }
     let mut result = CleanResult {
         removed_files: package.removed_paths.len() as u32,
@@ -361,6 +421,7 @@ pub(crate) fn start_clean_var_task(
     }
     let tasks = Arc::clone(&state.tasks);
     let scan_cache = Arc::clone(&state.scan_cache);
+    let refs_cache = Arc::clone(&state.dep_refs_cache);
     let db = db.inner().clone();
     let additional = parse_additional_dirs(&additional_input_dirs.unwrap_or_default());
     thread::spawn(move || {
@@ -384,6 +445,7 @@ pub(crate) fn start_clean_var_task(
                 &keep_map,
                 if backup { backup_dir.map(Path::new) } else { None },
                 Some(&db),
+                &refs_cache,
             )
             .map_err(|e| e.to_string())
         })();

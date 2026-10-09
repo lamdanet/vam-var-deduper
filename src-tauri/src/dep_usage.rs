@@ -112,6 +112,37 @@ fn refs_cached(cache: &Mutex<RefCache>, path: &Path) -> Arc<RefMap> {
     refs
 }
 
+/// Reads several packages' references, several at a time (cached), in the
+/// order given. `progress(done, total)`.
+pub(crate) fn read_refs_many(
+    paths: &[PathBuf],
+    cache: &Mutex<RefCache>,
+    progress: impl Fn(usize, usize) + Sync,
+) -> Vec<Arc<RefMap>> {
+    let total = paths.len();
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let read: Mutex<HashMap<usize, Arc<RefMap>>> = Mutex::new(HashMap::new());
+    let workers = thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8);
+    thread::scope(|s| {
+        for _ in 0..workers.min(total.max(1)) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                let Some(path) = paths.get(i) else {
+                    break;
+                };
+                let refs = refs_cached(cache, path);
+                if let Ok(mut guard) = read.lock() {
+                    guard.insert(i, refs);
+                }
+                progress(done.fetch_add(1, Ordering::SeqCst) + 1, total);
+            });
+        }
+    });
+    let mut read = read.into_inner().unwrap_or_default();
+    (0..total).map(|i| read.remove(&i).unwrap_or_default()).collect()
+}
+
 /// The most used files the report lists; the rest are only counted.
 const USED_FILES_CAP: usize = 400;
 
@@ -158,29 +189,16 @@ pub(crate) fn analyze_package_usage(
 
     // Read every user's references (the slow part), several at a time.
     let total = users.len();
-    let next = AtomicUsize::new(0);
-    let done = AtomicUsize::new(0);
-    let read: Mutex<HashMap<usize, Arc<RefMap>>> = Mutex::new(HashMap::new());
-    let workers = thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8);
-    thread::scope(|s| {
-        for _ in 0..workers {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::SeqCst);
-                let Some(&u) = users.get(i) else {
-                    break;
-                };
-                let refs = refs_cached(cache, Path::new(&items[u].file_path));
-                if let Ok(mut guard) = read.lock() {
-                    guard.insert(u, refs);
-                }
-                let n = done.fetch_add(1, Ordering::SeqCst) + 1;
-                if n.is_multiple_of(4) || n == total {
-                    progress(0.05 + 0.85 * n as f64 / total as f64, &format!("Reading the packages that use it: {n} of {total}"));
-                }
-            });
-        }
-    });
-    let read = read.into_inner().unwrap_or_default();
+    let paths: Vec<PathBuf> = users.iter().map(|&u| PathBuf::from(&items[u].file_path)).collect();
+    let read: HashMap<usize, Arc<RefMap>> = users
+        .iter()
+        .copied()
+        .zip(read_refs_many(&paths, cache, |n, total| {
+            if n.is_multiple_of(4) || n == total {
+                progress(0.05 + 0.85 * n as f64 / total as f64, &format!("Reading the packages that use it: {n} of {total}"));
+            }
+        }))
+        .collect();
     progress(0.92, "Adding up what each one uses");
 
     // Measure what each user references in it.
