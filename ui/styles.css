@@ -19925,3 +19925,14 @@ button.pkg-stat:focus-visible::after {
 .fm-cand-row.has-thumb .fm-cand-top > .fm-cand-pick {
   min-width: 120px;
 }
+
+/* ---- Clean VARs (new pages) ---- */
+
+.cv-db-check {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+}
+
+.fm-best.cv-warn-box {
+  border-color: color-mix(in srgb, var(--accent-warn) 45%, var(--line));
+}

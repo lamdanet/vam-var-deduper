@@ -13861,6 +13861,1111 @@ function setupDependencyUsage() {
   duRender();
 }
 
+// ---- Clean VARs (new) -------------------------------------------------------------------
+// Make a package smaller: a file it uses itself that another package also has
+// (same contents) can go, its references pointing at that package, which
+// becomes a dependency. The inverse of Internalize Resources. Two layouts on
+// one state, to compare: by package (choose a package, every file of yours it
+// has points there) and by file (choose a copy per file). Fixes the original,
+// with a backup, like Fix Missing and Internalize.
+
+const CV = {
+  target: "",
+  item: null,
+  token: 0,
+  // CleanReport once checked; null before.
+  report: null,
+  scanning: false,
+  progress: 0,
+  message: "",
+  error: "",
+  // item key -> { pkg, path }: the copy the file points at after Clean
+  picks: new Map(),
+  // the package (by package) or the file key (by file) the right panel shows
+  selPkg: null,
+  selFile: null,
+  filterPkg: "all",
+  filterFile: "all",
+  query: "",
+  applying: false,
+  lastFix: null,
+  planOpen: false,
+  configOpen: null,
+  flash: "",
+  flashTimer: null,
+  start: null,
+  // also offer packages only the database knows (not installed)
+  withDb: false,
+  // which page shows it: "pkg" or "file"
+  layout: "pkg",
+};
+const CV_RECENT = "cv.recent";
+const CV_VIEWS = { pkg: "cvp-view", file: "cvf-view" };
+const CV_ROUTES = { pkg: "clean-by-package", file: "clean-by-file" };
+
+function cvView(layout = CV.layout) {
+  return $(CV_VIEWS[layout]);
+}
+
+function cvVisible(layout = CV.layout) {
+  const v = cvView(layout);
+  return Boolean(v && !v.classList.contains("hidden"));
+}
+
+function cvShowView(layout) {
+  CV.layout = layout;
+  const view = cvView();
+  if (!view) return;
+  // The two layouts share element ids: only the shown one holds them.
+  for (const other of Object.keys(CV_VIEWS)) {
+    if (other !== layout && cvView(other)) cvView(other).innerHTML = "";
+  }
+  document.querySelectorAll(".app-main").forEach((v) => v.classList.toggle("hidden", v !== view));
+  document.querySelectorAll("[data-sidebar-link]").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("data-sidebar-link") === CV_ROUTES[layout]);
+  });
+}
+
+function cvSelfName() {
+  return CV.item ? libTitle(CV.item) : "this package";
+}
+
+function cvRecentGet() {
+  try {
+    const list = JSON.parse(fmStoreGet(CV_RECENT, "[]"));
+    return Array.isArray(list) ? list.filter((r) => r && typeof r.path === "string") : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+function cvRecentAdd(path, note) {
+  const list = [{ path, note, at: Date.now() }, ...cvRecentGet().filter((r) => r.path !== path)].slice(0, 8);
+  fmStoreSet(CV_RECENT, JSON.stringify(list));
+}
+
+function cvOpen(target, { scan = false, layout = CV.layout } = {}) {
+  const fp = typeof target === "string" ? target : target?.file_path;
+  if (!fp) return;
+  if (CV.target !== fp) {
+    CV.token += 1;
+    Object.assign(CV, {
+      target: fp,
+      item: libFindItem(fp) ?? pkgBareItem(fp),
+      report: null,
+      error: "",
+      picks: new Map(),
+      selPkg: null,
+      selFile: null,
+      filterPkg: "all",
+      filterFile: "all",
+      query: "",
+      lastFix: null,
+      configOpen: null,
+    });
+  }
+  cvShowView(layout);
+  cvRender();
+  if (scan && !CV.scanning) cvScan();
+}
+
+// ---- Check -------------------------------------------------------------------------------
+
+// The start page's list: the biggest packages.
+async function cvLoadStart() {
+  if (CV.start || !invoke) return;
+  const inputDir = vamAddonPackagesDir();
+  if (!inputDir) return;
+  CV.start = { loading: true, items: [], total: 0, error: "" };
+  try {
+    const page = await invoke("list_var_packages", {
+      inputDir,
+      additionalInputDirs: getAdditionalDirs("varPackages"),
+      offset: 0,
+      limit: 20,
+      search: null,
+      filters: {},
+      sort: "size",
+      sortDir: "desc",
+      forceRescan: false,
+      deepScan: state.varPackagesScannedDeep !== false,
+      offloadDir: offloadDir() || null,
+    });
+    const items = (page?.items ?? []).filter((it) => !it.offloaded);
+    CV.start = { loading: false, items, total: Number(page?.total ?? items.length), error: "" };
+  } catch (e) {
+    CV.start = { loading: false, items: [], total: 0, error: String(e?.message || e) };
+  }
+  if (!CV.target) cvRenderDetails();
+}
+
+async function cvScan() {
+  if (!invoke || !CV.target || CV.scanning) return;
+  const addon = vamAddonPackagesDir();
+  if (!addon) {
+    showToast("Set your VaM folder in Settings first.", "error");
+    return;
+  }
+  const token = CV.token;
+  const extra = missingExtraDirs();
+  Object.assign(CV, { scanning: true, progress: 0, message: "Reading your packages…", error: "", report: null });
+  cvRender();
+  try {
+    // The folder scan Fix Missing and Internalize use (cached after the
+    // first): it finds every exact copy of the package's files.
+    await fmPoll("start_scan_task", { request: { input_dir: addon, additional_input_dirs: extra, target_var_path: CV.target, skip_db: true } }, (f, m) => {
+      if (token !== CV.token) return;
+      CV.progress = f * 0.9;
+      if (m) CV.message = m;
+      cvRenderProgress();
+    });
+    if (token !== CV.token) return;
+    CV.progress = 0.92;
+    CV.message = CV.withDb ? "Looking for copies, in the database too…" : "Looking for copies…";
+    cvRenderProgress();
+    const report = await invoke("clean_var_candidates", { inputDir: addon, additionalInputDirs: extra, targetVarPath: CV.target, includeDb: CV.withDb });
+    if (token !== CV.token) return;
+    CV.report = report ?? { items: [] };
+    CV.configOpen = false;
+    const keys = new Set(cvItems().map((i) => i.key));
+    CV.picks = new Map([...CV.picks].filter(([k]) => keys.has(k)));
+    cvRecentAdd(CV.target, cvItems().length ? `${pkgCount(cvItems().length, "file", "files")} with copies` : "nothing to clean");
+    if (!cvPackages().some((p) => p.pkg === CV.selPkg)) CV.selPkg = cvPackages()[0]?.pkg ?? null;
+    if (!cvItems().some((i) => i.key === CV.selFile)) CV.selFile = cvItems()[0]?.key ?? null;
+  } catch (e) {
+    if (token !== CV.token) return;
+    CV.error = String(e?.message || e);
+  } finally {
+    if (token === CV.token) {
+      CV.scanning = false;
+      cvRender();
+    }
+  }
+}
+
+// ---- What the choices add up to ----------------------------------------------------------
+
+function cvItems() {
+  return CV.report?.items ?? [];
+}
+
+// The packages with copies of the package's files, worked out once per check.
+let cvMemo = { report: undefined };
+function cvPackages() {
+  if (cvMemo.report === CV.report) return cvMemo.pkgs;
+  const map = new Map();
+  for (const item of cvItems()) {
+    for (const c of item.copies ?? []) {
+      if (!map.has(c.package_id)) {
+        map.set(c.package_id, { pkg: c.package_id, file: c.file_path, installed: c.installed, dep: c.already_dependency, items: [] });
+      }
+      map.get(c.package_id).items.push({ item, copy: c });
+    }
+  }
+  const rank = (p) => (p.dep ? 0 : 1) * 4 + (p.installed ? 0 : 2) + (fmPref(p.pkg) === 1 ? 0 : 1) + (fmPref(p.pkg) === -1 ? 8 : 0);
+  const pkgs = [...map.values()]
+    .map((p) => ({ ...p, bytes: p.items.reduce((n, x) => n + Number(x.item.size ?? 0), 0) }))
+    .sort((a, b) => rank(a) - rank(b) || b.bytes - a.bytes || b.items.length - a.items.length);
+  cvMemo = { report: CV.report, pkgs, byPkg: new Map(pkgs.map((p) => [p.pkg, p])) };
+  return pkgs;
+}
+
+function cvPkg(pkg) {
+  cvPackages();
+  return cvMemo.byPkg.get(pkg) ?? null;
+}
+
+// The copy a file is best pointed at when nothing is chosen: one the
+// package already depends on, installed, one you prefer, not one you avoid.
+function cvSuggest(item) {
+  const copies = item.copies ?? [];
+  const score = (c) => (c.already_dependency ? 0 : 4) + (c.installed ? 0 : 16) + (fmPref(c.package_id) === 1 ? 0 : 1) + (fmPref(c.package_id) === -1 ? 8 : 0);
+  return [...copies].sort((a, b) => score(a) - score(b))[0] ?? null;
+}
+
+function cvTotals() {
+  const t = { files: cvItems().length, bytes: 0, chosen: 0, chosenBytes: 0, newDeps: new Set(), absent: new Set(), points: new Set() };
+  for (const item of cvItems()) {
+    t.bytes += Number(item.size ?? 0);
+    const p = CV.picks.get(item.key);
+    if (!p) continue;
+    const c = (item.copies ?? []).find((x) => x.package_id === p.pkg) ?? {};
+    t.chosen += 1;
+    t.chosenBytes += Number(item.size ?? 0);
+    t.points.add(p.pkg);
+    if (!c.already_dependency) t.newDeps.add(p.pkg);
+    if (c.installed === false) t.absent.add(p.pkg);
+  }
+  return t;
+}
+
+function cvPick(item, copy) {
+  CV.picks.set(item.key, { pkg: copy.package_id, path: copy.internal_path });
+}
+
+// A package's files point at it (by package): all of yours it has.
+function cvChoosePkg(p, on) {
+  for (const { item, copy } of p.items) {
+    if (on) cvPick(item, copy);
+    else if (CV.picks.get(item.key)?.pkg === p.pkg) CV.picks.delete(item.key);
+  }
+}
+
+function cvPkgState(p) {
+  const n = p.items.filter(({ item }) => CV.picks.get(item.key)?.pkg === p.pkg).length;
+  return { n, all: n > 0 && n === p.items.length };
+}
+
+function cvFlash(text) {
+  CV.flash = text;
+  const token = CV.token;
+  clearTimeout(CV.flashTimer);
+  CV.flashTimer = setTimeout(() => {
+    if (token !== CV.token) return;
+    CV.flash = "";
+    cvRenderStrip();
+  }, 4000);
+}
+
+// ---- Clean -------------------------------------------------------------------------------
+
+async function cvApply() {
+  if (!invoke || CV.applying || !CV.picks.size) return;
+  const backup = fmBackup();
+  const backupDir = fmBackupDir();
+  if (backup && !backupDir) {
+    cvFlash("Choose a folder for the backups first.");
+    cvRenderStrip();
+    return;
+  }
+  const t = cvTotals();
+  const name = libTitle(CV.item);
+  if (t.absent.size) {
+    const names = [...t.absent].map((p) => pkgIdParts(p).name).join(", ");
+    const ok = await showAppConfirm(`${name} will depend on ${pkgCount(t.absent.size, "package", "packages")} you don't have (${names}): it won't work until you download ${t.absent.size === 1 ? "it" : "them"}. Clean anyway?`);
+    if (!ok) return;
+  } else if (!backup) {
+    const ok = await showAppConfirm(`Clean ${name} without a backup?`);
+    if (!ok) return;
+  }
+  const keepMap = {};
+  for (const [key, p] of CV.picks) keepMap[key] = `${p.pkg}:${p.path}`;
+  CV.applying = true;
+  cvRenderStrip();
+  let done = null;
+  try {
+    const p = await fmPoll("start_clean_var_task", {
+      inputDir: vamAddonPackagesDir(),
+      additionalInputDirs: missingExtraDirs(),
+      targetVarPath: CV.target,
+      keepMap,
+      backup,
+      backupDir: backup ? backupDir : null,
+    });
+    done = { ...(p.clean_result ?? {}), name, points: [...t.points] };
+    vpRefreshAfterMutation().catch(() => {});
+  } catch (e) {
+    showToast(`Clean failed: ${String(e?.message || e)}`, "error", 8000);
+  } finally {
+    CV.applying = false;
+    cvRender();
+  }
+  if (done) {
+    CV.lastFix = done;
+    CV.picks = new Map();
+    cvFlash(`Cleaned: ${formatBytesLocal(Number(done.removed_bytes ?? 0))} smaller. Checking it again…`);
+    await cvScan();
+  }
+}
+
+// ---- Render: shared ----------------------------------------------------------------------
+
+function cvRender() {
+  const view = cvView();
+  if (!view) return;
+  if (CV.configOpen == null || !CV.target) CV.configOpen = !CV.report;
+  const byPkg = CV.layout === "pkg";
+  view.innerHTML = `
+    <section class="dashboard-grid fm-top">
+      <article class="card source-card" id="cv-source"></article>
+      <article class="card details-card" id="cv-details"></article>
+    </section>
+    <section class="progress-card card${CV.scanning ? "" : " hidden"}" id="cv-progress">
+      <div class="progress-head"><strong>Checking</strong><span id="cv-progress-pct">0%</span></div>
+      <div class="progress-track"><div class="progress-bar" id="cv-progress-bar"></div></div>
+      <p class="panel-subtitle" id="cv-progress-msg"></p>
+    </section>
+    <section class="content-grid fm-grid cv-grid">
+      <article class="panel card fm-list-card cv-list-card">
+        <div class="panel-head panel-head-groups">
+          <div class="panel-head-main">
+            <div class="groups-header-row">
+              <h2>${byPkg ? "Packages with copies of its files" : "Files with copies elsewhere"}</h2>
+              <div class="group-filter-stack">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">search</span>
+                  <input id="cv-search" type="search" placeholder="${byPkg ? "Filter by package" : "Filter by file or package"}" value="${escapeAttribute(CV.query)}" />
+                </div>
+              </div>
+            </div>
+            <p class="panel-subtitle" id="cv-list-subtitle"></p>
+            <div id="cv-summary"></div>
+            <div class="fm-list-tools" id="cv-list-tools"></div>
+          </div>
+        </div>
+        <div id="cv-list" class="group-list" role="listbox"></div>
+      </article>
+      <article class="panel card fm-detail-card cv-detail-card" id="cv-detail"></article>
+    </section>`;
+  $("cv-search").addEventListener("input", (e) => {
+    CV.query = e.target.value.trim().toLowerCase();
+    cvRenderList();
+  });
+  cvRenderSource();
+  cvRenderDetails();
+  cvRenderProgress();
+  cvRenderRefs();
+}
+
+function cvRefresh() {
+  cvRenderDetails();
+  cvRenderRefs();
+}
+
+function cvRenderRefs() {
+  cvRenderSummary();
+  cvRenderList();
+  cvRenderDetail();
+}
+
+function cvRenderProgress() {
+  const card = $("cv-progress");
+  if (!card) return;
+  card.classList.toggle("hidden", !CV.scanning);
+  const pct = Math.round(CV.progress * 100);
+  const bar = $("cv-progress-bar");
+  if (bar) bar.style.width = `${pct}%`;
+  const label = $("cv-progress-pct");
+  if (label) label.textContent = `${pct}%`;
+  const msg = $("cv-progress-msg");
+  if (msg) msg.textContent = `${CV.message || "Working…"}${CV.progress < 0.9 ? " — the first check reads every package in your folders; later ones reuse that" : ""}`;
+}
+
+function cvInfoChip() {
+  if (CV.scanning) return `<span class="chip">Checking…</span>`;
+  if (CV.error) return `<span class="chip missing-kind-text-ref" title="${escapeAttribute(CV.error)}">Check failed</span>`;
+  if (!CV.report) return `<span class="chip">Not checked yet</span>`;
+  const t = cvTotals();
+  return t.files
+    ? `<span class="chip fm-chip-info"><span class="material-symbols-outlined">compress</span>${pkgCount(t.files, "file", "files")} with copies elsewhere · ${escapeHtml(formatBytesLocal(t.bytes))}</span>`
+    : `<span class="chip chip-accent"><span class="material-symbols-outlined">check_circle</span>Nothing to clean</span>`;
+}
+
+function cvRenderSource() {
+  const host = $("cv-source");
+  if (!host) return;
+  const dbBox = `<label class="check-row cv-db-check" title="Packages only the database knows: not installed, so the package would need them downloaded">
+      <input type="checkbox" id="cv-withdb" ${CV.withDb ? "checked" : ""} /><span>Also offer packages you don't have (from the database)</span></label>`;
+  if (CV.target && !CV.configOpen) {
+    const it = CV.item ?? pkgBareItem(CV.target);
+    const facts = [
+      it.size_bytes ? formatBytesLocal(it.size_bytes) : "",
+      it.item_count ? pkgCount(it.item_count, "item", "items") : "",
+      it.dep_count ? pkgCount(it.dep_count, "dependency", "dependencies") : "",
+      it.used_by_count ? `used by ${pkgCount(it.used_by_count, "package", "packages")}` : "",
+    ].filter(Boolean);
+    const tags = fmTypeTags(it);
+    host.innerHTML = `
+      <header class="card-eyebrow fm-eyebrow">Package
+        <button type="button" class="fm-link" data-cv-act="config" title="Pick another .var">Change</button></header>
+      <div class="fm-hero">
+        ${libThumbHtml(CV.target, libGradient(it.file_name || it.package_id), "fm-hero-thumb")}</div>
+        <div class="fm-hero-main">
+          <div class="fm-hero-title" title="${escapeAttribute(CV.target)}">
+            <h2>${escapeHtml(libTitle(it))}</h2>${libVersion(it) ? `<span class="fm-hero-ver">v${escapeHtml(libVersion(it))}</span>` : ""}
+          </div>
+          <div class="fm-hero-by">by <b>${escapeHtml(libCreator(it))}</b>${facts.length ? ` · ${escapeHtml(facts.join(" · "))}` : ""}</div>
+          ${tags ? `<div class="fm-hero-tags">${tags}</div>` : ""}
+          <div class="fm-info-chips">${cvInfoChip()}</div>
+          ${dbBox}
+          <div class="fm-hero-acts">
+            <button type="button" class="ghost-button fm-small" data-cv-act="explore"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
+            <button type="button" class="ghost-button fm-small" data-cv-act="show-file" title="${escapeAttribute(CV.target)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+            <button type="button" class="ghost-button fm-small" data-cv-act="scan" ${CV.scanning ? "disabled" : ""}><span class="material-symbols-outlined">refresh</span>${CV.scanning ? "Checking…" : "Check again"}</button>
+          </div>
+        </div>
+      </div>`;
+    libThumbWatch(host);
+    return;
+  }
+  host.innerHTML = `
+    <header class="card-eyebrow fm-eyebrow">Package${CV.target && CV.report ? `<button type="button" class="fm-link" data-cv-act="config">Fold</button>` : ""}</header>
+    <div class="source-body">
+      <div class="var-details-dropzone missing-target-dropzone fm-dropzone${CV.target ? " is-compact" : ""}" data-cv-act="pick" role="button" tabindex="0">
+        <div class="var-details-dropzone-icon"><span class="material-symbols-outlined">upload_file</span></div>
+        <h4 class="var-details-dropzone-title">${CV.target ? "Drop another .var to check it instead" : "Drag and drop a .var"}</h4>
+        <p class="var-details-dropzone-subtitle">${CV.target ? "or click to pick one" : "The package to make smaller, by pointing at copies of its files in other packages."}</p>
+        ${CV.target ? "" : `<div class="var-details-dropzone-actions"><button type="button" class="primary-button" data-cv-act="pick">Select File</button></div>`}
+      </div>
+      <div class="path-grid"><div class="path-row">${dbBox}</div></div>
+      <div class="action-row">
+        <button type="button" class="primary-button action-button fm-scan-btn" data-cv-act="scan" ${CV.target && !CV.scanning ? "" : "disabled"}>${
+          CV.scanning ? "Checking…" : CV.report ? "Check again" : "Check it"
+        }</button>
+      </div>
+    </div>`;
+}
+
+function cvStartHtml() {
+  const recent = cvRecentGet().slice(0, 5);
+  const known = new Set(recent.map((r) => r.path));
+  const st = CV.start;
+  const big = (st?.items ?? []).filter((it) => !known.has(it.file_path)).slice(0, 6);
+  const folder = (path) => {
+    const parts = String(path).split(/[\\/]/).filter(Boolean);
+    return parts.length > 1 ? `…\\${parts.slice(-3, -1).join("\\")}` : "";
+  };
+  const row = (path, item, note) => `<button type="button" class="fm-start-row" data-cv-start="${escapeAttribute(path)}" title="${escapeAttribute(path)}">
+      <span class="fm-start-text"><b>${escapeHtml(libTitle(item))}</b><small>by ${escapeHtml(libCreator(item))} · ${escapeHtml(folder(path))}</small></span>
+      <span class="chip">${escapeHtml(note)}</span>
+    </button>`;
+  const parts = [];
+  if (recent.length) {
+    parts.push(`<h3 class="fm-start-h">Checked lately</h3>${recent.map((r) => row(r.path, libFindItem(r.path) ?? pkgBareItem(r.path), r.note || "checked")).join("")}`);
+  }
+  parts.push(
+    `<h3 class="fm-start-h">Your biggest packages</h3>${
+      !st || st.loading
+        ? `<p class="fm-none-line">Looking through your packages…</p>`
+        : st.error
+          ? `<p class="fm-none-line">Couldn't list them: ${escapeHtml(st.error)}</p>`
+          : big.length
+            ? big.map((it) => row(it.file_path, it, formatBytesLocal(it.size_bytes))).join("")
+            : `<p class="fm-none-line">No packages yet.</p>`
+    }`,
+  );
+  return `<div class="fm-start">${parts.join("")}<p class="fm-start-note">Pick one to check it, or drop a .var on the left.</p></div>`;
+}
+
+function cvPlanHtml() {
+  const t = cvTotals();
+  if (!t.chosen) {
+    return `<div class="fm-plan is-empty"><span class="material-symbols-outlined">edit_note</span>
+        <span>${t.files ? `Nothing chosen yet. ${pkgCount(t.files, "file", "files")} could go: about ${escapeHtml(formatBytesLocal(t.bytes))}.` : "Choose copies to point at, and this shows what Clean will change."}</span></div>`;
+  }
+  const few = (list, html) => `${list.slice(0, 3).map(html).join("")}${list.length > 3 ? `<small class="fm-plan-more">and ${list.length - 3} more</small>` : ""}`;
+  const dir = fmBackupDir();
+  const where = `${cvSelfName()} itself${!fmBackup() ? ", without a backup" : dir ? `, after backing it up to …\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : " (choose a folder for the backup)"}`;
+  const line = (icon, label, body) => `<div class="fm-plan-line"><span class="material-symbols-outlined">${icon}</span><span class="fm-plan-label">${label}</span><span class="fm-plan-body">${body}</span></div>`;
+  const summary = `${pkgCount(t.chosen, "file", "files")} · ${formatBytesLocal(t.chosenBytes)} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`;
+  const open = CV.planOpen;
+  return `<div class="fm-plan${open ? "" : " is-folded"}">
+      <button type="button" class="fm-plan-toggle" data-cv-act="plan" aria-expanded="${open}">
+        <span class="fm-plan-h">Clean</span><span class="fm-plan-sum">${escapeHtml(summary)}</span>
+        <span class="material-symbols-outlined">${open ? "expand_less" : "expand_more"}</span>
+      </button>
+      ${
+        open
+          ? `${line("delete_sweep", "Remove", `${pkgCount(t.chosen, "file", "files")} with what goes with them, about ${escapeHtml(formatBytesLocal(t.chosenBytes))}`)}
+             ${line("link", "Point at", few([...t.points], (pkg) => fmPkgLabelHtml(pkg)))}
+             ${t.newDeps.size ? line("add_link", "New dependencies", few([...t.newDeps], (pkg) => fmPkgLabelHtml(pkg))) : ""}
+             ${t.absent.size ? line("warning", "Not installed", `${few([...t.absent], (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">${cvSelfName()} won't work until ${t.absent.size === 1 ? "it's" : "they're"} downloaded</small>`) : ""}
+             ${line("save", "Write", escapeHtml(where))}`
+          : ""
+      }
+    </div>`;
+}
+
+function cvRenderDetails() {
+  const host = $("cv-details");
+  if (!host) return;
+  if (!CV.target) {
+    cvLoadStart();
+    host.innerHTML = `<header class="card-eyebrow">Start from</header>${cvStartHtml()}`;
+    return;
+  }
+  const fix = CV.lastFix;
+  const report = fix
+    ? `<div class="fm-report">
+        <span class="material-symbols-outlined">check_circle</span>
+        <button type="button" class="fm-icon-btn fm-report-close" data-cv-act="fix-report-close" title="Close" aria-label="Close"><span class="material-symbols-outlined">close</span></button>
+        <div><b>Cleaned ${escapeHtml(fix.name)}: ${escapeHtml(formatBytesLocal(Number(fix.removed_bytes ?? 0)))} smaller.</b>
+          <small>${pkgCount(Number(fix.removed_files ?? 0), "file", "files")} removed; its references point at the copies now.</small>
+          ${(fix.dependencies ?? []).length ? `<small class="fm-report-pkgs">Now depends on ${fix.dependencies.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
+          <small>${fix.backup_path ? `The original is backed up: <span title="${escapeAttribute(fix.backup_path)}">${escapeHtml(fix.backup_path.split(/[\\/]/).slice(-2).join("\\"))}</span>` : "No backup of the original was kept."}</small>
+          ${fix.backup_path ? `<div class="fm-replace-acts"><button type="button" class="ghost-button fm-small" data-cv-act="show-backup"><span class="material-symbols-outlined">folder_open</span>Show the backup</button></div>` : ""}
+        </div>
+      </div>`
+    : "";
+  const dir = fmBackupDir();
+  const has = cvItems().length;
+  const settings = has
+    ? `<div class="fm-backup-line">
+        <label class="check-row" title="A copy of the package as it is now (shared with Fix Missing and Internalize)">
+          <input id="cv-backup" type="checkbox" ${fmBackup() ? "checked" : ""} /><span>${fmBackup() ? "Keep a backup in" : "Keep a backup of the original"}</span></label>
+        ${
+          fmBackup()
+            ? `<button type="button" class="fm-folder-chip-btn${dir ? "" : " is-empty"}" data-cv-act="pick-backup" title="${escapeAttribute(dir || "Choose where backups go")}">
+                <span class="material-symbols-outlined">folder_open</span><span class="fm-folder-chip-text">${escapeHtml(dir ? `…\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : "choose a folder")}</span><span class="material-symbols-outlined">expand_more</span></button>`
+            : ""
+        }
+      </div>`
+    : "";
+  const cta = has
+    ? ""
+    : CV.report && !CV.error
+      ? `<p class="fm-details-hint fm-details-clean"><span class="material-symbols-outlined">check_circle</span>Nothing to clean: no file it uses has a copy elsewhere${CV.withDb ? "" : " in your folders"}.</p>`
+      : CV.scanning
+        ? ""
+        : `<p class="fm-details-hint">Check the package to see which of its files other packages have too.</p>`;
+  host.innerHTML = `<header class="card-eyebrow">Clean</header>${report}${settings}${has ? cvPlanHtml() : ""}${cta}`;
+  $("cv-backup")?.addEventListener("change", (e) => {
+    fmStoreSet(FM_STORE.backup, e.target.checked ? "1" : "0");
+    cvRenderDetails();
+  });
+}
+
+function cvRenderSummary() {
+  const host = $("cv-summary");
+  if (!host) return;
+  const items = cvItems();
+  if (!CV.report || (!items.length && !CV.report.unreferenced_files)) {
+    host.innerHTML = "";
+    return;
+  }
+  const self = escapeHtml(cvSelfName());
+  // Installed ones only: pointing at a dependency that isn't installed still
+  // leaves the package needing a download.
+  const inDep = items.filter((i) => (i.copies ?? []).some((c) => c.already_dependency && c.installed));
+  const onlyDb = items.filter((i) => (i.copies ?? []).every((c) => !c.installed));
+  const openDep = inDep.filter((i) => !CV.picks.has(i.key));
+  const t = cvTotals();
+  const lines = [
+    items.length ? `<li><b>${items.length}</b> ${items.length === 1 ? "file it uses has" : "files it uses have"} an exact copy elsewhere: ${escapeHtml(formatBytesLocal(t.bytes))} in all.</li>` : "",
+    inDep.length ? `<li><b>${inDep.length}</b> ${inDep.length === 1 ? "is" : "are"} in an installed package ${self} already depends on: pointing there adds no dependency.</li>` : "",
+    onlyDb.length ? `<li><b>${onlyDb.length}</b> ${onlyDb.length === 1 ? "has copies" : "have copies"} only in packages you don't have (database).</li>` : "",
+    CV.report.unreferenced_files
+      ? `<li><b>${CV.report.unreferenced_files}</b> more ${CV.report.unreferenced_files === 1 ? "file has" : "files have"} copies (${escapeHtml(formatBytesLocal(Number(CV.report.unreferenced_bytes ?? 0)))}) but ${self} doesn't use ${CV.report.unreferenced_files === 1 ? "it" : "them"} itself: left alone.</li>`
+      : "",
+  ].join("");
+  host.innerHTML = `<div class="fm-summary"><span class="material-symbols-outlined">info</span><div><ul>${lines}</ul>${
+    openDep.length
+      ? `<div class="fm-summary-acts"><button type="button" class="ghost-button fm-small" data-cv-act="choose-deps"><span class="material-symbols-outlined">done_all</span>Point those ${openDep.length} at packages it already depends on</button></div>`
+      : ""
+  }</div></div>`;
+}
+
+function cvRenderStrip() {
+  const host = $("cv-strip");
+  if (!host) return;
+  if (!cvItems().length) {
+    host.innerHTML = "";
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+  const t = cvTotals();
+  const of = `${t.chosen} of ${pkgCount(t.files, "file", "files")} chosen`;
+  const note = CV.flash
+    ? escapeHtml(CV.flash)
+    : t.chosen
+      ? `${escapeHtml(formatBytesLocal(t.chosenBytes))} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`
+      : "Each file you choose points at its copy instead.";
+  host.innerHTML = `<span class="fm-ring" title="${escapeAttribute(of)}">${pkgRing(t.files ? t.chosen / t.files : 0, t.chosen && t.chosen === t.files ? "var(--accent-success)" : "var(--primary)", { size: 38, track: "var(--line)" })}<b>${t.chosen}</b></span>
+     <span class="fm-strip-text"><b>${of}</b><small>${note}</small></span>
+     ${CV.picks.size ? `<button type="button" class="ghost-button fm-small" data-cv-act="clear-picks"><span class="material-symbols-outlined">close</span>Clear all</button>` : ""}
+     <button type="button" class="accent-button fm-small" data-cv-act="apply" ${t.chosen && !CV.applying ? "" : "disabled"}>${CV.applying ? "Cleaning…" : t.chosen ? `Clean (${t.chosen})` : "Clean"}</button>`;
+}
+
+// Chips for a package: already a dependency, not installed, your marks.
+function cvPkgChips(p) {
+  return [
+    p.dep ? `<span class="chip fm-chip-good" title="The package already lists it as a dependency: pointing there adds none">already a dependency</span>` : "",
+    p.installed === false ? `<span class="chip fm-chip-warn" title="Only the database knows it: the package won't work until it's downloaded">not installed</span>` : "",
+    fmPref(p.pkg) === 1 ? `<span class="chip fm-chip-pref"><span class="material-symbols-outlined">thumb_up</span>Preferred</span>` : "",
+    fmPref(p.pkg) === -1 ? `<span class="chip fm-chip-avoid"><span class="material-symbols-outlined">thumb_down</span>Avoid</span>` : "",
+  ].join("");
+}
+
+function cvThumb(p, cls) {
+  return p.installed === false || !p.file
+    ? `<span class="${cls} iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>`
+    : `${libThumbHtml(p.file, libGradient(p.pkg), cls)}</div>`;
+}
+
+function cvFileText(path) {
+  const slash = path.lastIndexOf("/");
+  const type = fmFileType(path);
+  return { name: slash >= 0 ? path.slice(slash + 1) : path, type };
+}
+
+// ---- Render: by package ------------------------------------------------------------------
+
+function cvRenderList() {
+  if (CV.layout === "file") return cvRenderFileList();
+  const host = $("cv-list");
+  const subtitle = $("cv-list-subtitle");
+  const tools = $("cv-list-tools");
+  if (!host) return;
+  if (!CV.report) {
+    host.className = "group-list empty";
+    host.innerHTML = CV.scanning ? "Checking…" : CV.error ? escapeHtml(CV.error) : CV.target ? "Check the package to list the packages with copies of its files." : "Pick a .var above, or one on the right.";
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  const pkgs = cvPackages();
+  if (!pkgs.length) {
+    host.className = "group-list empty";
+    host.innerHTML = `<span class="fm-clean"><span class="material-symbols-outlined">check_circle</span>No package has a copy of the files it uses.</span>`;
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  host.className = "group-list";
+  if (subtitle) subtitle.textContent = `${pkgCount(pkgs.length, "package", "packages")}, the ones it already depends on first`;
+  const filters = [
+    ["all", "All", () => true],
+    ["dep", "Already dependencies", (p) => p.dep],
+    ["installed", "Installed", (p) => p.installed],
+    ["absent", "Not installed", (p) => p.installed === false],
+    ["chosen", "Chosen", (p) => cvPkgState(p).n > 0],
+  ];
+  if (tools) {
+    tools.innerHTML = `<div class="fm-filter-row">${filters
+      .map(([k, label, f]) => [k, label, pkgs.filter(f).length])
+      .filter(([k, , n]) => k === "all" || n)
+      .map(([k, label, n]) => `<button type="button" class="fm-filter${CV.filterPkg === k ? " is-active" : ""}" data-cv-filter="${k}">${label} <small>${n}</small></button>`)
+      .join("")}</div>`;
+  }
+  const f = (filters.find(([k]) => k === CV.filterPkg) ?? filters[0])[2];
+  const q = CV.query;
+  const rows = pkgs.filter((p) => f(p) && (!q || p.pkg.toLowerCase().includes(q)));
+  if (!rows.length) {
+    host.innerHTML = `<p class="fm-none">No package matches.</p>`;
+    return;
+  }
+  host.innerHTML = rows
+    .map((p) => {
+      const parts = pkgIdParts(p.pkg);
+      const sub = [parts.creator, parts.ver].filter(Boolean).join(" · ");
+      const st = cvPkgState(p);
+      const right = st.n
+        ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed">${st.all ? `${pkgCount(st.n, "file points", "files point")} here` : `${st.n} of ${p.items.length} point here`}</span>
+            <button type="button" class="fm-icon-btn fm-row-clear" data-cv-pkg-clear="${escapeAttribute(p.pkg)}" title="Clear" aria-label="Clear"><span class="material-symbols-outlined">close</span></button></span>`
+        : "";
+      return `<div class="group-row missing-row fm-row iz-row${p.pkg === CV.selPkg ? " active focused" : ""}${st.n ? " is-chosen" : ""}" data-cv-row="${escapeAttribute(p.pkg)}" role="option" tabindex="${p.pkg === CV.selPkg ? 0 : -1}">
+          <span class="material-symbols-outlined fm-row-state${st.n ? "" : " is-dot"}">${st.all ? "check_circle" : st.n ? "incomplete_circle" : "fiber_manual_record"}</span>
+          ${cvThumb(p, "iz-row-thumb")}
+          <span class="fm-row-text">
+            <span class="fm-row-name" title="${escapeAttribute(p.pkg)}">${escapeHtml(parts.name)}${sub ? ` <small class="iz-row-sub">${escapeHtml(sub)}</small>` : ""}</span>
+            <span class="fm-row-dir"><span class="iz-fact">has ${pkgCount(p.items.length, "of your files", "of your files")} · ${escapeHtml(formatBytesLocal(p.bytes))}</span>${cvPkgChips(p)}</span>
+          </span>
+          ${right}
+        </div>`;
+    })
+    .join("");
+  libThumbWatch(host);
+}
+
+function cvRenderDetail() {
+  if (CV.layout === "file") return cvRenderFileDetail();
+  const host = $("cv-detail");
+  if (!host) return;
+  const p = cvPkg(CV.selPkg);
+  if (!p) {
+    host.innerHTML = `<div class="fm-strip hidden" id="cv-strip"></div>
+      <div class="panel-head"><div><h2>Its files there</h2><p class="panel-subtitle">${cvItems().length ? "Select a package to see which of your files it has." : "The files to point elsewhere are chosen here."}</p></div></div>
+      <div class="detail-empty">No package selected.</div>`;
+    cvRenderStrip();
+    return;
+  }
+  const parts = pkgIdParts(p.pkg);
+  const st = cvPkgState(p);
+  const self = escapeHtml(cvSelfName());
+  const why = p.installed === false
+    ? `${self} won't work until it's downloaded.`
+    : p.dep
+      ? `${self} already depends on it: no new dependency.`
+      : `It becomes a dependency of ${self}.`;
+  const box = st.all
+    ? `<div class="fm-chosen"><div class="fm-chosen-main"><span class="material-symbols-outlined">check_circle</span>
+        <div class="fm-chosen-text"><small>Chosen</small><b>${pkgCount(p.items.length, "file points", "files point")} here: ${escapeHtml(formatBytesLocal(p.bytes))} smaller.</b><small>${why}</small></div>
+        <button type="button" class="ghost-button fm-small" data-cv-pkg-clear="${escapeAttribute(p.pkg)}"><span class="material-symbols-outlined">close</span>Clear</button></div></div>`
+    : `<div class="fm-best iz-copy-box${p.installed === false ? " cv-warn-box" : ""}"><div class="fm-best-text">
+        <span class="fm-best-tag">Point here</span>
+        <b>${pkgCount(p.items.length, "file", "files")}, ${escapeHtml(formatBytesLocal(p.bytes))} smaller</b>
+        <small>${why}${p.items.some(({ item }) => CV.picks.has(item.key) && CV.picks.get(item.key).pkg !== p.pkg) ? " Some point at another package now; this moves them here." : ""}</small></div>
+        <button type="button" class="ghost-button" data-cv-pkg-choose="${escapeAttribute(p.pkg)}"><span class="material-symbols-outlined">done_all</span>${st.n ? "Point all here" : "Choose"}</button></div>`;
+  const files = p.items
+    .map(({ item, copy }) => {
+      const ft = cvFileText(item.path);
+      const pick = CV.picks.get(item.key);
+      const here = pick?.pkg === p.pkg;
+      const elsewhere = pick && !here ? pkgIdParts(pick.pkg).name : "";
+      return `<div class="fm-cand-row iz-file${here ? " is-selected" : ""}">
+          <div class="fm-cand-top"><span class="fm-cand-pick">
+            <span class="material-symbols-outlined fm-cand-radio">${here ? "check_circle" : "draft"}</span>
+            <span class="iz-file-text"><b title="${escapeAttribute(item.path)}">${escapeHtml(ft.name)}</b>
+              <span class="fm-row-dir">${fmTypeChip(ft.type.label)}${ft.type.rest ? `<span class="fm-row-folder"><span class="material-symbols-outlined">folder</span><span class="fm-trunc">${escapeHtml(ft.type.rest)}</span></span>` : ""}<span class="fm-dim">${escapeHtml(formatBytesLocal(Number(item.size ?? 0)))}</span></span></span></span>
+            <span class="fm-cand-tags">${elsewhere ? `<span class="chip">→ ${escapeHtml(elsewhere)}</span>` : ""}</span>
+          </div>
+          <div class="fm-cand-sub"><span class="fm-dim" title="${escapeAttribute(`${p.pkg}:/${copy.internal_path}`)}">${copy.internal_path === item.path ? "same path there" : `there: ${escapeHtml(copy.internal_path)}`}${(item.bundle ?? []).length ? ` · + ${pkgCount(item.bundle.length, "file goes", "files go")} with it` : ""}</span></div>
+        </div>`;
+    })
+    .join("");
+  host.innerHTML = `<div class="fm-strip" id="cv-strip"></div><h2 class="sr-only">Its files there</h2>
+    <div class="detail-panel fm-detail-body">
+      <div class="iz-pkg-head">${cvThumb(p, "iz-pkg-thumb")}
+        <div class="iz-pkg-text"><b title="${escapeAttribute(p.pkg)}">${escapeHtml(parts.name)}</b>
+          <small>${escapeHtml([parts.creator, parts.ver].filter(Boolean).join(" · "))}</small>
+          <span class="iz-pkg-chips">${cvPkgChips(p)}</span></div></div>
+      <div class="fm-ref-acts">
+        <button type="button" class="ghost-button fm-small" data-cv-explore="${escapeAttribute(p.pkg)}" data-cv-explore-file="${escapeAttribute(p.file || "")}"><span class="material-symbols-outlined">space_dashboard</span>Explore package</button>
+        ${p.file ? `<button type="button" class="ghost-button fm-small" data-cv-show="${escapeAttribute(p.file)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>` : ""}
+      </div>
+      ${box}
+      <section class="fm-sources"><h3 class="iz-files-h">Your files it has <small>${p.items.length}</small></h3><div class="fm-cands">${files}</div></section>
+    </div>`;
+  libThumbWatch(host);
+  cvRenderStrip();
+  requestAnimationFrame(cvFitPanel);
+}
+
+// ---- Render: by file ---------------------------------------------------------------------
+
+function cvRenderFileList() {
+  const host = $("cv-list");
+  const subtitle = $("cv-list-subtitle");
+  const tools = $("cv-list-tools");
+  if (!host) return;
+  if (!CV.report) {
+    host.className = "group-list empty";
+    host.innerHTML = CV.scanning ? "Checking…" : CV.error ? escapeHtml(CV.error) : CV.target ? "Check the package to list its files with copies elsewhere." : "Pick a .var above, or one on the right.";
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  const items = cvItems();
+  if (!items.length) {
+    host.className = "group-list empty";
+    host.innerHTML = `<span class="fm-clean"><span class="material-symbols-outlined">check_circle</span>No file it uses has a copy elsewhere.</span>`;
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  host.className = "group-list";
+  if (subtitle) subtitle.textContent = `${pkgCount(items.length, "file", "files")}, the biggest first`;
+  const filters = [
+    ["all", "All", () => true],
+    ["todo", "Not chosen", (i) => !CV.picks.has(i.key)],
+    ["chosen", "Chosen", (i) => CV.picks.has(i.key)],
+    ["dep", "In a dependency", (i) => (i.copies ?? []).some((c) => c.already_dependency)],
+  ];
+  if (tools) {
+    tools.innerHTML = `<div class="fm-filter-row">${filters
+      .map(([k, label, f]) => [k, label, items.filter(f).length])
+      .filter(([k, , n]) => k === "all" || n)
+      .map(([k, label, n]) => `<button type="button" class="fm-filter${CV.filterFile === k ? " is-active" : ""}" data-cv-ffilter="${k}">${label} <small>${n}</small></button>`)
+      .join("")}</div>`;
+  }
+  const f = (filters.find(([k]) => k === CV.filterFile) ?? filters[0])[2];
+  const q = CV.query;
+  const rows = items.filter((i) => f(i) && (!q || `${i.path} ${(i.copies ?? []).map((c) => c.package_id).join(" ")}`.toLowerCase().includes(q)));
+  if (!rows.length) {
+    host.innerHTML = `<p class="fm-none">No file matches.</p>`;
+    return;
+  }
+  host.innerHTML = rows
+    .map((i) => {
+      const ft = cvFileText(i.path);
+      const pick = CV.picks.get(i.key);
+      const right = pick
+        ? `<span class="fm-row-right"><span class="chip chip-accent missing-row-fixed" title="${escapeAttribute(pick.pkg)}">→ ${escapeHtml(pkgIdParts(pick.pkg).name)}</span>
+            <button type="button" class="fm-icon-btn fm-row-clear" data-cv-file-clear="${escapeAttribute(i.key)}" title="Clear" aria-label="Clear"><span class="material-symbols-outlined">close</span></button></span>`
+        : `<span class="fm-dim">${pkgCount((i.copies ?? []).length, "copy", "copies")}${(i.copies ?? []).some((c) => c.already_dependency) ? " · one in a dependency" : ""}</span>`;
+      return `<div class="group-row missing-row fm-row${i.key === CV.selFile ? " active focused" : ""}${pick ? " is-chosen" : ""}" data-cv-frow="${escapeAttribute(i.key)}" role="option" tabindex="${i.key === CV.selFile ? 0 : -1}">
+          <span class="material-symbols-outlined fm-row-state${pick ? "" : " is-dot"}">${pick ? "check_circle" : "fiber_manual_record"}</span>
+          <span class="fm-row-text"><span class="fm-row-name" title="${escapeAttribute(i.path)}">${escapeHtml(ft.name)}</span>
+            <span class="fm-row-dir">${fmTypeChip(ft.type.label)}${ft.type.rest ? `<span class="fm-row-folder"><span class="material-symbols-outlined">folder</span><span class="fm-trunc">${escapeHtml(ft.type.rest)}</span></span>` : ""}<span class="fm-dim">${escapeHtml(formatBytesLocal(Number(i.size ?? 0)))}</span></span></span>
+          ${right}
+        </div>`;
+    })
+    .join("");
+}
+
+function cvRenderFileDetail() {
+  const host = $("cv-detail");
+  if (!host) return;
+  const item = cvItems().find((i) => i.key === CV.selFile);
+  if (!item) {
+    host.innerHTML = `<div class="fm-strip hidden" id="cv-strip"></div>
+      <div class="panel-head"><div><h2>Its copies</h2><p class="panel-subtitle">${cvItems().length ? "Select a file to see the packages with a copy." : "The copy each file points at is chosen here."}</p></div></div>
+      <div class="detail-empty">No file selected.</div>`;
+    cvRenderStrip();
+    return;
+  }
+  const ft = cvFileText(item.path);
+  const pick = CV.picks.get(item.key);
+  const suggest = cvSuggest(item);
+  const cards = [...(item.copies ?? [])]
+    .sort((a, b) => (a === suggest ? -1 : b === suggest ? 1 : 0))
+    .map((c) => {
+      const p = cvPkg(c.package_id) ?? { pkg: c.package_id, file: c.file_path, installed: c.installed, dep: c.already_dependency, items: [] };
+      const chosen = pick?.pkg === c.package_id;
+      const others = p.items.filter(({ item: x }) => x.key !== item.key).length;
+      return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}" role="radio" tabindex="0" aria-checked="${chosen}" data-cv-copy="${escapeAttribute(c.package_id)}">
+          ${p.installed === false || !p.file ? `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(p.file, libGradient(p.pkg), "fm-cand-thumb")}<span class="material-symbols-outlined fm-cand-radio fm-cand-thumb-mark">${chosen ? "radio_button_checked" : "radio_button_unchecked"}</span></div>`}
+          <div class="fm-cand-top">
+            <span class="fm-cand-pick"><span class="fm-cand-name" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}`)}">${fmPkgLabelHtml(c.package_id)}</span></span>
+            <span class="fm-cand-tags">${c === suggest && !pick ? `<span class="chip">Suggested</span>` : ""}${cvPkgChips(p)}</span>
+            <span class="fm-cand-acts">${others ? `<button type="button" class="ghost-button fm-tiny" data-cv-useall="${escapeAttribute(c.package_id)}" title="It has ${pkgCount(others, "more of your files", "more of your files")}: point them all here">Use for all ${others + 1}</button>` : ""}</span>
+          </div>
+          <div class="fm-cand-sub"><span class="fm-dim">${c.internal_path === item.path ? "same path" : escapeHtml(c.internal_path)}</span></div>
+        </div>`;
+    })
+    .join("");
+  host.innerHTML = `<div class="fm-strip" id="cv-strip"></div><h2 class="sr-only">Its copies</h2>
+    <div class="detail-panel fm-detail-body">
+      <div class="fm-ref-head fm-ref-title"><span class="chip">${escapeHtml(formatBytesLocal(Number(item.size ?? 0)))}</span>
+        <div class="fm-ref-head-text"><b title="${escapeAttribute(item.path)}">${escapeHtml(ft.name)}</b>
+          <small>${escapeHtml(item.path)}${(item.bundle ?? []).length ? ` · + ${pkgCount(item.bundle.length, "file goes", "files go")} with it` : ""}</small></div></div>
+      ${
+        pick
+          ? `<div class="fm-chosen"><div class="fm-chosen-main"><span class="material-symbols-outlined">check_circle</span>
+              <div class="fm-chosen-text"><small>Points at</small>${fmPkgLabelHtml(pick.pkg)}</div>
+              <button type="button" class="ghost-button fm-small" data-cv-file-clear="${escapeAttribute(item.key)}"><span class="material-symbols-outlined">close</span>Clear</button></div></div>`
+          : ""
+      }
+      <section class="fm-sources"><h3 class="iz-files-h">Packages with this file <small>${(item.copies ?? []).length}</small></h3><div class="fm-cands">${cards}</div></section>
+    </div>`;
+  libThumbWatch(host);
+  cvRenderStrip();
+  requestAnimationFrame(cvFitPanel);
+}
+
+// Kept inside the window like Fix Missing's panel, so its end is reachable;
+// a narrow window shows it as a sheet at the bottom.
+function cvFitPanel() {
+  const card = $("cv-detail");
+  if (!card || !cvVisible()) return;
+  card.classList.add("is-open");
+  card.classList.toggle("is-empty", !cvItems().length);
+  const grid = cvView()?.querySelector(".cv-grid");
+  const pos = getComputedStyle(card).position;
+  if (pos === "fixed") {
+    const list = cvView()?.querySelector(".cv-list-card")?.getBoundingClientRect();
+    if (list) {
+      card.style.left = `${Math.round(list.left)}px`;
+      card.style.width = `${Math.round(list.width)}px`;
+      card.style.right = "auto";
+    }
+    card.style.maxHeight = "";
+    if (grid) grid.style.paddingBottom = `${Math.round(card.getBoundingClientRect().height) + 24}px`;
+    return;
+  }
+  card.style.left = "";
+  card.style.width = "";
+  card.style.right = "";
+  if (grid) grid.style.paddingBottom = "";
+  if (pos !== "sticky") {
+    card.style.maxHeight = "";
+    return;
+  }
+  const header = document.querySelector(".app-header")?.getBoundingClientRect().bottom ?? 56;
+  const top = Math.max(card.getBoundingClientRect().top, header + 12);
+  card.style.maxHeight = `${Math.max(260, Math.floor(window.innerHeight - top - 12))}px`;
+}
+
+// ---- Events ---------------------------------------------------------------------------------
+
+function cvOnClick(e) {
+  const q = (sel) => e.target.closest?.(sel);
+  let el;
+  if ((el = q("[data-cv-pkg-clear]"))) {
+    e.stopPropagation();
+    const p = cvPkg(el.getAttribute("data-cv-pkg-clear"));
+    if (p) cvChoosePkg(p, false);
+    cvFlash("Choice cleared.");
+    cvRefresh();
+    return;
+  }
+  if ((el = q("[data-cv-file-clear]"))) {
+    e.stopPropagation();
+    CV.picks.delete(el.getAttribute("data-cv-file-clear"));
+    cvFlash("Choice cleared.");
+    cvRefresh();
+    return;
+  }
+  if ((el = q("[data-cv-useall]"))) {
+    e.stopPropagation();
+    const p = cvPkg(el.getAttribute("data-cv-useall"));
+    if (p) {
+      cvChoosePkg(p, true);
+      cvFlash(`${pkgCount(p.items.length, "file points", "files point")} at ${pkgIdParts(p.pkg).name}.`);
+    }
+    cvRefresh();
+    return;
+  }
+  if ((el = q("[data-cv-explore]"))) {
+    fmExplore(el.getAttribute("data-cv-explore"), el.getAttribute("data-cv-explore-file"));
+    return;
+  }
+  if ((el = q("[data-cv-show]"))) {
+    invoke("show_in_explorer", { path: el.getAttribute("data-cv-show") }).catch(() => {});
+    return;
+  }
+  if ((el = q("[data-cv-pkg-choose]"))) {
+    const p = cvPkg(el.getAttribute("data-cv-pkg-choose"));
+    if (p) {
+      cvChoosePkg(p, true);
+      cvFlash(`${pkgCount(p.items.length, "file points", "files point")} at ${pkgIdParts(p.pkg).name}.`);
+    }
+    cvRefresh();
+    return;
+  }
+  if ((el = q("[data-cv-copy]"))) {
+    const item = cvItems().find((i) => i.key === CV.selFile);
+    const c = item?.copies?.find((x) => x.package_id === el.getAttribute("data-cv-copy"));
+    if (item && c) {
+      if (CV.picks.get(item.key)?.pkg === c.package_id) CV.picks.delete(item.key);
+      else cvPick(item, c);
+      cvRefresh();
+    }
+    return;
+  }
+  if ((el = q("[data-cv-start]"))) {
+    cvOpen(el.getAttribute("data-cv-start"), { scan: true });
+    return;
+  }
+  if ((el = q("[data-cv-row]"))) {
+    CV.selPkg = el.getAttribute("data-cv-row");
+    cvRenderList();
+    cvRenderDetail();
+    return;
+  }
+  if ((el = q("[data-cv-frow]"))) {
+    CV.selFile = el.getAttribute("data-cv-frow");
+    cvRenderList();
+    cvRenderDetail();
+    return;
+  }
+  if ((el = q("[data-cv-filter]"))) {
+    CV.filterPkg = el.getAttribute("data-cv-filter");
+    cvRenderList();
+    return;
+  }
+  if ((el = q("[data-cv-ffilter]"))) {
+    CV.filterFile = el.getAttribute("data-cv-ffilter");
+    cvRenderList();
+    return;
+  }
+  if (!(el = q("[data-cv-act]"))) return;
+  switch (el.getAttribute("data-cv-act")) {
+    case "pick":
+      invoke("pick_var_file").then((picked) => picked && cvOpen(picked, { scan: true })).catch(() => {});
+      break;
+    case "config":
+      CV.configOpen = !CV.configOpen;
+      cvRenderSource();
+      break;
+    case "scan":
+      cvScan();
+      break;
+    case "explore":
+      if (CV.target) pkgOpen(CV.item?.__lib ? CV.item : CV.target);
+      break;
+    case "show-file":
+      invoke("show_in_explorer", { path: CV.target }).catch(() => {});
+      break;
+    case "plan":
+      CV.planOpen = !CV.planOpen;
+      cvRenderDetails();
+      break;
+    case "fix-report-close":
+      CV.lastFix = null;
+      cvRenderDetails();
+      break;
+    case "show-backup":
+      if (CV.lastFix?.backup_path) invoke("show_in_explorer", { path: CV.lastFix.backup_path }).catch(() => {});
+      break;
+    case "pick-backup":
+      invoke("pick_folder")
+        .then((dir) => {
+          if (!dir) return;
+          fmStoreSet(FM_STORE.backupDir, dir);
+          cvRenderDetails();
+        })
+        .catch(() => {});
+      break;
+    case "choose-deps": {
+      let n = 0;
+      for (const item of cvItems()) {
+        if (CV.picks.has(item.key)) continue;
+        const c = (item.copies ?? []).find((x) => x.already_dependency && x.installed);
+        if (c) {
+          cvPick(item, c);
+          n += 1;
+        }
+      }
+      cvFlash(`${pkgCount(n, "file points", "files point")} at packages it already depends on.`);
+      cvRefresh();
+      break;
+    }
+    case "clear-picks":
+      CV.picks.clear();
+      cvFlash("Choices cleared.");
+      cvRefresh();
+      break;
+    case "apply":
+      cvApply();
+      break;
+    default:
+      break;
+  }
+}
+
+function cvOnChange(e) {
+  if (e.target.id === "cv-withdb") {
+    CV.withDb = e.target.checked;
+    fmStoreSet("cv.withDb", CV.withDb ? "1" : "0");
+    if (CV.target && CV.report) cvScan();
+  }
+}
+
+function setupCleanVars() {
+  CV.withDb = fmStoreGet("cv.withDb", "0") === "1";
+  for (const layout of ["pkg", "file"]) {
+    const view = cvView(layout);
+    if (!view) continue;
+    view.addEventListener("click", cvOnClick);
+    view.addEventListener("change", cvOnChange);
+    view.addEventListener("keydown", (e) => {
+      if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-cv-copy]")) {
+        e.preventDefault();
+        e.target.click();
+      }
+    });
+  }
+  window.addEventListener("scroll", cvFitPanel, { passive: true, capture: true });
+  window.addEventListener("resize", cvFitPanel);
+  window.__refreshCleanByPackageView = () => {
+    cvShowView("pkg");
+    cvRender();
+  };
+  window.__refreshCleanByFileView = () => {
+    cvShowView("file");
+    cvRender();
+  };
+  window.__TAURI__?.event
+    ?.listen?.("tauri://drag-drop", (event) => {
+      if (!cvVisible() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
+      const varPath = (event?.payload?.paths ?? []).map(String).find((p) => /\.var$/i.test(p));
+      if (varPath) cvOpen(varPath, { scan: true });
+    })
+    .catch(() => {});
+}
+
 // ---- Drop .var files on the window (dropin.rs) ---------------------------------------
 // Anywhere except the pages that take a single .var (Package Explorer, Missing
 // Resources, Internalize): the dropped packages are checked and copied — or
@@ -13869,7 +14974,7 @@ function setupDependencyUsage() {
 const DROP_STORE = "dropin.moveFiles";
 
 function dropTakenByPage() {
-  return ["pkg-view", "fm-view", "internalize-resources-view", "du-view"].some(
+  return ["pkg-view", "fm-view", "internalize-resources-view", "du-view", "cvp-view", "cvf-view"].some(
     (id) => $(id) && !$(id).classList.contains("hidden"),
   );
 }
@@ -26044,6 +27149,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupFixMissing();
   setupInternalize();
   setupDependencyUsage();
+  setupCleanVars();
   // The Hub package index: shortly after start-up, then every 30 minutes.
   setTimeout(() => hubIndexRefresh(false), 1500);
   setInterval(() => hubIndexRefresh(false), 30 * 60 * 1000);
