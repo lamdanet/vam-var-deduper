@@ -12919,6 +12919,7 @@ function izOnClick(e) {
       break;
     case "clear-picks":
       IZ.picks.clear();
+      izFlash("Choices cleared.");
       izRefresh();
       break;
     case "fix-missing":
