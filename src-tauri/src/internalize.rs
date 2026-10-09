@@ -45,10 +45,33 @@ use crate::{
 /// source package. For each ref, opens the source var to grab the entry's
 /// CRC32 + size and expand the bundle (siblings + `.vaj` textures) — exactly
 /// what we need to display the row and what we'd copy if the user picks it.
+#[cfg(test)]
 pub(crate) fn scan_target_var_for_external_refs(
     target_path: &Path,
     scan: &ScannedData,
 ) -> Result<Vec<ExternalRefGroup>> {
+    groups_from_target_refs(read_target_refs(target_path, scan)?, scan)
+}
+
+/// What the target references in other packages, read from the target alone
+/// (the quick first step of the check): enough to tell whether anything is
+/// missing before the source packages are opened.
+pub(crate) struct TargetRefs {
+    refs: BTreeMap<(String, String), ExternalRef>,
+    target_crcs: BTreeMap<String, u32>,
+    unusable: BTreeMap<String, BTreeSet<String>>,
+    plugins: BTreeMap<String, (String, BTreeSet<String>)>,
+}
+
+impl TargetRefs {
+    /// It references a file that isn't where it says (missing from its
+    /// package, or the package isn't installed).
+    pub(crate) fn has_missing(&self) -> bool {
+        !self.unusable.is_empty()
+    }
+}
+
+pub(crate) fn read_target_refs(target_path: &Path, scan: &ScannedData) -> Result<TargetRefs> {
     let file = fs::File::open(target_path)
         .with_context(|| format!("failed to open {}", target_path.display()))?;
     let mut archive = ZipArchive::new(file)
@@ -132,7 +155,23 @@ pub(crate) fn scan_target_var_for_external_refs(
             }
         }
     }
-    drop(archive);
+    Ok(TargetRefs {
+        refs,
+        target_crcs,
+        unusable,
+        plugins,
+    })
+}
+
+/// The second step: open each source package for what the target uses of
+/// it, and group everything by package.
+pub(crate) fn groups_from_target_refs(target: TargetRefs, scan: &ScannedData) -> Result<Vec<ExternalRefGroup>> {
+    let TargetRefs {
+        refs,
+        target_crcs,
+        mut unusable,
+        plugins,
+    } = target;
 
     // Resolve source-var bytes per group, opening each source archive once.
     // The scan was already partitioned so the same pkg_id with multiple file

@@ -22,7 +22,7 @@ use crate::{
     execute::{execute_with_progress, paired_support_paths},
     import::import_manifest,
     fix_var::apply_fix_var,
-    internalize::{apply_internalize, scan_target_var_for_external_refs},
+    internalize::apply_internalize,
     models::{
         AnalyzeVarDepsResponse, AppConfig, AppState, BackfillSizesRequest, BackfillSizesResponse,
         BrokenRef, BulkImportRequest, BulkImportResponse, DbFindGroup, DbFindRef, DbFindRequest,
@@ -6495,15 +6495,33 @@ pub(crate) fn scan_internalize_candidates(
                 .to_string()
         })?;
 
-    let mut groups =
-        scan_target_var_for_external_refs(target_path, &scanned).map_err(|err| err.to_string())?;
     // Missing files or dependencies only: the missing-file check (as Fix
     // Missing runs it, the one use of the database here) finds exact copies
     // elsewhere, so Copy in can bring those files too. Reused while nothing
-    // it depends on changed.
+    // it depends on changed. The target's own references (quick) say
+    // whether anything is missing; if so the check starts right away, beside
+    // the slower reading of the source packages.
+    let target_refs = crate::internalize::read_target_refs(target_path, &scanned).map_err(|err| err.to_string())?;
+    let db: &Db = &db;
+    let cache = &state.broken_refs_cache;
+    let check = || crate::fix_var::scan_broken_refs_cached(cache, target_path, &scanned, db);
+    let (groups, early) = if target_refs.has_missing() {
+        std::thread::scope(|s| {
+            let broken = s.spawn(check);
+            let groups = crate::internalize::groups_from_target_refs(target_refs, &scanned);
+            (groups, Some(broken.join()))
+        })
+    } else {
+        (crate::internalize::groups_from_target_refs(target_refs, &scanned), None)
+    };
+    let mut groups = groups.map_err(|err| err.to_string())?;
     if groups.iter().any(|g| !g.other_refs.is_empty()) {
-        let broken = crate::fix_var::scan_broken_refs_cached(&state.broken_refs_cache, target_path, &scanned, &db)
-            .map_err(|err| err.to_string())?;
+        let broken = match early {
+            Some(joined) => joined.map_err(|_| "the missing-file check stopped unexpectedly".to_string())?,
+            // A source package lacked a file only the second step saw.
+            None => check(),
+        }
+        .map_err(|err| err.to_string())?;
         crate::internalize::fill_from_copies(&mut groups, &broken, target_path)
             .map_err(|err| err.to_string())?;
     }
