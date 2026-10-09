@@ -6493,12 +6493,20 @@ pub(crate) fn scan_internalize_candidates(
                 .to_string()
         })?;
 
-    let mut groups =
-        scan_target_var_for_external_refs(target_path, &scanned).map_err(|err| err.to_string())?;
-    // Files a source package doesn't have: an exact copy elsewhere lets Copy
-    // in bring them too (the missing-file check, as Fix Missing runs it).
+    // The files it uses from each package, and — side by side, the slower of
+    // the two — the missing-file check (as Fix Missing runs it): an exact
+    // copy elsewhere of a file a package doesn't have lets Copy in bring it
+    // too. Without missing files that check finds nothing and ends quickly.
+    let db: &Db = &db;
+    let (groups, broken) = std::thread::scope(|s| {
+        let broken = s.spawn(|| crate::fix_var::scan_target_var_for_broken_refs(target_path, &scanned, db));
+        let groups = scan_target_var_for_external_refs(target_path, &scanned);
+        (groups, broken.join())
+    });
+    let mut groups = groups.map_err(|err| err.to_string())?;
     if groups.iter().any(|g| !g.other_refs.is_empty()) {
-        let broken = crate::fix_var::scan_target_var_for_broken_refs(target_path, &scanned, &db)
+        let broken = broken
+            .map_err(|_| "the missing-file check stopped unexpectedly".to_string())?
             .map_err(|err| err.to_string())?;
         crate::internalize::fill_from_copies(&mut groups, &broken, target_path)
             .map_err(|err| err.to_string())?;
