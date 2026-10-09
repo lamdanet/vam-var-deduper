@@ -7114,6 +7114,7 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
             ("Custom/a.png", &b"image-a"[..]),
             ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
             ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/Clothing/x.vab", &b"unity-x"[..]),
             ("Custom/unused.png", &b"never-used"[..]),
         ],
     );
@@ -7124,7 +7125,17 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
             ("Custom/a.png", &b"image-a"[..]),
             ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
             ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/Clothing/x.vab", &b"unity-x"[..]),
             ("Custom/unused.png", &b"never-used"[..]),
+        ],
+    );
+    // The same .vam without its .vab: unsafe to point at (the old page's rule).
+    write_test_var_with_deps(
+        &vars.join("S.Broken.1.var"),
+        &[],
+        &[
+            ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
         ],
     );
     write_test_var_with_deps(&vars.join("D.Dep.1.var"), &[], &[("Other/a-copy.png", &b"image-a"[..])]);
@@ -7141,7 +7152,15 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
     assert!(d.already_dependency && d.installed);
     assert!(!a.copies.iter().find(|c| c.package_id == "S.Pack.1").unwrap().already_dependency);
     let x = report.items.iter().find(|i| i.path == "Custom/Clothing/x.vam").expect("x");
-    assert_eq!(x.bundle, vec!["Custom/Clothing/x.vaj".to_string()]);
+    assert_eq!(x.bundle, vec!["Custom/Clothing/x.vab".to_string(), "Custom/Clothing/x.vaj".to_string()]);
+    let whole = x.copies.iter().find(|c| c.package_id == "S.Pack.1").expect("S has it");
+    assert!(whole.incomplete.is_empty(), "{:?}", whole.incomplete);
+    let broken = x.copies.iter().find(|c| c.package_id == "S.Broken.1").expect("listed");
+    assert_eq!(broken.incomplete, vec!["Custom/Clothing/x.vab".to_string()]);
+    let mut bad = BTreeMap::new();
+    bad.insert(x.key.clone(), "S.Broken.1:Custom/Clothing/x.vam".to_string());
+    let err = apply_clean(&target, scanned.clone(), &bad, None, None).expect_err("refused");
+    assert!(err.to_string().contains("x.vab"), "{err}");
 
     let mut keep = BTreeMap::new();
     keep.insert(a.key.clone(), "D.Dep.1:Other/a-copy.png".to_string());
@@ -7150,7 +7169,7 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
     let result = apply_clean(&target, scanned, &keep, Some(&backups), None).expect("clean");
     let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
     let names: Vec<String> = zip.file_names().map(str::to_string).collect();
-    assert_eq!(result.removed_files, 3, "a.png, x.vam and its .vaj; left: {names:?}");
+    assert_eq!(result.removed_files, 4, "a.png, x.vam with its .vaj and .vab; left: {names:?}");
     assert!(result.dependencies.iter().any(|d| d == "S.Pack.1"));
     assert!(backups.join("T.Scene.1.var").is_file());
     assert!(!names.iter().any(|n| n == "Custom/a.png" || n.starts_with("Custom/Clothing/")), "{names:?}");

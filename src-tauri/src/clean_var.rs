@@ -27,7 +27,7 @@ use crate::{
     fix_var::free_backup_path,
     models::{AppState, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
     naming,
-    scan::load_cached_scan_with_target,
+    scan::{compute_missing_siblings, load_cached_scan_with_target},
     tasks::{list_target_var_text_refs, new_progress_payload, parse_additional_dirs, set_task_progress},
 };
 
@@ -42,6 +42,10 @@ pub(crate) struct CleanSource {
     pub(crate) installed: bool,
     /// The package already lists it as a dependency: no new one.
     pub(crate) already_dependency: bool,
+    /// What its copy of a bundle (.vam with .vaj/.vab, .vmi with .vmb) lacks:
+    /// unsafe to point at, as on the old Clean VARs page.
+    #[serde(default)]
+    pub(crate) incomplete: Vec<String>,
 }
 
 /// A file the package uses itself that has an exact copy elsewhere.
@@ -78,8 +82,11 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// A scene is the package itself, not a resource to point elsewhere (the old
+/// page's rule: `Saves/scene/` at any depth).
 fn is_scene(path: &str) -> bool {
-    path.to_ascii_lowercase().starts_with("saves/scene/")
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("saves/scene/") || lower.contains("/saves/scene/")
 }
 
 /// What the target uses itself that has exact copies elsewhere.
@@ -124,6 +131,8 @@ pub(crate) fn clean_candidates(
         ..CleanReport::default()
     };
     let mut by_path: HashMap<String, usize> = HashMap::new();
+    // Each package's bundles that lack a member, worked out once per package.
+    let mut missing: HashMap<&str, BTreeMap<String, BTreeSet<String>>> = HashMap::new();
     for group in &scanned.duplicate_groups {
         let Some(own) = group.refs.iter().find(|r| r.package_id == target_id) else {
             continue;
@@ -138,18 +147,32 @@ pub(crate) fn clean_candidates(
             continue;
         }
         let mut seen: HashSet<&str> = HashSet::new();
-        let copies: Vec<CleanSource> = group
-            .refs
-            .iter()
-            .filter(|r| r.package_id != target_id && seen.insert(r.package_id.as_str()))
-            .map(|r| CleanSource {
+        let mut copies: Vec<CleanSource> = Vec::new();
+        for r in &group.refs {
+            if r.package_id == target_id || !seen.insert(r.package_id.as_str()) {
+                continue;
+            }
+            let lacks = missing
+                .entry(r.package_id.as_str())
+                .or_insert_with(|| {
+                    scanned
+                        .packages
+                        .get(&r.package_id)
+                        .map(compute_missing_siblings)
+                        .unwrap_or_default()
+                })
+                .get(&r.internal_path)
+                .map(|m| m.iter().cloned().collect())
+                .unwrap_or_default();
+            copies.push(CleanSource {
                 package_id: r.package_id.clone(),
                 file_path: r.package_file.clone(),
                 internal_path: r.internal_path.clone(),
                 installed: true,
                 already_dependency: is_dep(&r.package_id),
-            })
-            .collect();
+                incomplete: lacks,
+            });
+        }
         if copies.is_empty() {
             continue;
         }
@@ -198,6 +221,7 @@ pub(crate) fn clean_candidates(
                     internal_path: h.internal_path.clone(),
                     installed: false,
                     already_dependency: is_dep(&h.package_id),
+                    incomplete: Vec::new(),
                 })
                 .collect();
             if extra.is_empty() {
@@ -274,6 +298,16 @@ pub(crate) fn apply_clean(
     // Only what was chosen changes: every other duplicate group stays as it
     // is (the engine would otherwise fall back to a group's first copy,
     // whichever package that is).
+    // Never point at a bundle that lacks a member (the page doesn't offer one).
+    for value in keep_map.values() {
+        let Some((pkg, path)) = value.split_once(':') else {
+            continue;
+        };
+        if let Some(lacks) = scanned.packages.get(pkg).and_then(|p| compute_missing_siblings(p).remove(path)) {
+            let list: Vec<String> = lacks.into_iter().collect();
+            bail!("{pkg} lacks part of {path} ({}): choose another copy", list.join(", "));
+        }
+    }
     let mut keep_map = keep_map.clone();
     for group in &scanned.duplicate_groups {
         keep_map.entry(group.key.clone()).or_insert_with(|| KEEP_ALL_VALUE.to_string());

@@ -1147,7 +1147,7 @@ fn is_heuristic_same_stem_texture(parent: &str, sibling: &str) -> bool {
 /// well-formed VAR that just doesn't ship a preview thumbnail). Empty
 /// entries are filtered out, so a parent appears in the result only when at
 /// least one *real* sibling (.vaj-referenced or .vab/.vmb cache) is missing.
-fn compute_missing_siblings(
+pub(crate) fn compute_missing_siblings(
     package: &PreparedPackage,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let existing: BTreeSet<&str> = package
