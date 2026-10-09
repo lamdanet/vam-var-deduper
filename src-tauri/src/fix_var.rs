@@ -191,8 +191,8 @@ pub(crate) fn scan_target_var_for_broken_refs(
             //    drift) but another package may store the same file at the
             //    same internal path — in practice that file usually has the
             //    same CRC because the resource was copy-pasted across packs
-            //    by creators. Try local scan first (cheap, in-memory), then
-            //    fall back to a single DB query.
+            //    by creators. The local scan here (cheap, in-memory); the DB
+            //    comes in step 3, for all of them at once.
             if br.expected_crc32.is_none() {
                 if let Some(&(_, resource)) = by_path.get(path.as_str()).and_then(|cands| {
                     cands
@@ -203,12 +203,32 @@ pub(crate) fn scan_target_var_for_broken_refs(
                     br.expected_size = Some(resource.size);
                 }
             }
-            if br.expected_crc32.is_none() {
-                if let Ok(Some((crc, size))) = lookup_crc_by_path(&conn, &path) {
+        }
+    }
+
+    // 3. Still no CRC: the DB by path alone, for all of them in one pass.
+    //    `resources` has no index on the path alone, so a query per file read
+    //    every row (about 0.5 s each on a large database).
+    let wanted: Vec<String> = out
+        .iter()
+        .filter(|br| br.expected_crc32.is_none())
+        .filter_map(|br| br.ref_path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !wanted.is_empty() {
+        if let Ok(found) = lookup_crcs_by_paths(&conn, &wanted) {
+            for br in out.iter_mut().filter(|br| br.expected_crc32.is_none()) {
+                if let Some(&(crc, size)) = br.ref_path.as_deref().and_then(|p| found.get(p)) {
                     br.expected_crc32 = Some(crc);
                     br.expected_size = Some(size);
                 }
             }
+        }
+    }
+
+    for br in out.iter_mut() {
+        if let Some(path) = br.ref_path.clone() {
             br.local_candidates = find_local_candidates(
                 &by_path,
                 &by_crc,
@@ -301,24 +321,31 @@ fn pkg_contains_path(pkg: &PreparedPackage, path: &str) -> bool {
 /// DB. Returns the first indexed `(crc32, size)` row whose `internal_path`
 /// matches. The first hit is intentional — we only need *a* plausible CRC
 /// candidate so the candidate ranker can prefer CRC-equal local matches.
-fn lookup_crc_by_path(
+/// A CRC and size for each of `paths`, from any indexed package that has a
+/// file there (the first row found, like a `LIMIT 1` per path). One pass
+/// over `resources` for all of them.
+fn lookup_crcs_by_paths(
     conn: &rusqlite::Connection,
-    internal_path: &str,
-) -> Result<Option<(u32, u64)>> {
-    let row = conn.query_row(
-        "SELECT crc32, size FROM resources WHERE internal_path = ?1 AND crc32 IS NOT NULL LIMIT 1",
-        rusqlite::params![internal_path],
-        |row| {
-            let crc: i64 = row.get(0)?;
-            let size: i64 = row.get(1)?;
-            Ok((crc as u32, size.max(0) as u64))
-        },
-    );
-    match row {
-        Ok(pair) => Ok(Some(pair)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(other) => Err(other).context("failed to look up crc32 by internal_path"),
+    paths: &[String],
+) -> Result<HashMap<String, (u32, u64)>> {
+    let wanted = serde_json::to_string(paths).context("failed to encode the paths")?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT internal_path, crc32, size FROM resources
+             WHERE crc32 IS NOT NULL AND internal_path IN (SELECT value FROM json_each(?1))",
+        )
+        .context("failed to prepare the crc32 lookup by internal_path")?;
+    let rows = stmt
+        .query_map(rusqlite::params![wanted], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        })
+        .context("failed to look up crc32 by internal_path")?;
+    let mut found = HashMap::new();
+    for row in rows {
+        let (path, crc, size) = row.context("failed to read a crc32 row")?;
+        found.entry(path).or_insert((crc as u32, size.max(0) as u64));
     }
+    Ok(found)
 }
 
 pub(crate) fn is_text_path(internal_path: &str) -> bool {
@@ -746,8 +773,30 @@ fn free_backup_path(dir: &Path, name: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{free_backup_path, replacement_target};
+    use super::{free_backup_path, lookup_crcs_by_paths, replacement_target};
     use std::fs;
+
+    #[test]
+    fn crcs_for_many_paths_in_one_pass() {
+        let db = crate::db::open_in_memory().expect("open db");
+        let conn = db.conn.lock().expect("lock db");
+        crate::db::upsert_package(&conn, "A.Pack.1", "C:/a.var", 1, 1, None).expect("a");
+        crate::db::upsert_package(&conn, "B.Pack.1", "C:/b.var", 1, 1, None).expect("b");
+        conn.execute_batch(
+            "INSERT INTO resources (package_id, internal_path, crc32, size, effective_size) VALUES
+               ('A.Pack.1', 'Custom/x.vmi', 11, 100, 100),
+               ('B.Pack.1', 'Custom/x.vmi', 11, 100, 100),
+               ('B.Pack.1', 'Custom/y.png', 22, 200, 200),
+               ('B.Pack.1', 'Custom/no-crc.json', NULL, 5, 5);",
+        )
+        .expect("seed");
+        let paths = ["Custom/x.vmi", "Custom/y.png", "Custom/no-crc.json", "Custom/nowhere.cs"].map(String::from);
+        let found = lookup_crcs_by_paths(&conn, &paths).expect("lookup");
+        assert_eq!(found.get("Custom/x.vmi"), Some(&(11, 100)));
+        assert_eq!(found.get("Custom/y.png"), Some(&(22, 200)));
+        assert!(!found.contains_key("Custom/no-crc.json"));
+        assert!(!found.contains_key("Custom/nowhere.cs"));
+    }
 
     #[test]
     fn a_backup_never_overwrites_an_earlier_one() {
