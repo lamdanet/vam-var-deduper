@@ -19605,6 +19605,15 @@ button.pkg-stat:focus-visible::after {
 
 /* ---- Internalize Resources: Fix Missing's layout, packages as rows ---- */
 
+/* Files a source lacks, taken from an exact copy elsewhere. */
+.iz-from-else {
+  color: var(--text-dim);
+}
+
+.iz-fill .fm-cand-tags .chip .material-symbols-outlined {
+  font-size: 13px;
+}
+
 /* The Copy in box states facts: no green, no gradient button. */
 .fm-best.iz-copy-box {
   border-color: var(--line);
