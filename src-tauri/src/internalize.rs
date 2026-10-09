@@ -30,6 +30,7 @@ use crate::{
         collect_pkg_refs, free_backup_path, is_text_path, resolve_pkg_entry, resolve_ref_status,
         RefStatus,
     },
+    naming,
     models::{
         ExternalRef, ExternalRefGroup, InternalizeReport, InternalizeSelection, ScannedData,
         META_PATH,
@@ -66,6 +67,8 @@ pub(crate) fn scan_target_var_for_external_refs(
     // What the target already holds, to tell a bundle member that's already
     // inside from one that would clash with a different file.
     let mut target_crcs: BTreeMap<String, u32> = BTreeMap::new();
+    // family (lowercase) → references to it that can't be copied in.
+    let mut unusable: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for index in 0..archive.len() {
         let mut entry = archive
@@ -97,6 +100,10 @@ pub(crate) fn scan_target_var_for_external_refs(
             // Broken refs are handled by the Missing Resources page; surfacing
             // them here would offer a "copy" the user couldn't actually do.
             if !matches!(resolve_ref_status(&pkg, &path, scan), RefStatus::Healthy) {
+                unusable
+                    .entry(family_of(&pkg))
+                    .or_default()
+                    .insert(format!("{pkg}:/{}", normalize_zip_path(&path)));
                 continue;
             }
             let path_norm = normalize_zip_path(&path);
@@ -130,6 +137,9 @@ pub(crate) fn scan_target_var_for_external_refs(
     let mut groups: Vec<ExternalRefGroup> = Vec::new();
     for (pkg, mut items) in by_pkg {
         let Some(prepared) = resolve_pkg_entry(&pkg, scan) else {
+            for (key, _) in &items {
+                unusable.entry(family_of(&pkg)).or_default().insert(format!("{}:/{}", key.0, key.1));
+            }
             continue;
         };
         let source_file = match fs::File::open(&prepared.file_path) {
@@ -164,7 +174,13 @@ pub(crate) fn scan_target_var_for_external_refs(
         for (_, mut ext_ref) in items.drain(..) {
             let (size, crc) = match entry_sizes.get(&ext_ref.ref_path) {
                 Some(pair) => *pair,
-                None => continue,
+                None => {
+                    unusable
+                        .entry(family_of(&pkg))
+                        .or_default()
+                        .insert(format!("{pkg}:/{}", ext_ref.ref_path));
+                    continue;
+                }
             };
             ext_ref.size = size;
             ext_ref.crc32 = crc;
@@ -207,7 +223,14 @@ pub(crate) fn scan_target_var_for_external_refs(
             total_bundle_bytes,
             used_by_others: None,
             other_users: Vec::new(),
+            other_refs: Vec::new(),
         });
+    }
+
+    for group in &mut groups {
+        if let Some(refs) = unusable.get(&family_of(&group.source_pkg_id)) {
+            group.other_refs = refs.iter().cloned().collect();
+        }
     }
 
     // Stable order: largest reclaim-potential first, then alphabetical so the
@@ -448,7 +471,8 @@ pub(crate) fn apply_internalize(
     // cross-copy for that path) and which source-pkg refs still appear after
     // rewriting (so meta.json knows whether to drop the dep).
     let mut existing_paths: BTreeSet<String> = BTreeSet::new();
-    let mut still_references_pkg: BTreeSet<String> = BTreeSet::new();
+    let touched_families: BTreeSet<String> = touched_source_pkgs.iter().map(|p| family_of(p)).collect();
+    let mut still_references: BTreeSet<String> = BTreeSet::new();
     let mut meta_entry: Option<(String, Vec<u8>)> = None;
 
     {
@@ -485,13 +509,10 @@ pub(crate) fn apply_internalize(
                     report.files_rewritten += 1;
                 }
                 if let Some((text, _)) = decode_text(&raw) {
-                    for pkg in &touched_source_pkgs {
-                        if still_references_pkg.contains(pkg) {
-                            continue;
-                        }
-                        let needle = format!("{}:/", pkg);
-                        if text.contains(&needle) {
-                            still_references_pkg.insert(pkg.clone());
+                    for (pkg, _) in collect_pkg_refs(&text) {
+                        let family = family_of(&pkg);
+                        if touched_families.contains(&family) {
+                            still_references.insert(family);
                         }
                     }
                 }
@@ -553,13 +574,17 @@ pub(crate) fn apply_internalize(
                 Some(Value::Object(m)) => m,
                 _ => serde_json::Map::new(),
             };
-            for pkg in &touched_source_pkgs {
-                if still_references_pkg.contains(pkg) {
-                    continue;
-                }
-                if deps_obj.remove(pkg).is_some() {
-                    report.dependencies_removed.push(pkg.clone());
-                }
+            let gone: Vec<String> = deps_obj
+                .keys()
+                .filter(|key| {
+                    let family = family_of(key);
+                    touched_families.contains(&family) && !still_references.contains(&family)
+                })
+                .cloned()
+                .collect();
+            for key in gone {
+                deps_obj.remove(&key);
+                report.dependencies_removed.push(key);
             }
             meta["dependencies"] = Value::Object(deps_obj);
 
@@ -619,4 +644,10 @@ pub(crate) fn apply_internalize(
     }
 
     Ok(report)
+}
+
+/// A package's version-less family, lowercase: `Creator.Pack.latest` and
+/// `Creator.Pack.3` are the same dependency.
+fn family_of(pkg: &str) -> String {
+    naming::package_base(pkg).to_ascii_lowercase()
 }

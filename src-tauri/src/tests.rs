@@ -6798,3 +6798,47 @@ fn package_usage_adds_up_every_user() {
     assert_eq!(r.used_files[0].users, 2);
     fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+#[test]
+fn internalize_drops_a_dependency_named_by_another_version() {
+    use crate::internalize::{apply_internalize, scan_target_var_for_external_refs};
+    use crate::models::InternalizeSelection;
+
+    let dir = repo_root().join("tmp_internalize_family_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    // meta.json lists S.Pack.1; the scene names it .latest, and one more
+    // reference points at a file the pack doesn't have.
+    write_test_var_with_deps(
+        &vars.join("T.Scene.1.var"),
+        &["S.Pack.1"],
+        &[("Saves/scene/s.json", &br#"{ "a": "S.Pack.latest:/Custom/a.png", "gone": "S.Pack.1:/Custom/missing.png" }"#[..])],
+    );
+    write_test_var_with_deps(&vars.join("S.Pack.1.var"), &[], &[("Custom/a.png", &b"aaaa"[..])]);
+    let target = vars.join("T.Scene.1.var");
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], None, |_, _| {}).expect("scan");
+
+    let groups = scan_target_var_for_external_refs(&target, &scanned).expect("refs");
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].other_refs, vec!["S.Pack.1:/Custom/missing.png".to_string()], "the missing file keeps it needed");
+
+    let pick = InternalizeSelection { source_pkg_id: "S.Pack.latest".into(), ref_path: "Custom/a.png".into() };
+    let report = apply_internalize(&target, None, &scanned, std::slice::from_ref(&pick), None).expect("apply");
+    assert!(report.dependencies_removed.is_empty(), "the missing file still points at it");
+
+    // Without that reference, the .latest reference copied in drops S.Pack.1.
+    fs::remove_dir_all(&dir).expect("cleanup");
+    write_test_var_with_deps(
+        &vars.join("T.Scene.1.var"),
+        &["S.Pack.1"],
+        &[("Saves/scene/s.json", &br#"{ "a": "S.Pack.latest:/Custom/a.png" }"#[..])],
+    );
+    write_test_var_with_deps(&vars.join("S.Pack.1.var"), &[], &[("Custom/a.png", &b"aaaa"[..])]);
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], None, |_, _| {}).expect("scan");
+    assert!(scan_target_var_for_external_refs(&target, &scanned).expect("refs")[0].other_refs.is_empty());
+    let report = apply_internalize(&target, None, &scanned, &[pick], None).expect("apply");
+    assert_eq!(report.dependencies_removed, vec!["S.Pack.1".to_string()]);
+    fs::remove_dir_all(&dir).expect("cleanup");
+}

@@ -1454,6 +1454,11 @@ pub(crate) struct ExternalRefGroup {
     pub(crate) used_by_others: Option<u32>,
     /// The first few of them, by package id.
     pub(crate) other_users: Vec<String>,
+    /// The target's other references to this package (any version) that
+    /// can't be copied in — the file isn't in it (Fix Missing's), or it isn't
+    /// installed as written — as `Pkg:/path`. While any is left, the target
+    /// still needs the package.
+    pub(crate) other_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
