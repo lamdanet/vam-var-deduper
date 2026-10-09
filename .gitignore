@@ -57,3 +57,6 @@ for test/
 # success, so these only linger after a failing or interrupted run.
 /tmp_*/
 reference-tools/
+
+# Before/after reports for each fix (screenshots, timings): local only.
+/reports/
