@@ -1423,6 +1423,13 @@ pub(crate) struct ExternalRef {
     /// `SourcePkg:/ref_path`. Drives the "Referenced in" panel on the right,
     /// same shape as the Missing Resources page.
     pub(crate) source_files_in_target: Vec<String>,
+    /// Bundle members the target already holds with the same contents: the
+    /// copy skips them and the reference still works.
+    pub(crate) already_inside: Vec<String>,
+    /// Bundle members the target holds with *different* contents at the same
+    /// path: the copy skips them, so the rewritten reference would load the
+    /// target's own file instead.
+    pub(crate) conflicts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1435,6 +1442,11 @@ pub(crate) struct ExternalRefGroup {
     /// Bundle members shared across multiple refs (e.g. a texture used by two
     /// different `.vam`s) are counted once.
     pub(crate) total_bundle_bytes: u64,
+    /// Other packages in the VAR Packages listing (not the target) that depend
+    /// on the source package; `None` when the listing isn't loaded.
+    pub(crate) used_by_others: Option<u32>,
+    /// The first few of them, by package id.
+    pub(crate) other_users: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1454,6 +1466,9 @@ pub(crate) struct InternalizeReport {
     pub(crate) errors: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) output_path: Option<String>,
+    /// Where the original was copied before it was rewritten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) backup_path: Option<String>,
 }
 
 /// Outcome of an Offload or Restore run (`offload::start_offload_task`).

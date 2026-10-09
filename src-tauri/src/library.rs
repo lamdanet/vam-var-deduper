@@ -772,6 +772,48 @@ impl LibIndex {
     }
 }
 
+/// For each of `paths` (package files in `items`), the ids of the other
+/// packages that depend on it, leaving out `exclude` (the package asking)
+/// — or `None` for a path the listing doesn't have.
+pub(crate) fn users_of(
+    items: &[VarPackageListItem],
+    paths: &[String],
+    exclude: &str,
+) -> Vec<Option<Vec<String>>> {
+    let find = |p: &str| items.iter().position(|it| it.file_path.eq_ignore_ascii_case(p));
+    let wanted: Vec<Option<usize>> = paths.iter().map(|p| find(p)).collect();
+    let mut out: Vec<Option<Vec<String>>> = wanted.iter().map(|w| w.map(|_| Vec::new())).collect();
+    if wanted.iter().all(Option::is_none) {
+        return out;
+    }
+    let index = LibIndex::build(items);
+    for (i, item) in items.iter().enumerate() {
+        if item.file_path.eq_ignore_ascii_case(exclude) {
+            continue;
+        }
+        let mut uses: HashSet<usize> = HashSet::new();
+        for dep in &item.deps {
+            if let DepResolution::Found(t) | DepResolution::OtherVersion(t) = index.resolve(dep) {
+                if t != i {
+                    uses.insert(t);
+                }
+            }
+        }
+        for (slot, w) in out.iter_mut().zip(&wanted) {
+            if let (Some(list), Some(t)) = (slot.as_mut(), w) {
+                if uses.contains(t) {
+                    list.push(item.package_id.clone());
+                }
+            }
+        }
+    }
+    for list in out.iter_mut().flatten() {
+        list.sort_by_key(|id| id.to_lowercase());
+        list.dedup();
+    }
+    out
+}
+
 /// Fills the graph-derived fields (`missing_dep_count`, `used_by_count`,
 /// `newer_version`) across a whole scan. Returns how many distinct dependency
 /// keys don't resolve exactly (the Missing status count — the same set

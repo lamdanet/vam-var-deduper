@@ -26,7 +26,10 @@ use zip::{write::SimpleFileOptions, CompressionMethod, System, ZipArchive, ZipWr
 
 use crate::{
     execute::{binary_cache_sibling_descriptor, paired_support_paths, rewrite_external_text_payload},
-    fix_var::{collect_pkg_refs, is_text_path, resolve_pkg_entry, resolve_ref_status, RefStatus},
+    fix_var::{
+        collect_pkg_refs, free_backup_path, is_text_path, resolve_pkg_entry, resolve_ref_status,
+        RefStatus,
+    },
     models::{
         ExternalRef, ExternalRefGroup, InternalizeReport, InternalizeSelection, ScannedData,
         META_PATH,
@@ -60,6 +63,9 @@ pub(crate) fn scan_target_var_for_external_refs(
     // multiple text payloads collapses into one row, with each referencing
     // file appended to source_files_in_target.
     let mut refs: BTreeMap<(String, String), ExternalRef> = BTreeMap::new();
+    // What the target already holds, to tell a bundle member that's already
+    // inside from one that would clash with a different file.
+    let mut target_crcs: BTreeMap<String, u32> = BTreeMap::new();
 
     for index in 0..archive.len() {
         let mut entry = archive
@@ -69,6 +75,7 @@ pub(crate) fn scan_target_var_for_external_refs(
             continue;
         }
         let internal_path = normalize_zip_path(entry.name());
+        target_crcs.insert(internal_path.clone(), entry.crc32());
         if internal_path == META_PATH {
             continue;
         }
@@ -101,6 +108,8 @@ pub(crate) fn scan_target_var_for_external_refs(
                 bundle_paths: Vec::new(),
                 bundle_total_size: 0,
                 source_files_in_target: Vec::new(),
+                already_inside: Vec::new(),
+                conflicts: Vec::new(),
             });
             if !entry.source_files_in_target.contains(&internal_path) {
                 entry.source_files_in_target.push(internal_path.clone());
@@ -163,8 +172,13 @@ pub(crate) fn scan_target_var_for_external_refs(
             let bundle = expand_bundle_for_ref(&ext_ref.ref_path, &entry_sizes, &mut source_archive);
             let mut total: u64 = 0;
             for member in &bundle {
-                if let Some((sz, _)) = entry_sizes.get(member) {
+                if let Some((sz, crc)) = entry_sizes.get(member) {
                     total += *sz;
+                    match target_crcs.get(member) {
+                        Some(own) if own == crc => ext_ref.already_inside.push(member.clone()),
+                        Some(_) => ext_ref.conflicts.push(member.clone()),
+                        None => {}
+                    }
                 }
                 group_bundle.insert(member.clone());
             }
@@ -191,6 +205,8 @@ pub(crate) fn scan_target_var_for_external_refs(
             source_var_size,
             refs: refs_out,
             total_bundle_bytes,
+            used_by_others: None,
+            other_users: Vec::new(),
         });
     }
 
@@ -392,8 +408,10 @@ pub(crate) fn apply_internalize(
             .with_context(|| format!("failed to create backup dir {}", backup_root.display()))?;
         let file_name = target_path
             .file_name()
+            .and_then(|n| n.to_str())
             .ok_or_else(|| anyhow!("invalid target file name"))?;
-        let backup_path = backup_root.join(file_name);
+        // Never over an earlier backup: that one may be the only good copy.
+        let backup_path = free_backup_path(backup_root, file_name);
         fs::copy(target_path, &backup_path).with_context(|| {
             format!(
                 "failed to back up {} → {}",
@@ -401,6 +419,7 @@ pub(crate) fn apply_internalize(
                 backup_path.display()
             )
         })?;
+        report.backup_path = Some(backup_path.to_string_lossy().to_string());
     }
 
     let reader = fs::File::open(target_path)

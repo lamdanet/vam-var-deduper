@@ -6484,7 +6484,24 @@ pub(crate) fn scan_internalize_candidates(
                 .to_string()
         })?;
 
-    scan_target_var_for_external_refs(target_path, &scanned).map_err(|err| err.to_string())
+    let mut groups =
+        scan_target_var_for_external_refs(target_path, &scanned).map_err(|err| err.to_string())?;
+    // Who else needs each source package, from the VAR Packages listing: the
+    // one only this package uses can go once its files are copied in.
+    if let Ok(cache) = state.var_packages_folder_cache.lock() {
+        if let Some(cache) = cache.as_ref() {
+            let paths: Vec<String> = groups.iter().map(|g| g.source_var_path.clone()).collect();
+            let users = crate::library::users_of(&cache.items, &paths, &target_var_path);
+            for (group, users) in groups.iter_mut().zip(users) {
+                if let Some(mut users) = users {
+                    group.used_by_others = Some(users.len() as u32);
+                    users.truncate(5);
+                    group.other_users = users;
+                }
+            }
+        }
+    }
+    Ok(groups)
 }
 
 /// Runs the user-approved internalization plan on a target VAR — copies each
@@ -6503,6 +6520,7 @@ pub(crate) fn start_apply_internalize_task(
     replace_in_place: bool,
     selections: Vec<InternalizeSelection>,
     backup: bool,
+    backup_dir: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<TaskHandle, String> {
     let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
@@ -6566,8 +6584,16 @@ pub(crate) fn start_apply_internalize_task(
                 Some(Path::new(dir).join("changed").join(file_name))
             };
 
+            // The folder chosen for backups, else <output>/backup, else a
+            // sibling internalize-backup folder.
+            let chosen_backup_dir = backup_dir
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
             let backup_root_owned = if backup && replace_in_place {
-                if let Some(dir) = trimmed_output_dir {
+                if let Some(dir) = chosen_backup_dir {
+                    Some(Path::new(dir).to_path_buf())
+                } else if let Some(dir) = trimmed_output_dir {
                     Some(Path::new(dir).join("backup"))
                 } else {
                     target_path.parent().map(|p| p.join("internalize-backup"))

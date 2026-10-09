@@ -6656,3 +6656,79 @@ fn transient_download_errors() {
     assert!(!t("download returned HTTP 404 Not Found"));
     assert!(!t("downloaded file is not a valid .var"));
 }
+
+#[test]
+fn internalize_flags_clashes_and_keeps_every_backup() {
+    use crate::internalize::{apply_internalize, scan_target_var_for_external_refs};
+    use crate::models::InternalizeSelection;
+
+    let dir = repo_root().join("tmp_internalize_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    let backups = dir.join("bk");
+    let scene = br#"{ "a": "S.Pack.1:/Custom/Clothing/x/top.vam", "b": "S.Pack.1:/Custom/Assets/clash.png" }"#;
+    write_test_var_with_deps(
+        &vars.join("T.Scene.1.var"),
+        &["S.Pack.1"],
+        &[("Saves/scene/s.json", scene), ("Custom/Assets/clash.png", b"the scene's own image")],
+    );
+    write_test_var_with_deps(
+        &vars.join("S.Pack.1.var"),
+        &[],
+        &[
+            ("Custom/Clothing/x/top.vam", b"{}"),
+            ("Custom/Clothing/x/top.vaj", b"{}"),
+            ("Custom/Assets/clash.png", b"the pack's image"),
+        ],
+    );
+    let target = vars.join("T.Scene.1.var");
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], None, |_, _| {}).expect("scan");
+
+    let groups = scan_target_var_for_external_refs(&target, &scanned).expect("refs");
+    assert_eq!(groups.len(), 1);
+    let refs = &groups[0].refs;
+    let clash = refs.iter().find(|r| r.ref_path == "Custom/Assets/clash.png").expect("clash ref");
+    assert_eq!(clash.conflicts, vec!["Custom/Assets/clash.png".to_string()]);
+    let top = refs.iter().find(|r| r.ref_path == "Custom/Clothing/x/top.vam").expect("vam ref");
+    assert!(top.conflicts.is_empty() && top.already_inside.is_empty());
+    assert_eq!(top.bundle_paths.len(), 2, "the .vaj comes along");
+
+    let pick = |path: &str| InternalizeSelection { source_pkg_id: "S.Pack.1".into(), ref_path: path.into() };
+    let first = apply_internalize(&target, None, &scanned, &[pick("Custom/Clothing/x/top.vam")], Some(&backups))
+        .expect("first apply");
+    assert_eq!(first.entries_copied, 2);
+    assert!(first.dependencies_removed.is_empty(), "clash.png still points at the pack");
+    assert_eq!(first.backup_path.as_deref(), Some(backups.join("T.Scene.1.var").to_string_lossy().as_ref()));
+
+    let second = apply_internalize(&target, None, &scanned, &[pick("Custom/Assets/clash.png")], Some(&backups))
+        .expect("second apply");
+    assert_eq!(second.entries_skipped_collision, vec!["Custom/Assets/clash.png".to_string()]);
+    assert_eq!(second.dependencies_removed, vec!["S.Pack.1".to_string()]);
+    assert_eq!(
+        second.backup_path.as_deref(),
+        Some(backups.join("T.Scene.1 (2).var").to_string_lossy().as_ref()),
+        "an earlier backup is never overwritten"
+    );
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
+fn users_of_leaves_out_the_asking_package() {
+    let items = vec![
+        lib_item("S.Pack.1", &[]),
+        lib_item("T.Scene.1", &["S.Pack.1"]),
+        lib_item("U.Look.1", &["S.Pack.latest"]),
+        lib_item("V.Alone.1", &[]),
+    ];
+    let paths = vec![
+        items[0].file_path.clone(),
+        items[3].file_path.clone(),
+        "C:/elsewhere/X.Y.1.var".to_string(),
+    ];
+    let users = crate::library::users_of(&items, &paths, &items[1].file_path);
+    assert_eq!(users[0], Some(vec!["U.Look.1".to_string()]));
+    assert_eq!(users[1], Some(Vec::new()));
+    assert_eq!(users[2], None, "not in the listing");
+}

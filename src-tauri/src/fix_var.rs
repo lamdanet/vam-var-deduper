@@ -759,7 +759,7 @@ fn lookup_license_in_db(db: &Db, _package_id: &str) -> Result<Option<String>> {
 
 /// `dir/name`, or `dir/<stem> (2).var` and so on when that's taken, so an
 /// earlier backup is never overwritten.
-fn free_backup_path(dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn free_backup_path(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {
         return first;
