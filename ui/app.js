@@ -2782,7 +2782,6 @@ async function loadSettingsView() {
     }
     return;
   }
-  fmRenderPrefsSettings();
   try {
     const stats = await invoke("get_database_stats");
     $("settings-db-packages-value").textContent = String(stats?.package_count ?? 0);
@@ -2799,48 +2798,6 @@ async function loadSettingsView() {
 }
 
 window.__loadSettingsView = loadSettingsView;
-
-// Settings > Replacement sources: every package Fix Missing prefers or
-// avoids, to switch or remove.
-async function fmRenderPrefsSettings() {
-  const host = $("settings-repl-prefs");
-  if (!host) return;
-  await fmLoadPrefs();
-  const rows = [...FM_PREFS.entries()].sort(
-    (a, b) => b[1] - a[1] || pkgIdParts(a[0]).name.localeCompare(pkgIdParts(b[0]).name),
-  );
-  host.innerHTML = rows.length
-    ? rows
-        .map(
-          ([id, pref]) => `<div class="fm-prefs-row">
-            ${fmPkgLabelHtml(id)}
-            <span class="chip ${pref === 1 ? "fm-chip-pref" : "fm-chip-avoid"}"><span class="material-symbols-outlined">${pref === 1 ? "thumb_up" : "thumb_down"}</span>${pref === 1 ? "Preferred" : "Avoid"}</span>
-            <button type="button" class="ghost-button fm-small" data-fm-prefset="${escapeAttribute(id)}" data-fm-prefset-val="${pref === 1 ? -1 : 1}">${pref === 1 ? "Avoid instead" : "Prefer instead"}</button>
-            <button type="button" class="fm-icon-btn" data-fm-prefset="${escapeAttribute(id)}" data-fm-prefset-val="0" title="Remove: no preference" aria-label="Remove"><span class="material-symbols-outlined">close</span></button>
-          </div>`,
-        )
-        .join("")
-    : `<p class="fm-none-line">None yet: hover a package in Fix Missing's Replacement Sources and use the thumbs.</p>`;
-}
-
-function setupPrefsSettings() {
-  const host = $("settings-repl-prefs");
-  if (!host) return;
-  host.addEventListener("click", async (e) => {
-    const el = e.target.closest?.("[data-fm-prefset]");
-    if (!el) return;
-    const id = el.getAttribute("data-fm-prefset");
-    const pref = Number(el.getAttribute("data-fm-prefset-val"));
-    try {
-      await invoke("set_replacement_pref", { packageId: id, pref });
-    } catch (err) {
-      showToast(`Couldn't save that: ${String(err?.message || err)}`, "error");
-      return;
-    }
-    await fmRenderPrefsSettings();
-    if (Array.isArray(FM.refs)) fmRefresh();
-  });
-}
 window.__refreshBuildDbStats = () => {
   refreshBuildDbStats();
   refreshDownloadLinksCount();
@@ -3159,6 +3116,16 @@ const LIB_CONTENT_TAGS = {
 const LIB_STATUSES = [
   { key: null, label: "All", title: "Every package in the scanned folders", count: "all" },
   { key: "favorites", label: "Favorites" },
+  {
+    key: "preferred_source",
+    label: "Preferred source",
+    title: "Packages Fix Missing chooses first when it replaces a missing file",
+  },
+  {
+    key: "avoided_source",
+    label: "Avoided source",
+    title: "Packages Fix Missing never chooses by itself to replace a missing file",
+  },
   {
     key: "installed",
     label: "Installed",
@@ -3597,6 +3564,14 @@ function libCardHtml(it, idx) {
       `<span class="lib-chip lib-chip-error" title="${escapeAttribute(`A full check found a broken file: ${it.damaged}`)}">Damaged</span>`,
     );
   }
+  const rp = fmPref(pid);
+  if (rp) {
+    icons.push(
+      `<span class="lib-thumb-glyph lib-rp ${rp === 1 ? "is-pref" : "is-avoid"}" title="${
+        rp === 1 ? "Preferred replacement source: Fix Missing chooses it first" : "Avoided replacement source: Fix Missing never chooses it by itself"
+      }"><span class="material-symbols-outlined">${rp === 1 ? "thumb_up" : "thumb_down"}</span></span>`,
+    );
+  }
   icons.push(
     `<button type="button" class="lib-thumb-glyph lib-fav${fav ? " is-active" : ""}" data-vp-fav="${escapeAttribute(pid)}" aria-pressed="${fav}" title="${fav ? "Remove from favorites" : "Add to favorites"}"><span class="material-symbols-outlined">star</span></button>`,
   );
@@ -3661,6 +3636,9 @@ function libStatusCellHtml(it) {
   else parts.push(`<span class="lib-status-ok">Top-level</span>`);
   if (it.newer_version) parts.push(`<span class="lib-status-warn">Old</span>`);
   if (!it.indexed) parts.push(`<span class="lib-status-muted">Not in DB</span>`);
+  const rp = fmPref(it.package_id);
+  if (rp === 1) parts.push(`<span class="lib-status-pref" title="Fix Missing chooses it first">Preferred source</span>`);
+  if (rp === -1) parts.push(`<span class="lib-status-avoid" title="Fix Missing never chooses it by itself">Avoided source</span>`);
   return `<span class="lib-status-text">${parts.join(" · ")}</span>`;
 }
 
@@ -4337,6 +4315,11 @@ function libDetailHeaderHtml(item, details) {
     chips.push(
       `<span class="lib-chip lib-chip-local" title="Not on the Hub — once deleted, it can't be downloaded again. Keep a backup.">Not on Hub</span>`,
     );
+  }
+  if (fmPref(item.package_id) === 1) {
+    chips.push(`<span class="chip fm-chip-pref" title="Fix Missing chooses it first when it replaces a missing file"><span class="material-symbols-outlined">thumb_up</span>Preferred source</span>`);
+  } else if (fmPref(item.package_id) === -1) {
+    chips.push(`<span class="chip fm-chip-avoid" title="Fix Missing never chooses it by itself"><span class="material-symbols-outlined">thumb_down</span>Avoided source</span>`);
   }
   chips.push(libLicenseHtml(details?.license ?? item.license));
   if (details?.morph_count > 0) {
@@ -9240,6 +9223,14 @@ function fmOrderPref(pkg) {
 }
 
 // A candidate the page may choose by itself: not in a package you avoid.
+// A preference changed: VAR Packages' tags and filter counts, and Fix
+// Missing, follow.
+function fmPrefsChanged() {
+  if (state.vpHasListing && !state.varPackagesLoading) refreshVarPackagesFromFolder({ keepLoaded: true }).catch(() => {});
+  else if (typeof renderVarPackages === "function") renderVarPackages();
+  if (Array.isArray(FM.refs)) fmRefresh();
+}
+
 function fmAutoOk(c) {
   return Boolean(c) && (c.isSelf || fmPref(c.package_id) !== -1);
 }
@@ -11047,7 +11038,7 @@ function fmRenderDetail() {
           ${
             !fmStoreGet(FM_STORE.prefTip, "") && cands.some((c) => !c.isSelf)
               ? `<p class="fm-tip"><span class="material-symbols-outlined">thumbs_up_down</span>
-                  <span>Hover a package to prefer it as a replacement source, or to avoid it. Fix Missing remembers it for every package you check.</span>
+                  <span>Hover a package to prefer it as a replacement source, or to avoid it. It's remembered for every package you check, and VAR Packages can filter by it.</span>
                   <button type="button" class="fm-link" data-fm-act="tip-off">Got it</button></p>`
               : ""
           }
@@ -11241,6 +11232,7 @@ async function fmSetPref(pkg, val) {
     }
   }
   FM.prefChange = { pkg, prev, next, before };
+  if (state.vpHasListing && !state.varPackagesLoading) refreshVarPackagesFromFolder({ keepLoaded: true }).catch(() => {});
   const name = pkgIdParts(pkg).name;
   fmFlash(
     next === 1
@@ -11596,7 +11588,6 @@ function setupFixMissing() {
     }, 250);
   });
   window.__refreshFixMissingView = () => fmRender();
-  setupPrefsSettings();
   fmLoadPrefs().then(() => {
     if (Array.isArray(FM.refs)) fmRefresh();
   });
@@ -13507,6 +13498,32 @@ function libMaybeLoadMore(force = false) {
 
 // ---- Wiring ------------------------------------------------------------------
 
+// Fix Missing's replacement preference for packages from VAR Packages:
+// 1 preferred, -1 avoided, 0 none.
+async function libSetReplacementPref(ids, pref) {
+  const list = ids.filter(Boolean);
+  for (const id of list) {
+    try {
+      await invoke("set_replacement_pref", { packageId: id, pref });
+    } catch (e) {
+      showToast(`Couldn't save that: ${String(e?.message || e)}`, "error");
+      break;
+    }
+    if (pref) FM_PREFS.set(id, pref);
+    else FM_PREFS.delete(id);
+  }
+  fmPrefsChanged();
+  showToast(
+    pref === 1
+      ? `${pkgCount(list.length, "package", "packages")} preferred as a replacement source.`
+      : pref === -1
+        ? `${pkgCount(list.length, "package", "packages")} avoided as a replacement source.`
+        : `No replacement preference for ${pkgCount(list.length, "package", "packages")}.`,
+    "success",
+    3000,
+  );
+}
+
 function libSelectedSnaps() {
   return [...state.vpSelected.values()];
 }
@@ -13726,6 +13743,14 @@ function libContextMenu(event, item) {
         { label: "Restore selected…", action: () => libRunAction("bulk-restore") },
         { label: "Scan dependencies of selected…", action: () => libRunAction("bulk-scan-deps") },
         { label: "Add to favorites", action: () => libRunAction("bulk-favorite") },
+        {
+          label: "Replacement source",
+          submenu: [
+            { label: "Prefer selected (Fix Missing chooses them first)", action: () => libSetReplacementPref(libSelectedSnaps().map((s) => s.package_id), 1) },
+            { label: "Avoid selected (never chosen by themselves)", action: () => libSetReplacementPref(libSelectedSnaps().map((s) => s.package_id), -1) },
+            { label: "No preference for selected", action: () => libSetReplacementPref(libSelectedSnaps().map((s) => s.package_id), 0) },
+          ],
+        },
         { separator: true },
         { label: "Clean Duplicates of selected…", action: () => libRunAction("bulk-clean") },
         { label: "Organize selected by Creator…", action: () => libRunAction("bulk-organize") },
@@ -13763,6 +13788,14 @@ function libContextMenu(event, item) {
         {
           label: fav ? "Remove from favorites" : "Add to favorites",
           action: () => togglePackageFavorite(packageId),
+        },
+        {
+          label: "Replacement source",
+          submenu: [
+            { label: `${fmPref(packageId) === 1 ? "✓ " : ""}Prefer (Fix Missing chooses it first)`, action: () => libSetReplacementPref([packageId], 1) },
+            { label: `${fmPref(packageId) === -1 ? "✓ " : ""}Avoid (never chosen by itself)`, action: () => libSetReplacementPref([packageId], -1) },
+            ...(fmPref(packageId) ? [{ label: "No preference", action: () => libSetReplacementPref([packageId], 0) }] : []),
+          ],
         },
         {
           label: item.offloaded ? "Restore to AddonPackages…" : "Offload…",

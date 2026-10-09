@@ -19243,27 +19243,28 @@ button.pkg-stat:focus-visible::after {
   flex: 1 1 auto;
 }
 
-.fm-prefs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.fm-prefs-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-}
-
-.fm-prefs-row > .fm-pkgname {
-  flex: 1 1 auto;
-}
-
 /* The preferred teal, darker where the background is light. */
 :root[data-theme="light"] {
   --fm-pref: #0f766e;
+}
+
+/* VAR Packages: a package's replacement-source preference. */
+.lib-rp.is-pref {
+  color: var(--fm-pref, #2dd4bf);
+}
+
+.lib-rp.is-pref .material-symbols-outlined {
+  font-variation-settings: "FILL" 1;
+}
+
+.lib-rp.is-avoid {
+  color: var(--accent-danger);
+}
+
+.lib-status-pref {
+  color: var(--fm-pref, #2dd4bf);
+}
+
+.lib-status-avoid {
+  color: var(--accent-danger);
 }
