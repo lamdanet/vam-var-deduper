@@ -6951,3 +6951,70 @@ fn internalize_leaves_plugins_as_dependencies() {
     assert_eq!(q.plugin_refs, vec!["Q.Tool.1:/Custom/Scripts/Q/q.cs".to_string()]);
     fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+#[test]
+fn internalize_makes_a_package_whole_from_copies_of_a_missing_dependency() {
+    use crate::internalize::{apply_internalize, fill_from_copies, scan_target_var_for_external_refs};
+    use crate::models::{BrokenKind, BrokenRef, BrokenRefCandidate, InternalizeSelection, ResourceRef};
+
+    let dir = repo_root().join("tmp_internalize_missing_dep_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    // Gone.Pack.1 isn't installed; another package has the same image.
+    write_test_var_with_deps(
+        &vars.join("T.Scene.1.var"),
+        &["Gone.Pack.1"],
+        &[("Saves/scene/s.json", &br#"{ "t": "Gone.Pack.1:/Custom/skin.png" }"#[..])],
+    );
+    write_test_var_with_deps(&vars.join("O.Other.1.var"), &[], &[("Custom/Other/skin.png", &b"skin-bytes"[..])]);
+    let target = vars.join("T.Scene.1.var");
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], None, |_, _| {}).expect("scan");
+
+    let mut groups = scan_target_var_for_external_refs(&target, &scanned).expect("refs");
+    let gone = groups.iter().find(|g| g.source_pkg_id == "Gone.Pack.1").expect("listed though not installed");
+    assert!(!gone.installed && gone.refs.is_empty());
+    assert_eq!(gone.other_refs, vec!["Gone.Pack.1:/Custom/skin.png".to_string()]);
+
+    let crc = zip::ZipArchive::new(fs::File::open(vars.join("O.Other.1.var")).expect("open"))
+        .expect("zip")
+        .by_name("Custom/Other/skin.png")
+        .expect("entry")
+        .crc32();
+    let broken = vec![BrokenRef {
+        kind: BrokenKind::TextRef,
+        ref_pkg: "Gone.Pack.1".into(),
+        ref_path: Some("Custom/skin.png".into()),
+        expected_crc32: Some(crc),
+        expected_size: Some(10),
+        source_files_in_target: vec!["Saves/scene/s.json".into()],
+        local_candidates: vec![BrokenRefCandidate {
+            resource: ResourceRef {
+                package_id: "O.Other.1".into(),
+                package_file: vars.join("O.Other.1.var").to_string_lossy().to_string(),
+                internal_path: "Custom/Other/skin.png".into(),
+                crc32: Some(crc),
+                size: 10,
+                effective_size: 10,
+            },
+        }],
+    }];
+    fill_from_copies(&mut groups, &broken, &target).expect("fill");
+    let fill = groups.iter().find(|g| g.source_pkg_id == "Gone.Pack.1").expect("gone").fills[0].clone();
+
+    let pick = InternalizeSelection {
+        source_pkg_id: fill.ref_pkg.clone(),
+        ref_path: fill.ref_path.clone(),
+        from_pkg: Some(fill.from_pkg.clone()),
+        from_path: Some(fill.from_path.clone()),
+    };
+    let report = apply_internalize(&target, None, &scanned, &[pick], None).expect("apply");
+    assert_eq!(report.dependencies_removed, vec!["Gone.Pack.1".to_string()], "the missing dependency is gone");
+    assert!(report.dependencies_removed.iter().all(|d| d != "O.Other.1"));
+    let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
+    let mut raw = Vec::new();
+    zip.by_name("Custom/skin.png").expect("copied in").read_to_end(&mut raw).expect("read");
+    assert_eq!(raw, b"skin-bytes");
+    fs::remove_dir_all(&dir).expect("cleanup");
+}

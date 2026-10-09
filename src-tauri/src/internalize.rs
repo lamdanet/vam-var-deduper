@@ -98,22 +98,21 @@ pub(crate) fn scan_target_var_for_external_refs(
             if pkg == target_pkg_id {
                 continue;
             }
-            // Only valid refs (source pkg + path both resolvable locally).
-            // Broken refs are handled by the Missing Resources page; surfacing
-            // them here would offer a "copy" the user couldn't actually do.
-            if !matches!(resolve_ref_status(&pkg, &path, scan), RefStatus::Healthy) {
-                unusable
-                    .entry(family_of(&pkg))
-                    .or_default()
-                    .insert(format!("{pkg}:/{}", normalize_zip_path(&path)));
-                continue;
-            }
             let path_norm = normalize_zip_path(&path);
             if is_script_path(&path_norm) {
                 plugins
                     .entry(family_of(&pkg))
                     .or_insert_with(|| (pkg.clone(), BTreeSet::new()))
                     .1
+                    .insert(format!("{pkg}:/{path_norm}"));
+                continue;
+            }
+            // A file not in the package as named (or the package isn't
+            // installed): it can only come from an exact copy elsewhere.
+            if !matches!(resolve_ref_status(&pkg, &path, scan), RefStatus::Healthy) {
+                unusable
+                    .entry(family_of(&pkg))
+                    .or_default()
                     .insert(format!("{pkg}:/{path_norm}"));
                 continue;
             }
@@ -227,6 +226,7 @@ pub(crate) fn scan_target_var_for_external_refs(
 
         groups.push(ExternalRefGroup {
             source_pkg_id: pkg,
+            installed: true,
             source_var_path: prepared.file_path.to_string_lossy().to_string(),
             source_var_size,
             refs: refs_out,
@@ -239,26 +239,39 @@ pub(crate) fn scan_target_var_for_external_refs(
         });
     }
 
-    // A plugin whose files the target uses nothing else of still shows: the
-    // page says why it isn't offered.
+    // Every other package the target names still shows, with nothing to copy
+    // from it directly: one it only uses as a plugin (the page says why it
+    // stays), and one that isn't installed (exact copies of its files
+    // elsewhere may still make the target whole).
+    let mut named: BTreeMap<String, String> = BTreeMap::new();
     for (family, (pkg, _)) in &plugins {
+        named.entry(family.clone()).or_insert_with(|| pkg.clone());
+    }
+    for (family, refs) in &unusable {
+        if let Some(first) = refs.iter().next() {
+            named
+                .entry(family.clone())
+                .or_insert_with(|| first.split(":/").next().unwrap_or_default().to_string());
+        }
+    }
+    for (family, pkg) in &named {
         if groups.iter().any(|g| family_of(&g.source_pkg_id) == *family) {
             continue;
         }
-        if let Some(prepared) = resolve_pkg_entry(pkg, scan) {
-            groups.push(ExternalRefGroup {
-                source_pkg_id: pkg.clone(),
-                source_var_path: prepared.file_path.to_string_lossy().to_string(),
-                source_var_size: fs::metadata(&prepared.file_path).map(|m| m.len()).unwrap_or(0),
-                refs: Vec::new(),
-                total_bundle_bytes: 0,
-                used_by_others: None,
-                other_users: Vec::new(),
-                other_refs: Vec::new(),
-                fills: Vec::new(),
-                plugin_refs: Vec::new(),
-            });
-        }
+        let prepared = resolve_pkg_entry(pkg, scan);
+        groups.push(ExternalRefGroup {
+            source_pkg_id: pkg.clone(),
+            installed: prepared.is_some(),
+            source_var_path: prepared.map(|p| p.file_path.to_string_lossy().to_string()).unwrap_or_default(),
+            source_var_size: prepared.and_then(|p| fs::metadata(&p.file_path).ok()).map(|m| m.len()).unwrap_or(0),
+            refs: Vec::new(),
+            total_bundle_bytes: 0,
+            used_by_others: None,
+            other_users: Vec::new(),
+            other_refs: Vec::new(),
+            fills: Vec::new(),
+            plugin_refs: Vec::new(),
+        });
     }
     for group in &mut groups {
         let family = family_of(&group.source_pkg_id);

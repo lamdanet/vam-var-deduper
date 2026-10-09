@@ -6500,6 +6500,7 @@ pub(crate) fn scan_internalize_candidates(
     if let Ok(cache) = state.var_packages_folder_cache.lock() {
         if let Some(cache) = cache.as_ref() {
             let paths: Vec<String> = groups.iter().map(|g| g.source_var_path.clone()).collect();
+            // (A package that isn't installed has no path: no users to count.)
             let users = crate::library::users_of(&cache.items, &paths, &target_var_path);
             for (group, users) in groups.iter_mut().zip(users) {
                 if let Some(mut users) = users {

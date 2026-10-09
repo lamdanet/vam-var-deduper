@@ -1442,6 +1442,10 @@ pub(crate) struct ExternalRef {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ExternalRefGroup {
     pub(crate) source_pkg_id: String,
+    /// False for a package that isn't in the folders (as named): every file
+    /// the target uses from it is in `other_refs`, and Copy in can only take
+    /// them from exact copies elsewhere (`fills`).
+    pub(crate) installed: bool,
     pub(crate) source_var_path: String,
     pub(crate) source_var_size: u64,
     pub(crate) refs: Vec<ExternalRef>,
