@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 20;
+pub(crate) const SCHEMA_VERSION: i32 = 21;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -700,6 +700,20 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         .context("failed to create auto_hidden")?;
     }
 
+    if current < 21 {
+        // Fix Missing's replacement-source preference, apart from favorites:
+        // a favorite isn't necessarily a good source. 1 = preferred, -1 =
+        // avoid; "none" is row absence. Not cleared with the index: it's a
+        // user preference, like package favorites.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS replacement_prefs (
+                package_id TEXT PRIMARY KEY,
+                pref       INTEGER NOT NULL
+            );",
+        )
+        .context("failed to create replacement_prefs")?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
@@ -1215,6 +1229,42 @@ pub(crate) fn get_package_flag(conn: &Connection, package_id: &str) -> Result<i3
         rusqlite::Error::QueryReturnedNoRows => Ok(PACKAGE_FLAG_NONE),
         other => Err(other.into()),
     })
+}
+
+pub(crate) const REPLACEMENT_AVOID: i32 = -1;
+pub(crate) const REPLACEMENT_NONE: i32 = 0;
+pub(crate) const REPLACEMENT_PREFERRED: i32 = 1;
+
+/// Marks a package as a preferred replacement source (1), one to avoid (-1),
+/// or neither (0, which removes the row).
+pub(crate) fn set_replacement_pref(conn: &Connection, package_id: &str, pref: i32) -> Result<()> {
+    if !(REPLACEMENT_AVOID..=REPLACEMENT_PREFERRED).contains(&pref) {
+        return Err(anyhow!("invalid replacement preference {pref}"));
+    }
+    if pref == REPLACEMENT_NONE {
+        conn.execute("DELETE FROM replacement_prefs WHERE package_id = ?1", params![package_id])
+            .with_context(|| format!("failed to clear the preference for {package_id}"))?;
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO replacement_prefs (package_id, pref) VALUES (?1, ?2)
+         ON CONFLICT(package_id) DO UPDATE SET pref = excluded.pref",
+        params![package_id, pref],
+    )
+    .with_context(|| format!("failed to set the preference for {package_id}"))?;
+    Ok(())
+}
+
+/// Every package with a replacement preference: (package id, 1 or -1).
+pub(crate) fn get_replacement_prefs(conn: &Connection) -> Result<Vec<(String, i32)>> {
+    let mut stmt = conn
+        .prepare("SELECT package_id, pref FROM replacement_prefs ORDER BY package_id")
+        .context("failed to prepare replacement preference query")?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?)))
+        .context("failed to query replacement preferences")?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to read replacement preferences")
 }
 
 pub(crate) fn get_favorite_package_ids(conn: &Connection) -> Result<HashSet<String>> {

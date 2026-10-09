@@ -1168,6 +1168,24 @@ pub(crate) fn list_favorite_packages(db: State<'_, Db>) -> Result<Vec<String>, S
     Ok(ids)
 }
 
+/// Fix Missing: mark a package as a preferred replacement source (1), one to
+/// avoid (-1), or neither (0). Async for the same reason as set_package_flag.
+#[tauri::command(async)]
+pub(crate) fn set_replacement_pref(package_id: String, pref: i32, db: State<'_, Db>) -> Result<(), String> {
+    let conn = db
+        .conn
+        .lock()
+        .map_err(|_| "database connection poisoned".to_string())?;
+    db::set_replacement_pref(&conn, &package_id, pref).map_err(|err| err.to_string())
+}
+
+/// Every replacement preference, as (package id, 1 or -1) pairs.
+#[tauri::command(async)]
+pub(crate) fn list_replacement_prefs(db: State<'_, Db>) -> Result<Vec<(String, i32)>, String> {
+    let conn = db.read().map_err(|err| err.to_string())?;
+    db::get_replacement_prefs(&conn).map_err(|err| err.to_string())
+}
+
 /// Favorite-creator counterpart to `list_blocked_creators` — until now
 /// `get_favorite_creator_names` was only consumed inside the reclaim scan.
 #[tauri::command(async)]

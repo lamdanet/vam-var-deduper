@@ -4724,6 +4724,29 @@ fn package_flag_roundtrip_without_indexed_package() {
 }
 
 #[test]
+fn replacement_prefs_roundtrip() {
+    use crate::db;
+
+    let db = db::open_in_memory().expect("open db");
+    let conn = db.conn.lock().expect("lock db");
+    assert!(db::get_replacement_prefs(&conn).expect("list").is_empty());
+    db::set_replacement_pref(&conn, "Good.Source.2", db::REPLACEMENT_PREFERRED).expect("prefer");
+    db::set_replacement_pref(&conn, "Bad.Source.1", db::REPLACEMENT_AVOID).expect("avoid");
+    // Separate from favorites: favoriting doesn't touch it.
+    db::set_package_flag(&conn, "Good.Source.2", db::PACKAGE_FLAG_FAVORITE).expect("fav");
+    assert_eq!(
+        db::get_replacement_prefs(&conn).expect("list"),
+        vec![("Bad.Source.1".to_string(), -1), ("Good.Source.2".to_string(), 1)]
+    );
+    // Switching and clearing.
+    db::set_replacement_pref(&conn, "Bad.Source.1", db::REPLACEMENT_PREFERRED).expect("switch");
+    db::set_replacement_pref(&conn, "Good.Source.2", db::REPLACEMENT_NONE).expect("clear");
+    assert_eq!(db::get_replacement_prefs(&conn).expect("list"), vec![("Bad.Source.1".to_string(), 1)]);
+    assert!(db::set_replacement_pref(&conn, "X.Y.1", 2).is_err());
+    assert!(db::set_replacement_pref(&conn, "X.Y.1", -2).is_err());
+}
+
+#[test]
 fn db_package_where_favorite_filter_matches_flagged_only() {
     use crate::db;
     use crate::models::VarPackageFilters;
