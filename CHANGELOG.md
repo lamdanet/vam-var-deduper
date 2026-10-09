@@ -122,14 +122,12 @@ release time, it fills it with the commit messages since the last release.
 - When a dependency is in more than one folder, the copy in AddonPackages is
   the one shown
 - **Internalize Resources** has Fix Missing's layout: the package on top, the
-  packages it uses on the left (each with what copying its files adds, and
-  whether any other package still needs it), their files on the right. A
-  summary picks out the packages only this one uses, which can be removed
-  once their files are copied in. A file that would clash with a different
-  one already inside is flagged and left out. It fixes the original, with a
-  backup in the same folder as Fix Missing's, and checks it again afterwards
-
-### Fixed
+  packages it uses on the left (what copying each one in adds, and whether
+  other packages list it as a dependency), their files on the right. A
+  package comes in whole, so every copy drops the dependency; one it can't
+  copy in whole (a file missing from it, or one that clashes) isn't offered,
+  and the summary says why and opens Fix Missing. It fixes the original,
+  with a backup in the same folder as Fix Missing's, and checks it again
 - Internalize Resources no longer promises a dependency goes when the
   package still references a file missing from it, and drops one a
   scene names by another version (`.latest`) than meta.json lists
