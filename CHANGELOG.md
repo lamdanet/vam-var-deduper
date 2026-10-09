@@ -66,7 +66,11 @@ release time, it fills it with the commit messages since the last release.
   download ones you don't have. Writing a fixed copy doesn't ask first; then
   the page leads you to check the copy and put it in place of the original,
   keeping a backup. The empty page lists packages you checked lately and the
-  ones with missing dependencies. The list works from the keyboard and with
+  ones with missing dependencies. A package can be marked a preferred
+  replacement source (star) or one to avoid: preferred packages are chosen
+  over others wherever they have the same file, in every check, and avoided
+  ones are never chosen by themselves; you can still pick one, with a
+  warning. The list works from the keyboard and with
   screen readers. Package Explorer has a Check refs button and shows what
   the last check found, with Fix references. Missing Resources is still
   there
