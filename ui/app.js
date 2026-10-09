@@ -11784,7 +11784,7 @@ async function izScan() {
     const files = IZ.groups.reduce((n, g) => n + (g.refs ?? []).length, 0);
     izRecentAdd(IZ.target, files);
     IZ.configOpen = false;
-    const keys = new Set(izShown().flatMap((g) => (g.refs ?? []).map((r) => izKey(g.source_pkg_id, r.ref_path))));
+    const keys = new Set(izShown().flatMap((g) => [izPkgKey(g), ...(g.refs ?? []).map((r) => izKey(g.source_pkg_id, r.ref_path))]));
     IZ.picks = new Set([...IZ.picks].filter((k) => keys.has(k)));
     if (!izShown().some((g) => g.source_pkg_id === IZ.selected)) IZ.selected = izSorted()[0]?.source_pkg_id ?? null;
   } catch (e) {
@@ -11872,9 +11872,13 @@ function izKeptText(g, { suffix = true } = {}) {
   if (k.other.length) {
     const first = k.other.slice(0, 2).map((r) => r.slice(r.indexOf(":/") + 2).split("/").pop());
     parts.push(
-      `${self} also references ${pkgCount(k.other.length, "file", "files")} of it that can't be copied in (${first.join(", ")}${
-        k.other.length > 2 ? "…" : ""
-      }: missing from it, with no exact copy in your folders — see Fix Missing)`,
+      g.installed === false
+        ? `it isn't installed, and ${pkgCount(k.other.length, "file", "files")} ${self} uses from it (${first.join(", ")}${
+            k.other.length > 2 ? "…" : ""
+          }) ${k.other.length === 1 ? "has" : "have"} no exact copy in your folders — Fix Missing can download it`
+        : `${self} also references ${pkgCount(k.other.length, "file", "files")} of it that can't be copied in (${first.join(", ")}${
+            k.other.length > 2 ? "…" : ""
+          }: missing from it, with no exact copy in your folders — see Fix Missing)`,
     );
   }
   if (k.plugin.length) {
@@ -11910,12 +11914,20 @@ function izHiddenPkgs() {
   });
 }
 
-// Chosen: every file of the package (all versions named) is to come in.
+// Chosen: the package (all versions named) comes in, with every file of it
+// and those from exact copies. Kept per package, since one that isn't
+// installed has no files of its own here.
+function izPkgKey(g) {
+  return `pkg:${izFamily(g.source_pkg_id)}`;
+}
+
 function izChosen(g) {
-  return izFamilyGroups(g).every((x) => (x.refs ?? []).length && (x.refs ?? []).every((r) => IZ.picks.has(izKey(x.source_pkg_id, r.ref_path))));
+  return IZ.picks.has(izPkgKey(g));
 }
 
 function izSetChosen(g, on) {
+  if (on) IZ.picks.add(izPkgKey(g));
+  else IZ.picks.delete(izPkgKey(g));
   for (const x of izFamilyGroups(g)) {
     for (const r of x.refs ?? []) {
       const k = izKey(x.source_pkg_id, r.ref_path);
@@ -11958,6 +11970,7 @@ function izFiltered() {
       IZ.filter === "all" ||
       (IZ.filter === "only" && izExclusive(g) === true) ||
       (IZ.filter === "shared" && izExclusive(g) === false) ||
+      (IZ.filter === "absent" && g.installed === false) ||
       (IZ.filter === "chosen" && chosen) ||
       (IZ.filter === "todo" && !chosen);
     return ok && (!q || `${g.source_pkg_id} ${(g.refs ?? []).map((r) => r.ref_path).join(" ")}`.toLowerCase().includes(q));
@@ -12128,7 +12141,7 @@ function izInfoChip() {
   if (!Array.isArray(IZ.groups)) return `<span class="chip">Not checked yet</span>`;
   if (!IZ.groups.length) return `<span class="chip chip-accent"><span class="material-symbols-outlined">check_circle</span>Uses no files from other packages</span>`;
   const t = izTotals();
-  if (!t.pkgs) return `<span class="chip">No package it uses can be copied in whole</span>`;
+  if (!t.pkgs) return `<span class="chip">Nothing to copy in</span>`;
   return `<span class="chip fm-chip-info"><span class="material-symbols-outlined">input</span>${pkgCount(t.pkgs, "package", "packages")} to copy in · ${pkgCount(t.files, "file", "files")}</span>`;
 }
 
@@ -12316,7 +12329,7 @@ function izRenderDetails() {
     izLoadStart();
     cta = izStartHtml();
   } else if (Array.isArray(IZ.groups) && IZ.groups.length && !IZ.error) {
-    cta = `<p class="fm-details-hint">No package it uses can be copied in whole: it also references files missing from them. See the note on the left.</p>`;
+    cta = `<p class="fm-details-hint">Nothing to copy in now. The note on the left says why each package it uses stays.</p>`;
   } else if (Array.isArray(IZ.groups) && !IZ.error) {
     cta = `<p class="fm-details-hint fm-details-clean"><span class="material-symbols-outlined">check_circle</span>Nothing to copy in: it uses no files from other installed packages.</p>`;
   } else if (!IZ.scanning) {
@@ -12344,11 +12357,13 @@ function izRenderSummary() {
   const self = escapeHtml(izSelfName());
   const seen = new Set();
   const pkgs = izShown().filter((g) => !seen.has(izFamily(g.source_pkg_id)) && seen.add(izFamily(g.source_pkg_id)));
-  const only = pkgs.filter((g) => izExclusive(g) === true).length;
-  const listed = pkgs.filter((g) => izExclusive(g) === false).length;
+  const only = pkgs.filter((g) => g.installed !== false && izExclusive(g) === true).length;
+  const listed = pkgs.filter((g) => g.installed !== false && izExclusive(g) === false).length;
   const hiddenAll = izHiddenPkgs();
   const plugins = hiddenAll.filter((g) => izKeptBy(g).plugin.length);
-  const hidden = hiddenAll.filter((g) => !izKeptBy(g).plugin.length);
+  const absent = hiddenAll.filter((g) => !izKeptBy(g).plugin.length && g.installed === false);
+  const hidden = hiddenAll.filter((g) => !izKeptBy(g).plugin.length && g.installed !== false);
+  const whole = pkgs.filter((g) => g.installed === false).length;
   const nameList = (list) =>
     `${list
       .slice(0, 3)
@@ -12363,6 +12378,16 @@ function izRenderSummary() {
           hidden.length === 1 ? "it" : "them"
         } with no exact copy in your folders, or that clash, so copying couldn't remove ${hidden.length === 1 ? "it" : "them"}. Fix those first, then check again.</li>`
       : "",
+    whole
+      ? `<li><b>${whole}</b> ${whole === 1 ? "isn't" : "aren't"} installed, but every file ${self} uses from ${whole === 1 ? "it" : "them"} has an exact copy in your folders: copy ${
+          whole === 1 ? "it" : "them"
+        } in and ${self} works without ${whole === 1 ? "it" : "them"}.</li>`
+      : "",
+    absent.length
+      ? `<li><b>${absent.length}</b> ${absent.length === 1 ? "isn't" : "aren't"} installed and can't be made whole here (${nameList(absent)}): some files have no exact copy in your folders. Fix Missing can download ${
+          absent.length === 1 ? "it" : "them"
+        }.</li>`
+      : "",
     plugins.length
       ? `<li><b>${plugins.length}</b> ${plugins.length === 1 ? "is a plugin" : "are plugins"} ${self} uses (${nameList(plugins)}): ${
           plugins.length === 1 ? "it stays a dependency" : "they stay dependencies"
@@ -12373,7 +12398,7 @@ function izRenderSummary() {
     ? `<div class="fm-summary">
         <span class="material-symbols-outlined">info</span>
         <div><ul>${lines}</ul>${
-          hidden.length
+          hidden.length || absent.length
             ? `<div class="fm-summary-acts"><button type="button" class="ghost-button fm-small" data-iz-act="fix-missing"><span class="material-symbols-outlined">healing</span>Open in Fix Missing</button></div>`
             : ""
         }</div>
@@ -12383,6 +12408,7 @@ function izRenderSummary() {
 
 // Whether other packages list it as a dependency, as a chip.
 function izUsageChip(g) {
+  if (g.installed === false) return `<span class="chip" title="Not in your folders: its files come from exact copies in other packages">not installed</span>`;
   const ex = izExclusive(g);
   if (ex == null) return "";
   if (ex) return `<span class="chip" title="No other package in your folders lists it as a dependency">listed only here</span>`;
@@ -12433,6 +12459,7 @@ function izRenderList() {
         ["all", "All"],
         known ? ["only", "Listed only here"] : null,
         known ? ["shared", "Listed by others"] : null,
+        izShown().some((g) => g.installed === false) ? ["absent", "Not installed"] : null,
         ["todo", "Not chosen"],
         ["chosen", "Chosen"],
       ]
@@ -12460,14 +12487,16 @@ function izRenderList() {
       return `<div class="group-row missing-row fm-row iz-row${pkg === IZ.selected ? " active focused" : ""}${picked ? " is-chosen" : ""}" data-iz-row="${escapeAttribute(pkg)}"
           role="option" aria-selected="${pkg === IZ.selected}" tabindex="${pkg === focusKey ? 0 : -1}">
           <span class="material-symbols-outlined fm-row-state${picked ? "" : " is-dot"}">${picked ? "check_circle" : "fiber_manual_record"}</span>
-          ${libThumbHtml(g.source_var_path, libGradient(pkg), "iz-row-thumb")}</div>
+          ${g.installed === false ? `<span class="iz-row-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(g.source_var_path, libGradient(pkg), "iz-row-thumb")}</div>`}
           <span class="fm-row-text">
             <span class="fm-row-name" title="${escapeAttribute(pkg)}">${escapeHtml(p.name)}${sub ? ` <small class="iz-row-sub">${escapeHtml(sub)}</small>` : ""}</span>
             <span class="fm-row-dir">
               <span class="iz-fact" title="What copying all its files in adds, with what they need">${pkgCount(izPkgSize(g).files, "file", "files")} · ${escapeHtml(formatBytesLocal(izPkgSize(g).bytes))}${
-                izPkgSize(g).fills ? ` <span class="iz-from-else" title="Missing from it: exact copies come from elsewhere">(${izPkgSize(g).fills} from elsewhere)</span>` : ""
+                izPkgSize(g).fills
+                  ? ` <span class="iz-from-else" title="Exact copies (same contents) from other packages">(${g.installed === false ? "from exact copies" : `${izPkgSize(g).fills} from elsewhere`})</span>`
+                  : ""
               }</span>
-              <span class="iz-fact" title="The whole package">of ${escapeHtml(formatBytesLocal(Number(g.source_var_size ?? 0)))}</span>
+              ${g.installed === false ? "" : `<span class="iz-fact" title="The whole package">of ${escapeHtml(formatBytesLocal(Number(g.source_var_size ?? 0)))}</span>`}
               ${izUsageChip(g)}
             </span>
           </span>
@@ -12571,7 +12600,9 @@ function izFillHtml(g, f) {
           f.from_self ? `${izSelfName()} already has this file (same contents) at ${f.from_path}: the reference points there` : `Same contents, in ${f.from_pkg} at ${f.from_path}: copied in, no new dependency`,
         )}"><span class="material-symbols-outlined">${f.from_self ? "home" : "content_copy"}</span>${escapeHtml(from)}</span></span>
       </div>
-      <div class="fm-cand-sub"><span class="fm-dim">Missing from ${escapeHtml(pkgIdParts(g.source_pkg_id).name)}; an exact copy (same contents) is used.</span></div>
+      <div class="fm-cand-sub"><span class="fm-dim">${escapeHtml(pkgIdParts(g.source_pkg_id).name)} ${
+        g.installed === false ? "isn't installed" : "doesn't have it"
+      }; an exact copy (same contents) is used.</span></div>
     </div>`;
 }
 
@@ -12617,7 +12648,7 @@ function izRenderDetail() {
         <div class="fm-best-text">
           <span class="fm-best-tag">Copy in</span>
           <b>${pkgCount(files, "file", "files")}, about ${escapeHtml(formatBytesLocal(bytes))}</b>
-          <small>Then ${self} no longer needs ${name}. ${listing}</small>
+          <small>${g.installed === false ? `${name} isn't installed: copied in from exact copies, ${self} works without it.` : `Then ${self} no longer needs ${name}. ${listing}`}</small>
         </div>
         <button type="button" class="ghost-button" data-iz-choose="${escapeAttribute(pkg)}"><span class="material-symbols-outlined">done_all</span>Choose</button>
       </div>`;
@@ -12627,25 +12658,33 @@ function izRenderDetail() {
     <h2 class="sr-only">Files it uses</h2>
     <div class="detail-panel fm-detail-body">
       <div class="iz-pkg-head">
-        ${libThumbHtml(g.source_var_path, libGradient(pkg), "iz-pkg-thumb")}</div>
+        ${g.installed === false ? `<span class="iz-pkg-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(g.source_var_path, libGradient(pkg), "iz-pkg-thumb")}</div>`}
         <div class="iz-pkg-text">
           <b title="${escapeAttribute(pkg)}">${name}</b>
-          <small>${escapeHtml([p.creator, p.ver, formatBytesLocal(Number(g.source_var_size ?? 0))].filter(Boolean).join(" · "))}</small>
+          <small>${escapeHtml([p.creator, p.ver, g.installed === false ? "not installed" : formatBytesLocal(Number(g.source_var_size ?? 0))].filter(Boolean).join(" · "))}</small>
           <span class="iz-pkg-chips">${izUsageChip(g)}${local ? fmTypeTags(local) : ""}</span>
         </div>
       </div>
       <div class="fm-ref-acts">
         <button type="button" class="ghost-button fm-small" data-iz-explore-pkg="${escapeAttribute(pkg)}" data-iz-explore-file="${escapeAttribute(g.source_var_path)}" title="${escapeAttribute(`Open ${pkg} in Package Explorer`)}"><span class="material-symbols-outlined">space_dashboard</span>Explore package</button>
-        <button type="button" class="ghost-button fm-small" data-iz-show="${escapeAttribute(g.source_var_path)}" title="${escapeAttribute(g.source_var_path)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+        ${
+          g.installed === false
+            ? ""
+            : `<button type="button" class="ghost-button fm-small" data-iz-show="${escapeAttribute(g.source_var_path)}" title="${escapeAttribute(g.source_var_path)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>`
+        }
         <button type="button" class="fm-icon-btn" data-iz-copy="${escapeAttribute(pkg)}" title="Copy the package id"><span class="material-symbols-outlined">content_copy</span></button>
       </div>
       ${verdict}
       <section class="fm-sources">
-        <h3 class="iz-files-h">Files ${self} uses from it <small>${refs.length} · they come in together</small></h3>
-        <div class="fm-cands">${refs.map((r) => izFileHtml(g, r)).join("")}</div>
+        ${
+          refs.length
+            ? `<h3 class="iz-files-h">Files ${self} uses from it <small>${refs.length} · they come in together</small></h3>
+               <div class="fm-cands">${refs.map((r) => izFileHtml(g, r)).join("")}</div>`
+            : ""
+        }
         ${
           fills.length
-            ? `<h3 class="iz-files-h">Missing from it, from an exact copy <small>${fills.length}</small></h3>
+            ? `<h3 class="iz-files-h">${g.installed === false ? `Files ${self} uses from it, from exact copies` : "Missing from it, from an exact copy"} <small>${fills.length}</small></h3>
                <div class="fm-cands">${fills.map((f) => izFillHtml(g, f)).join("")}</div>`
             : ""
         }

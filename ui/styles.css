@@ -19605,6 +19605,13 @@ button.pkg-stat:focus-visible::after {
 
 /* ---- Internalize Resources: Fix Missing's layout, packages as rows ---- */
 
+/* A package that isn't installed has no picture. */
+.iz-no-thumb {
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+}
+
 /* Files a source lacks, taken from an exact copy elsewhere. */
 .iz-from-else {
   color: var(--text-dim);
