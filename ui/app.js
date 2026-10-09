@@ -10426,7 +10426,7 @@ function fmRowSourceHtml(key, best) {
   const pref = best.isSelf ? 0 : fmPref(best.package_id);
   return `<span class="fm-row-right">
       <span class="fm-row-src${exact ? "" : " is-guess"}${pref === 1 ? " is-pref" : pref === -1 ? " is-avoid" : ""}" title="${escapeAttribute(`${exact ? "Exact copy" : "Same path, contents not compared"}: ${best.isSelf ? fmSelfName() : best.package_id}`)}">
-        <span class="material-symbols-outlined">${pref === -1 ? "warning" : pref === 1 ? "star" : exact ? "check" : "help"}</span>
+        <span class="material-symbols-outlined">${pref === -1 ? "warning" : pref === 1 ? "thumb_up" : exact ? "check" : "help"}</span>
         <span class="fm-row-src-name">${pref === -1 ? "only " : ""}${exact ? "" : "same path · "}${escapeHtml(name)}</span>
         ${best.isSelf ? "" : `<span class="fm-dep" title="${escapeAttribute(`${best.package_id} becomes a dependency`)}">+ dependency</span>`}
       </span>
@@ -10666,8 +10666,8 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
       const notHere = shown.match === "db" && !c.isSelf && !c.installed;
       const tags = [
         c.isSelf ? `<span class="chip chip-accent" title="The file is inside the package you're fixing">Already inside</span>` : "",
-        !c.isSelf && fmPref(pkg) === 1 ? `<span class="chip fm-chip-pref" title="You prefer it as a replacement source"><span class="material-symbols-outlined">star</span>Preferred</span>` : "",
-        !c.isSelf && fmPref(pkg) === -1 ? `<span class="chip fm-chip-avoid" title="You marked it to avoid as a replacement source"><span class="material-symbols-outlined">block</span>Avoid</span>` : "",
+        !c.isSelf && fmPref(pkg) === 1 ? `<span class="chip fm-chip-pref" title="You prefer it as a replacement source"><span class="material-symbols-outlined">thumb_up</span>Preferred</span>` : "",
+        !c.isSelf && fmPref(pkg) === -1 ? `<span class="chip fm-chip-avoid" title="You marked it to avoid as a replacement source"><span class="material-symbols-outlined">thumb_down</span>Avoid</span>` : "",
         shown.match === "path" ? `<span class="chip fm-chip-warn" title="Same path; contents not compared">Same path only</span>` : "",
         notHere ? `<span class="chip" title="Only in the database: download it to use it">Not installed</span>` : "",
       ].join("");
@@ -10720,9 +10720,9 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
                 c.isSelf
                   ? ""
                   : `<button type="button" class="fm-icon-btn fm-pref-btn${fmPref(pkg) === 1 ? " is-pref" : ""}" data-fm-pref="${escapeAttribute(pkg)}" data-fm-pref-val="1" aria-pressed="${fmPref(pkg) === 1}"
-                      title="${fmPref(pkg) === 1 ? "Preferred replacement source: click to clear" : "Prefer as a replacement source: chosen over other packages from now on"}"><span class="material-symbols-outlined">star</span></button>
+                      title="${fmPref(pkg) === 1 ? "Preferred replacement source: click to clear" : "Prefer as a replacement source: chosen over other packages from now on"}"><span class="material-symbols-outlined">thumb_up</span></button>
                     <button type="button" class="fm-icon-btn fm-pref-btn${fmPref(pkg) === -1 ? " is-avoid" : ""}" data-fm-pref="${escapeAttribute(pkg)}" data-fm-pref-val="-1" aria-pressed="${fmPref(pkg) === -1}"
-                      title="${fmPref(pkg) === -1 ? "Avoided as a replacement source: click to clear" : "Avoid as a replacement source: never chosen by itself, a warning when you choose it"}"><span class="material-symbols-outlined">block</span></button>`
+                      title="${fmPref(pkg) === -1 ? "Avoided as a replacement source: click to clear" : "Avoid as a replacement source: never chosen by itself, a warning when you choose it"}"><span class="material-symbols-outlined">thumb_down</span></button>`
               }
               ${c.isSelf ? "" : `<button type="button" class="fm-icon-btn" data-fm-explore-pkg="${escapeAttribute(c.package_id)}" data-fm-explore-file="${escapeAttribute(c.installed === false ? "" : c.package_file || "")}" title="Explore ${escapeAttribute(c.package_id)}"><span class="material-symbols-outlined">space_dashboard</span></button>`}
               <button type="button" class="fm-icon-btn" data-fm-copy="${escapeAttribute(c.isSelf ? fmTargetId() : c.package_id)}" title="Copy the package id"><span class="material-symbols-outlined">content_copy</span></button>
@@ -11162,7 +11162,7 @@ function fmOfferHtml() {
   const name = escapeHtml(pkgIdParts(o.pkg).name);
   const n = o.keys.length;
   return `<div class="fm-offer">
-      <span class="material-symbols-outlined">${o.kind === "prefer" ? "star" : "block"}</span>
+      <span class="material-symbols-outlined">${o.kind === "prefer" ? "thumb_up" : "thumb_down"}</span>
       <span class="fm-offer-text">${
         o.kind === "prefer"
           ? `Switch ${pkgCount(n, "choice", "choices")} to <b>${name}</b>? It has the same file.`

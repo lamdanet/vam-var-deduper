@@ -19125,8 +19125,8 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-chip-pref {
-  background: color-mix(in srgb, #f5b301 18%, transparent);
-  color: #f5b301;
+  background: color-mix(in srgb, #2dd4bf 18%, transparent);
+  color: #2dd4bf;
 }
 
 .fm-chip-avoid {
@@ -19135,7 +19135,7 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-pref-btn.is-pref {
-  color: #f5b301;
+  color: #2dd4bf;
 }
 
 .fm-pref-btn.is-pref .material-symbols-outlined {
@@ -19151,7 +19151,7 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-row-src.is-pref > .material-symbols-outlined {
-  color: #f5b301;
+  color: #2dd4bf;
   font-variation-settings: "FILL" 1;
 }
 
