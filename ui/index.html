@@ -98,13 +98,9 @@
                 <span class="material-symbols-outlined">download_for_offline</span>
                 <span class="sidebar-label">Internalize Resources</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="clean-by-package">
-                <span class="material-symbols-outlined">compress</span>
-                <span class="sidebar-label">Clean · by package</span>
-              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="clean-by-file">
                 <span class="material-symbols-outlined">compress</span>
-                <span class="sidebar-label">Clean · by file</span>
+                <span class="sidebar-label">Clean VARs (new)</span>
               </a>
               <a class="sidebar-link" href="#" data-sidebar-link="dependency-usage">
                 <span class="material-symbols-outlined">donut_small</span>
@@ -1659,9 +1655,8 @@
            across every package that uses it (rendered by app.js). -->
       <section id="du-view" class="app-main missing-resources-view fm-view du-view hidden"></section>
 
-      <!-- Clean VARs, the new pages: by package and by file (rendered by
-           app.js; one state, two layouts to compare). -->
-      <section id="cvp-view" class="app-main missing-resources-view fm-view cv-view hidden"></section>
+      <!-- Clean VARs, the new page (by file; rendered by app.js), beside the
+           old one until it's finished. -->
       <section id="cvf-view" class="app-main missing-resources-view fm-view cv-view hidden"></section>
 
       <!-- Settings View (hidden by default; revealed by sidebar Settings link) -->
@@ -2775,8 +2770,6 @@
             if (fmView) fmView.classList.add("hidden");
             var duView = document.getElementById("du-view");
             if (duView) duView.classList.add("hidden");
-            var cvpView = document.getElementById("cvp-view");
-            if (cvpView) cvpView.classList.add("hidden");
             var cvfView = document.getElementById("cvf-view");
             if (cvfView) cvfView.classList.add("hidden");
             settings.classList.add("hidden");
@@ -2793,9 +2786,6 @@
             } else if ((route === "fix-missing" || route === "missing-resources") && fmView) {
               fmView.classList.remove("hidden");
               if (window.__refreshFixMissingView) window.__refreshFixMissingView();
-            } else if (route === "clean-by-package" && cvpView) {
-              cvpView.classList.remove("hidden");
-              if (window.__refreshCleanByPackageView) window.__refreshCleanByPackageView();
             } else if (route === "clean-by-file" && cvfView) {
               cvfView.classList.remove("hidden");
               if (window.__refreshCleanByFileView) window.__refreshCleanByFileView();
