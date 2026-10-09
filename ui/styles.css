@@ -19614,6 +19614,19 @@ button.pkg-stat:focus-visible::after {
   flex: 1 1 200px;
 }
 
+/* Which exact copy a missing file comes from. */
+.iz-fill-select {
+  max-width: 280px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
 /* A package that isn't installed has no picture. */
 .iz-no-thumb {
   display: grid;

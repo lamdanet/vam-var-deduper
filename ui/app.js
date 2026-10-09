@@ -11643,6 +11643,8 @@ const IZ = {
   start: null,
   // keys whose "comes with" list is open
   bundleOpen: new Set(),
+  // "ref_pkg:/ref_path" -> index into the fill's alternatives, when chosen
+  fillPick: new Map(),
 };
 const IZ_RECENT = "iz.recent";
 
@@ -11710,6 +11712,7 @@ function izOpen(target, { scan = false } = {}) {
       configOpen: null,
       flash: "",
       bundleOpen: new Set(),
+      fillPick: new Map(),
     });
   }
   izShowView();
@@ -12043,11 +12046,16 @@ async function izApply() {
     }
   }
   const fams = new Set();
+  const fromCopies = [];
   for (const g of izShown()) {
     const fam = izFamily(g.source_pkg_id);
     if (fams.has(fam) || !izChosen(g)) continue;
     fams.add(fam);
-    for (const f of izFills(g)) selections.push({ source_pkg_id: f.ref_pkg, ref_path: f.ref_path, from_pkg: f.from_pkg, from_path: f.from_path });
+    for (const f of izFills(g)) {
+      const src = izFillSource(f);
+      selections.push({ source_pkg_id: f.ref_pkg, ref_path: f.ref_path, from_pkg: src.from_pkg, from_path: src.from_path });
+      fromCopies.push({ file: f.ref_path.split("/").pop(), from: izFillFromName(src) });
+    }
   }
   if (!selections.length) return;
   const name = libTitle(IZ.item);
@@ -12077,7 +12085,7 @@ async function izApply() {
       },
     );
     const report = p.internalize_report ?? {};
-    done = { ...report, count: selections.length, name };
+    done = { ...report, count: selections.length, name, fromCopies };
     vpRefreshAfterMutation().catch(() => {});
   } catch (e) {
     showToast(`Copying in failed: ${String(e?.message || e)}`, "error", 8000);
@@ -12254,8 +12262,12 @@ function izStartHtml() {
   const known = new Set(recent.map((r) => r.path));
   const st = IZ.start;
   const most = (st?.items ?? []).filter((it) => !known.has(it.file_path)).slice(0, 6);
+  const folder = (path) => {
+    const parts = String(path).split(/[\\/]/).filter(Boolean);
+    return parts.length > 1 ? `…\\${parts.slice(-3, -1).join("\\")}` : "";
+  };
   const row = (path, item, note) => `<button type="button" class="fm-start-row" data-iz-start="${escapeAttribute(path)}" title="${escapeAttribute(path)}">
-      <span class="fm-start-text"><b>${escapeHtml(libTitle(item))}</b><small>by ${escapeHtml(libCreator(item))}</small></span>
+      <span class="fm-start-text"><b>${escapeHtml(libTitle(item))}</b><small>by ${escapeHtml(libCreator(item))} · ${escapeHtml(folder(path))}</small></span>
       <span class="chip">${escapeHtml(note)}</span>
     </button>`;
   const parts = [];
@@ -12321,6 +12333,23 @@ function izPlanHtml() {
       ${
         open
           ? `${line("input", "Copy", `${t.chosenFiles === 1 ? "1 file with what it needs" : `${t.chosenFiles} files with what they need`}, about ${escapeHtml(formatBytesLocal(t.bytes))}`)}
+             ${(() => {
+               const copies = [];
+               const seenFam = new Set();
+               for (const g of izShown()) {
+                 const fam = izFamily(g.source_pkg_id);
+                 if (seenFam.has(fam) || !izChosen(g)) continue;
+                 seenFam.add(fam);
+                 for (const f of izFills(g)) copies.push(izFillFromName(izFillSource(f)));
+               }
+               if (!copies.length) return "";
+               const names = [...new Set(copies)];
+               return line(
+                 "content_copy",
+                 "From copies",
+                 `${pkgCount(copies.length, "file", "files")} from exact copies: ${escapeHtml(names.slice(0, 3).join(", "))}${names.length > 3 ? ` and ${names.length - 3} more` : ""}`,
+               );
+             })()}
              ${line("edit", "Rewrite", `the references in ${escapeHtml([...files].join(", ") || "meta.json")}`)}
              ${line("link_off", "No longer need", few(t.drops, (pkg) => fmPkgLabelHtml(pkg)))}
              ${line("save", "Write", escapeHtml(where))}`
@@ -12343,6 +12372,16 @@ function izRenderDetails() {
           <small>${pkgCount(Number(fix.entries_copied ?? 0), "file", "files")} added (${escapeHtml(formatBytesLocal(Number(fix.bytes_added ?? 0)))}), ${pkgCount(Number(fix.files_rewritten ?? 0), "file", "files")} inside it rewritten.</small>
           ${(fix.entries_skipped_collision ?? []).length ? `<small>${pkgCount(fix.entries_skipped_collision.length, "file was", "files were")} already inside, so not copied again.</small>` : ""}
           ${(fix.dependencies_removed ?? []).length ? `<small class="fm-report-pkgs">No longer depends on ${fix.dependencies_removed.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
+          ${
+            (fix.fromCopies ?? []).length
+              ? `<small>${pkgCount(fix.fromCopies.length, "file", "files")} from exact copies: ${escapeHtml(
+                  fix.fromCopies
+                    .slice(0, 3)
+                    .map((c) => `${c.file} (${c.from})`)
+                    .join(", "),
+                )}${fix.fromCopies.length > 3 ? ` and ${fix.fromCopies.length - 3} more` : ""}.</small>`
+              : ""
+          }
           ${(fix.errors ?? []).map((e) => `<small class="fm-report-err">${escapeHtml(e)}</small>`).join("")}
           <small>${
             fix.backup_path
@@ -12628,12 +12667,47 @@ function izFileHtml(g, r) {
     </div>`;
 }
 
+// The exact copy used for a missing file.
+function izFillSource(f) {
+  const alts = f.alternatives?.length ? f.alternatives : [f];
+  const k = `${f.ref_pkg}:/${f.ref_path}`;
+  const i = IZ.fillPick.get(k);
+  if (i != null && alts[i]) return alts[i];
+  return (
+    alts.find((a) => a.from_self) ??
+    alts.find((a) => fmPref(a.from_pkg) === 1) ??
+    alts.find((a) => fmPref(a.from_pkg) !== -1) ??
+    alts[0]
+  );
+}
+
+// "宋奕琳" or "already inside KaMiLiAn".
+function izFillFromName(src) {
+  return src.from_self ? `already inside ${izSelfName()}` : pkgIdParts(src.from_pkg).name;
+}
+
 // A file the package lacks, and where its exact copy comes from.
 function izFillHtml(g, f) {
   const picked = izChosen(g);
   const slash = f.ref_path.lastIndexOf("/");
   const type = fmFileType(f.ref_path);
-  const from = f.from_self ? `already inside ${izSelfName()}` : `from ${pkgIdParts(f.from_pkg).name}`;
+  const src = izFillSource(f);
+  const alts = f.alternatives?.length ? f.alternatives : [f];
+  const key = `${f.ref_pkg}:/${f.ref_path}`;
+  const mark = (a) => (fmPref(a.from_pkg) === 1 ? " · preferred" : fmPref(a.from_pkg) === -1 ? " · avoided" : "");
+  const choose =
+    alts.length > 1
+      ? `<select class="iz-fill-select" data-iz-fill="${escapeAttribute(key)}" title="Every package with the same file: pick the copy to use">${alts
+          .map((a, i) => {
+            // A package with two copies shows each one's folder.
+            const twice = alts.filter((b) => b.from_pkg === a.from_pkg).length > 1;
+            const where = twice ? ` (${a.from_path.split("/").slice(0, -1).join("/")})` : "";
+            const label = `${a.from_self ? `already inside ${izSelfName()}` : pkgIdParts(a.from_pkg).name}${where}${mark(a)}`;
+            return `<option value="${i}"${a === src ? " selected" : ""} title="${escapeAttribute(`${a.from_pkg}:/${a.from_path}`)}">${escapeHtml(label)}</option>`;
+          })
+          .join("")}</select>`
+      : "";
+  const from = src.from_self ? `already inside ${izSelfName()}` : `from ${pkgIdParts(src.from_pkg).name}`;
   return `<div class="fm-cand-row iz-file iz-fill${picked ? " is-selected" : ""}">
       <div class="fm-cand-top">
         <span class="fm-cand-pick">
@@ -12643,13 +12717,16 @@ function izFillHtml(g, f) {
               type.rest ? `<span class="fm-row-folder" title="${escapeAttribute(`Folder: ${type.folder}`)}"><span class="material-symbols-outlined">folder</span><span class="fm-trunc">${escapeHtml(type.rest)}</span></span>` : ""
             }<span class="fm-dim">${escapeHtml(formatBytesLocal(Number(f.size ?? 0)))}</span></span></span>
         </span>
-        <span class="fm-cand-tags"><span class="chip" title="${escapeAttribute(
-          f.from_self ? `${izSelfName()} already has this file (same contents) at ${f.from_path}: the reference points there` : `Same contents, in ${f.from_pkg} at ${f.from_path}: copied in, no new dependency`,
-        )}"><span class="material-symbols-outlined">${f.from_self ? "home" : "content_copy"}</span>${escapeHtml(from)}</span></span>
+        <span class="fm-cand-tags">${
+          choose ||
+          `<span class="chip" title="${escapeAttribute(
+            src.from_self ? `${izSelfName()} already has this file (same contents) at ${src.from_path}: the reference points there` : `Same contents, in ${src.from_pkg} at ${src.from_path}: copied in, no new dependency`,
+          )}"><span class="material-symbols-outlined">${src.from_self ? "home" : "content_copy"}</span>${escapeHtml(from)}</span>`
+        }</span>
       </div>
       <div class="fm-cand-sub"><span class="fm-dim">${escapeHtml(pkgIdParts(g.source_pkg_id).name)} ${
         g.installed === false ? "isn't installed" : "doesn't have it"
-      }; an exact copy (same contents) is used.</span></div>
+      }; an exact copy (same contents) is used${alts.length > 1 ? `, one of ${alts.length} found` : ""}.</span></div>
     </div>`;
 }
 
@@ -12986,6 +13063,12 @@ function setupInternalize() {
         .then((picked) => picked && izOpen(picked, { scan: true }))
         .catch(() => {});
     }
+  });
+  view.addEventListener("change", (e) => {
+    const key = e.target.getAttribute?.("data-iz-fill");
+    if (key == null) return;
+    IZ.fillPick.set(key, Number(e.target.value));
+    izRefresh();
   });
   view.addEventListener("contextmenu", (e) => {
     const row = e.target.closest?.("[data-iz-row]");
