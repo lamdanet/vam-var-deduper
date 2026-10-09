@@ -10897,13 +10897,20 @@ function fmRenderDetail() {
   const noneAnywhere = !cands.length && db && !db.loading && !db.error && !dbItems.length && !db.query && !nested?.items?.length;
 
   // The choice, at the top: what replaces it, Clear, and Use it for others.
-  const sameAll = (FM.refs ?? []).filter((r) => r.ref_pkg === ref.ref_pkg && r.ref_path).length;
-  const filtered = fmFiltered().filter((r) => r.ref_path).length;
-  const all = (FM.refs ?? []).filter((r) => r.ref_path).length;
+  // How many other missing files each scope would actually switch to the
+  // chosen package: ones it has a copy of that don't use it yet.
+  const usePkg = pick?.replacement_pkg;
+  const sameN = usePkg ? fmUseForTargets((FM.refs ?? []).filter((r) => r.ref_pkg === ref.ref_pkg), usePkg, key).length : 0;
+  const shownN = usePkg ? fmUseForTargets(fmFiltered(), usePkg, key).length : 0;
+  const allN = usePkg ? fmUseForTargets(FM.refs ?? [], usePkg, key).length : 0;
   const applyBtns = [
-    sameAll > 1 ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-same" title="Every missing file from ${escapeAttribute(ref.ref_pkg)} the chosen package has a copy of">Same package (${sameAll})</button>` : "",
-    filtered > 1 && filtered !== all ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-filtered" title="Every missing file the list shows now that the chosen package has a copy of">Shown (${filtered})</button>` : "",
-    all > 1 ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-all" title="Every missing file the chosen package has a copy of">All (${all})</button>` : "",
+    sameN && sameN !== allN
+      ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-same" title="The other missing files from ${escapeAttribute(ref.ref_pkg)} that it has a copy of">Same package (${sameN})</button>`
+      : "",
+    shownN && shownN !== allN && shownN !== sameN
+      ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-filtered" title="The other missing files the list shows that it has a copy of">Shown (${shownN})</button>`
+      : "",
+    allN ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-all" title="Every other missing file it has a copy of">All (${allN})</button>` : "",
   ].join("");
   const choice =
     pick && !fixed
@@ -11090,6 +11097,20 @@ function fmSheetSync(host) {
   host.classList.toggle("is-open", FM.sheetOpen);
   host.classList.toggle("is-empty", !(FM.refs ?? []).length);
   requestAnimationFrame(fmFitPanel);
+}
+
+// The missing files in `refs`, other than `key`, that `pkg` has a copy of
+// and don't use it yet: what "Use it for other missing files too" changes.
+function fmUseForTargets(refs, pkg, key) {
+  return refs.filter((r) => {
+    const k = fmKey(r);
+    if (k === key || !r.ref_path || FM.skipped.has(k) || FM.fixedKeys.has(k)) return false;
+    if (FM.picks.get(k)?.replacement_pkg === pkg) return false;
+    return (
+      fmCandidates(r).some((x) => (pkg === "SELF" ? x.isSelf : x.package_id === pkg)) ||
+      (FM.db.get(k)?.items ?? []).some((x) => x.package_id === pkg)
+    );
+  });
 }
 
 // The chosen package for every reference in `refs` it has the file for.
