@@ -19364,18 +19364,8 @@ button.pkg-stat:focus-visible::after {
   color: var(--text-dim);
 }
 
-.du-verdict b {
-  margin-left: 2px;
-}
-
 .fm-row.group-row.du-row {
   grid-template-columns: 44px minmax(0, 1fr);
-}
-
-.du-no-thumb {
-  display: grid;
-  place-items: center;
-  color: var(--text-dim);
 }
 
 .du-row-line {
@@ -19391,18 +19381,7 @@ button.pkg-stat:focus-visible::after {
   font-size: 11.5px;
 }
 
-.du-mini {
-  height: 18px;
-  margin-left: 4px;
-  padding: 0 4px;
-  vertical-align: 1px;
-}
-
-.du-mini .material-symbols-outlined {
-  font-size: 12px;
-}
-
-/* All users' share of the package, and this package's part of it. */
+/* A user's share of the package. */
 .du-bar {
   position: relative;
   flex: 1 1 80px;
@@ -19413,50 +19392,19 @@ button.pkg-stat:focus-visible::after {
   background: var(--line);
 }
 
-.du-bar-all,
 .du-bar-me {
   position: absolute;
   inset: 0 auto 0 0;
   border-radius: 3px;
 }
 
-.du-bar-all {
-  background: color-mix(in srgb, var(--primary) 45%, transparent);
-}
-
 .du-bar-me {
   background: var(--primary);
 }
 
-/* The Verdicts card's text keeps the card's side padding. */
-.details-card > .du-total,
-.details-card > .du-legend,
+/* The verdict card's text keeps the card's side padding. */
 .details-card > .du-note {
   padding-inline: 20px;
-}
-
-.du-total {
-  margin: 4px 0 10px;
-  font-size: 13.5px;
-}
-
-.du-legend {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.du-legend-line {
-  display: grid;
-  grid-template-columns: 170px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-
-.du-legend-line .du-verdict {
-  justify-self: start;
 }
 
 .du-note {
@@ -19527,76 +19475,6 @@ button.pkg-stat:focus-visible::after {
   font-size: 14px;
 }
 
-.du-users {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.du-user {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.du-user.is-me {
-  border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
-
-.du-user-thumb {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  overflow: hidden;
-  border-radius: 6px;
-  background: var(--lib-thumb-bg);
-}
-
-.du-user-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.du-user-text {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.du-user-text b {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
-}
-
-.du-user-text b small {
-  margin-left: 4px;
-  color: var(--primary);
-  font-weight: 600;
-}
-
-.du-user-bar {
-  height: 4px;
-  overflow: hidden;
-  border-radius: 2px;
-  background: var(--line);
-}
-
-.du-user-bar > span {
-  display: block;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--primary);
-}
-
 .du-user-num {
   display: flex;
   flex-direction: column;
@@ -19613,6 +19491,116 @@ button.pkg-stat:focus-visible::after {
 
 .du-more {
   margin-top: 8px;
+}
+
+/* ---- Dependency Usage: one package as a dependency ---- */
+
+.details-card > .du-why,
+.details-card > .du-numbers,
+.details-card > .du-pref {
+  margin-inline: 20px;
+}
+
+.du-why > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.du-why-chip {
+  display: flex;
+}
+
+.du-numbers > div > span {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.du-numbers > div.is-good b {
+  color: var(--accent-success);
+}
+
+.du-numbers > div.is-bad b {
+  color: var(--accent-danger);
+}
+
+.du-pref {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 12px;
+}
+
+.du-pref-label {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.du-pref small {
+  flex-basis: 100%;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.du-pref .is-pref {
+  border-color: color-mix(in srgb, var(--fm-pref, #2dd4bf) 60%, var(--line));
+  color: var(--fm-pref, #2dd4bf);
+}
+
+.du-pref .is-avoid {
+  border-color: color-mix(in srgb, var(--accent-danger) 60%, var(--line));
+  color: var(--accent-danger);
+}
+
+.du-row-bytes {
+  font-size: 12.5px;
+}
+
+.du-tabs {
+  margin: 4px 20px 10px;
+}
+
+.du-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.du-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.du-file-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.du-file-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.du-file .fm-row-dir {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.du-files-hint {
+  margin: 0 0 8px;
 }
 
 /* ---- Internalize Resources: Fix Missing's layout, packages as rows ---- */
