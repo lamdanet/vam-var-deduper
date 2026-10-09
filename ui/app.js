@@ -10370,6 +10370,39 @@ function fmRenderRefs() {
 }
 
 // After a check: what's easy, what needs a look.
+// Missing files a preferred package has an exact copy of and that don't use
+// one yet: key -> the preferred copy to use (the one covering most files).
+// A file with a copy inside the package itself is left: that's better still.
+function fmPreferredSwaps() {
+  const out = new Map();
+  if (!FM_PREFS.size) return out;
+  const cov = fmLocalCoverage();
+  for (const ref of FM.refs ?? []) {
+    const key = fmKey(ref);
+    if (!ref.ref_path || FM.fixedKeys.has(key)) continue;
+    const pick = FM.picks.get(key);
+    if (pick && fmPref(pick.replacement_pkg) === 1) continue;
+    const cands = fmCandidates(ref);
+    if (cands.some((c) => c.isSelf && c.match === "crc")) continue;
+    const best = cands
+      .filter((c) => !c.isSelf && c.match === "crc" && fmPref(c.package_id) === 1)
+      .sort((a, b) => (cov.get(b.package_id) ?? 0) - (cov.get(a.package_id) ?? 0))[0];
+    if (best) out.set(key, best);
+  }
+  return out;
+}
+
+// One click: every missing file a preferred package has, uses it.
+function fmUsePreferred() {
+  const swaps = fmPreferredSwaps();
+  for (const [key, c] of swaps) {
+    FM.skipped.delete(key);
+    FM.picks.set(key, fmPickFrom(c));
+  }
+  fmFlash(swaps.size ? `Using your preferred packages for ${pkgCount(swaps.size, "missing file", "missing files")}.` : "Nothing to switch to a preferred package.");
+  fmRefresh();
+}
+
 function fmRenderSummary() {
   const host = $("fm-summary");
   if (!host) return;
@@ -10380,9 +10413,18 @@ function fmRenderSummary() {
   }
   const s = fmSummary();
   const has = (n, one, many) => (n === 1 ? one : many);
-  // Everything is chosen: the strip's full ring says so.
+  const swaps = fmPreferredSwaps().size;
+  const usePref = swaps
+    ? `<button type="button" class="ghost-button fm-small fm-summary-main" data-fm-act="use-preferred" title="Choose a preferred package's copy for every missing file one has; files with a copy inside the package itself stay as they are"><span class="material-symbols-outlined">thumb_up</span>Use preferred packages (${swaps})</button>`
+    : "";
+  // Everything is chosen: the strip's full ring says so; only a switch to
+  // preferred packages is worth offering.
   if (!s.open) {
-    host.innerHTML = "";
+    host.innerHTML = swaps
+      ? `<div class="fm-summary"><span class="material-symbols-outlined">thumb_up</span>
+          <div>${pkgCount(swaps, "chosen file", "chosen files")} can use a package you prefer instead.
+            <div class="fm-summary-acts">${usePref}</div></div></div>`
+      : "";
     return;
   }
   const exact = s.selfExact + s.otherExact;
@@ -10419,6 +10461,7 @@ function fmRenderSummary() {
                 }</button>`
               : ""
           }
+          ${usePref}
           ${look ? `<button type="button" class="ghost-button fm-small" data-fm-act="show-todo">Show the ${look} that ${has(look, "needs", "need")} a choice</button>` : ""}
         </div>
       </div>
@@ -11514,6 +11557,9 @@ function fmOnClick(e) {
       break;
     case "autopick":
       fmAutoPick();
+      break;
+    case "use-preferred":
+      fmUsePreferred();
       break;
     case "show-todo": {
       FM.filter = "todo";
