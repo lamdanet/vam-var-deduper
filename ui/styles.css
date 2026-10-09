@@ -19725,6 +19725,8 @@ button.pkg-stat:focus-visible::after {
 .iz-detail-card .fm-chosen-text b {
   display: block;
   margin: 1px 0;
+  overflow: visible;
+  white-space: normal;
 }
 
 .iz-files-h {
