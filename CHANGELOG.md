@@ -114,6 +114,13 @@ release time, it fills it with the commit messages since the last release.
   once too. Folders you had saved in Find Dependencies Locally carry over
 - When a dependency is in more than one folder, the copy in AddonPackages is
   the one shown
+- **Internalize Resources** has Fix Missing's layout: the package on top, the
+  packages it uses on the left (each with what copying its files adds, and
+  whether any other package still needs it), their files on the right. A
+  summary picks out the packages only this one uses, which can be removed
+  once their files are copied in. A file that would clash with a different
+  one already inside is flagged and left out. It fixes the original, with a
+  backup in the same folder as Fix Missing's, and checks it again afterwards
 
 ### Fixed
 - Fixing a missing resource with a copy inside the package itself wrote a
