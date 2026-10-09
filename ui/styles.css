@@ -19948,3 +19948,12 @@ button.pkg-stat:focus-visible::after {
 .fm-best.cv-warn-box {
   border-color: color-mix(in srgb, var(--accent-warn) 45%, var(--line));
 }
+.cv-used-by {
+  margin-bottom: 12px;
+}
+.cv-users {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+}
