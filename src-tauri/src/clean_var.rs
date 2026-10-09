@@ -68,6 +68,16 @@ pub(crate) struct CleanReport {
     pub(crate) unreferenced_bytes: u64,
 }
 
+/// The same file, however its path is spelled (a package outside the
+/// folders is kept under its canonical form, with a long-path prefix). The package to rewrite
+/// must be exactly this one, never another copy with the same id.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
+    }
+}
+
 fn is_scene(path: &str) -> bool {
     path.to_ascii_lowercase().starts_with("saves/scene/")
 }
@@ -82,7 +92,7 @@ pub(crate) fn clean_candidates(
     let target = scanned
         .packages
         .values()
-        .find(|p| p.file_path.to_string_lossy().eq_ignore_ascii_case(&target_str))
+        .find(|p| same_file(&p.file_path, target_path))
         .ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
     let target_id = target.package_id.clone();
 
@@ -255,11 +265,10 @@ pub(crate) fn apply_clean(
     backup_dir: Option<&Path>,
     db: Option<&Db>,
 ) -> Result<CleanResult> {
-    let target_str = target_path.to_string_lossy().to_string();
     let target_id = scanned
         .packages
         .values()
-        .find(|p| p.file_path.to_string_lossy().eq_ignore_ascii_case(&target_str))
+        .find(|p| same_file(&p.file_path, target_path))
         .map(|p| p.package_id.clone())
         .ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
     // Only what was chosen changes: every other duplicate group stays as it
