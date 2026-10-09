@@ -6314,6 +6314,7 @@ pub(crate) fn start_apply_missing_resources_fix_task(
     replace_in_place: bool,
     fixes: Vec<FixDirective>,
     backup: bool,
+    backup_dir: Option<String>,
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
@@ -6386,8 +6387,13 @@ pub(crate) fn start_apply_missing_resources_fix_task(
 
             // Backup only makes sense when we're overwriting the original;
             // with an output-folder workflow the original IS the backup.
+            // The folder the user chose for backups; else the output folder's
+            // `backup`; else `fix-var-backup` next to the package.
+            let chosen_backup_dir = backup_dir.as_deref().map(str::trim).filter(|s| !s.is_empty());
             let backup_root_owned = if backup && replace_in_place {
-                if let Some(dir) = trimmed_output_dir {
+                if let Some(dir) = chosen_backup_dir {
+                    Some(PathBuf::from(dir))
+                } else if let Some(dir) = trimmed_output_dir {
                     Some(Path::new(dir).join("backup"))
                 } else {
                     target_path.parent().map(|p| p.join("fix-var-backup"))

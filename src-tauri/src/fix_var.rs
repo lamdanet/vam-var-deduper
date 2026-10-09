@@ -543,7 +543,8 @@ pub(crate) fn apply_fix_var(
         let file_name = target_path
             .file_name()
             .ok_or_else(|| anyhow!("invalid target file name"))?;
-        let backup_path = backup_root.join(file_name);
+        // Never over an earlier backup of the same package.
+        let backup_path = free_backup_path(backup_root, &file_name.to_string_lossy());
         fs::copy(target_path, &backup_path).with_context(|| {
             format!(
                 "failed to back up {} → {}",
@@ -551,6 +552,7 @@ pub(crate) fn apply_fix_var(
                 backup_path.display()
             )
         })?;
+        report.backup_path = Some(backup_path.display().to_string());
     }
 
     let reader = fs::File::open(target_path)
@@ -728,21 +730,6 @@ fn lookup_license_in_db(db: &Db, _package_id: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Where the original goes when a fixed copy replaces it: the output folder's
-/// `backup`, beside the `changed` folder the copy was written to (the layout
-/// in-place fixes with an output folder use), else `fix-var-backup` next to
-/// the original.
-pub(crate) fn fixed_copy_backup_root(original: &Path, fixed: &Path) -> Option<PathBuf> {
-    let changed = fixed.parent()?;
-    let is_changed = changed
-        .file_name()
-        .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("changed"));
-    match changed.parent() {
-        Some(output_dir) if is_changed => Some(output_dir.join("backup")),
-        _ => original.parent().map(|p| p.join("fix-var-backup")),
-    }
-}
-
 /// `dir/name`, or `dir/<stem> (2).var` and so on when that's taken, so an
 /// earlier backup is never overwritten.
 fn free_backup_path(dir: &Path, name: &str) -> PathBuf {
@@ -757,105 +744,22 @@ fn free_backup_path(dir: &Path, name: &str) -> PathBuf {
         .unwrap_or(first)
 }
 
-/// Puts a fixed copy (the output-folder workflow) in place of the original
-/// package. The original is copied to `backup_root` first; the copy is
-/// staged next to the original and renamed over it, then removed from the
-/// output folder. Returns where the backup went.
-pub(crate) fn replace_with_fixed_copy(
-    original: &Path,
-    fixed: &Path,
-    backup_root: Option<&Path>,
-) -> Result<Option<PathBuf>> {
-    if !original.is_file() {
-        return Err(anyhow!("the original isn't there any more: {}", original.display()));
-    }
-    if !fixed.is_file() {
-        return Err(anyhow!("the fixed copy isn't there any more: {}", fixed.display()));
-    }
-    let name = original
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow!("invalid file name {}", original.display()))?;
-    let fixed_name = fixed.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-    if !name.eq_ignore_ascii_case(fixed_name) {
-        return Err(anyhow!("{fixed_name} isn't a copy of {name}"));
-    }
-    if fs::canonicalize(original)? == fs::canonicalize(fixed)? {
-        return Err(anyhow!("the fixed copy is the original itself"));
-    }
-
-    let backup_path = match backup_root {
-        Some(root) => {
-            fs::create_dir_all(root)
-                .with_context(|| format!("failed to create backup dir {}", root.display()))?;
-            let path = free_backup_path(root, name);
-            fs::copy(original, &path).with_context(|| {
-                format!("failed to back up {} → {}", original.display(), path.display())
-            })?;
-            Some(path)
-        }
-        None => None,
-    };
-
-    // A copy, not a rename: the output folder is often on another drive.
-    let staging = original.with_file_name(format!("{name}.fix-tmp"));
-    fs::copy(fixed, &staging)
-        .with_context(|| format!("failed to copy {} → {}", fixed.display(), staging.display()))?;
-    if let Err(err) = fs::rename(&staging, original) {
-        let _ = fs::remove_file(&staging);
-        return Err(err).with_context(|| format!("failed to replace {}", original.display()));
-    }
-    // It's in place now; a copy left behind would only be a second one.
-    let _ = fs::remove_file(fixed);
-    Ok(backup_path)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{fixed_copy_backup_root, replace_with_fixed_copy, replacement_target};
-    use std::{fs, path::Path};
+    use super::{free_backup_path, replacement_target};
+    use std::fs;
 
     #[test]
-    fn a_fixed_copy_replaces_the_original_and_keeps_every_backup() {
-        let root = std::env::temp_dir().join(format!("vam_fixcopy_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let addon = root.join("AddonPackages");
-        let out = root.join("out");
-        fs::create_dir_all(&addon).unwrap();
-        fs::create_dir_all(out.join("changed")).unwrap();
-        let original = addon.join("Abie.A35.1.var");
-        let fixed = out.join("changed").join("Abie.A35.1.var");
-
-        fs::write(&original, b"broken").unwrap();
-        fs::write(&fixed, b"fixed").unwrap();
-        let backup_root = fixed_copy_backup_root(&original, &fixed).unwrap();
-        assert_eq!(backup_root, out.join("backup"));
-        let saved = replace_with_fixed_copy(&original, &fixed, Some(&backup_root)).unwrap().unwrap();
-        assert_eq!(fs::read(&original).unwrap(), b"fixed");
-        assert_eq!(fs::read(&saved).unwrap(), b"broken");
-        assert!(!fixed.exists(), "the copy is used up");
-        assert!(!addon.join("Abie.A35.1.var.fix-tmp").exists());
-
-        // A second round keeps the first backup.
-        fs::write(&fixed, b"fixed again").unwrap();
-        let second = replace_with_fixed_copy(&original, &fixed, Some(&backup_root)).unwrap().unwrap();
-        assert_eq!(second, out.join("backup").join("Abie.A35.1 (2).var"));
-        assert_eq!(fs::read(&saved).unwrap(), b"broken");
-        assert_eq!(fs::read(&second).unwrap(), b"fixed");
-
-        // Not a copy of it, or the original itself: refused, nothing touched.
-        let other = out.join("changed").join("Other.Pack.1.var");
-        fs::write(&other, b"other").unwrap();
-        assert!(replace_with_fixed_copy(&original, &other, None).is_err());
-        assert!(replace_with_fixed_copy(&original, &original, None).is_err());
-        assert_eq!(fs::read(&original).unwrap(), b"fixed again");
-
-        // A copy that isn't in a `changed` folder backs up next to the original.
-        assert_eq!(
-            fixed_copy_backup_root(&original, Path::new("D:/elsewhere/Abie.A35.1.var")),
-            Some(addon.join("fix-var-backup"))
-        );
-        let _ = fs::remove_dir_all(&root);
+    fn a_backup_never_overwrites_an_earlier_one() {
+        let dir = std::env::temp_dir().join(format!("vam_backup_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(free_backup_path(&dir, "Abie.A35.1.var"), dir.join("Abie.A35.1.var"));
+        fs::write(dir.join("Abie.A35.1.var"), b"first").unwrap();
+        assert_eq!(free_backup_path(&dir, "Abie.A35.1.var"), dir.join("Abie.A35.1 (2).var"));
+        fs::write(dir.join("Abie.A35.1 (2).var"), b"second").unwrap();
+        assert_eq!(free_backup_path(&dir, "Abie.A35.1.var"), dir.join("Abie.A35.1 (3).var"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

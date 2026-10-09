@@ -1398,6 +1398,9 @@ pub(crate) struct FixReport {
     pub(crate) errors: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) output_path: Option<String>,
+    /// Where the original was backed up, when it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) backup_path: Option<String>,
 }
 
 /// One external `Pkg:/path` ref the target VAR makes into a *valid* source
