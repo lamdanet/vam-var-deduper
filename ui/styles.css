@@ -19125,8 +19125,8 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-chip-pref {
-  background: color-mix(in srgb, #2dd4bf 18%, transparent);
-  color: #2dd4bf;
+  background: color-mix(in srgb, var(--fm-pref, #2dd4bf) 18%, transparent);
+  color: var(--fm-pref, #2dd4bf);
 }
 
 .fm-chip-avoid {
@@ -19135,7 +19135,7 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-pref-btn.is-pref {
-  color: #2dd4bf;
+  color: var(--fm-pref, #2dd4bf);
 }
 
 .fm-pref-btn.is-pref .material-symbols-outlined {
@@ -19151,7 +19151,7 @@ button.pkg-stat:focus-visible::after {
 }
 
 .fm-row-src.is-pref > .material-symbols-outlined {
-  color: #2dd4bf;
+  color: var(--fm-pref, #2dd4bf);
   font-variation-settings: "FILL" 1;
 }
 
@@ -19216,4 +19216,54 @@ button.pkg-stat:focus-visible::after {
 .fm-cand-row,
 .fm-cand-alt {
   user-select: none;
+}
+
+/* ---- Fix Missing: the tip, and Settings > Replacement sources ---- */
+
+.fm-tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--primary) 45%, var(--line));
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.fm-tip > .material-symbols-outlined {
+  flex: 0 0 auto;
+  color: var(--primary);
+  font-size: 18px;
+}
+
+.fm-tip > span:not(.material-symbols-outlined) {
+  flex: 1 1 auto;
+}
+
+.fm-prefs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fm-prefs-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.fm-prefs-row > .fm-pkgname {
+  flex: 1 1 auto;
+}
+
+/* The preferred teal, darker where the background is light. */
+:root[data-theme="light"] {
+  --fm-pref: #0f766e;
 }

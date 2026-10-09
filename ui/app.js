@@ -2782,6 +2782,7 @@ async function loadSettingsView() {
     }
     return;
   }
+  fmRenderPrefsSettings();
   try {
     const stats = await invoke("get_database_stats");
     $("settings-db-packages-value").textContent = String(stats?.package_count ?? 0);
@@ -2798,6 +2799,48 @@ async function loadSettingsView() {
 }
 
 window.__loadSettingsView = loadSettingsView;
+
+// Settings > Replacement sources: every package Fix Missing prefers or
+// avoids, to switch or remove.
+async function fmRenderPrefsSettings() {
+  const host = $("settings-repl-prefs");
+  if (!host) return;
+  await fmLoadPrefs();
+  const rows = [...FM_PREFS.entries()].sort(
+    (a, b) => b[1] - a[1] || pkgIdParts(a[0]).name.localeCompare(pkgIdParts(b[0]).name),
+  );
+  host.innerHTML = rows.length
+    ? rows
+        .map(
+          ([id, pref]) => `<div class="fm-prefs-row">
+            ${fmPkgLabelHtml(id)}
+            <span class="chip ${pref === 1 ? "fm-chip-pref" : "fm-chip-avoid"}"><span class="material-symbols-outlined">${pref === 1 ? "thumb_up" : "thumb_down"}</span>${pref === 1 ? "Preferred" : "Avoid"}</span>
+            <button type="button" class="ghost-button fm-small" data-fm-prefset="${escapeAttribute(id)}" data-fm-prefset-val="${pref === 1 ? -1 : 1}">${pref === 1 ? "Avoid instead" : "Prefer instead"}</button>
+            <button type="button" class="fm-icon-btn" data-fm-prefset="${escapeAttribute(id)}" data-fm-prefset-val="0" title="Remove: no preference" aria-label="Remove"><span class="material-symbols-outlined">close</span></button>
+          </div>`,
+        )
+        .join("")
+    : `<p class="fm-none-line">None yet: hover a package in Fix Missing's Replacement Sources and use the thumbs.</p>`;
+}
+
+function setupPrefsSettings() {
+  const host = $("settings-repl-prefs");
+  if (!host) return;
+  host.addEventListener("click", async (e) => {
+    const el = e.target.closest?.("[data-fm-prefset]");
+    if (!el) return;
+    const id = el.getAttribute("data-fm-prefset");
+    const pref = Number(el.getAttribute("data-fm-prefset-val"));
+    try {
+      await invoke("set_replacement_pref", { packageId: id, pref });
+    } catch (err) {
+      showToast(`Couldn't save that: ${String(err?.message || err)}`, "error");
+      return;
+    }
+    await fmRenderPrefsSettings();
+    if (Array.isArray(FM.refs)) fmRefresh();
+  });
+}
 window.__refreshBuildDbStats = () => {
   refreshBuildDbStats();
   refreshDownloadLinksCount();
@@ -9200,7 +9243,7 @@ function fmOrderPref(pkg) {
 function fmAutoOk(c) {
   return Boolean(c) && (c.isSelf || fmPref(c.package_id) !== -1);
 }
-const FM_STORE = { inPlace: "fm.inPlace", backup: "fm.backup", outputDir: "fm.outputDir", recent: "fm.recent" };
+const FM_STORE = { inPlace: "fm.inPlace", backup: "fm.backup", outputDir: "fm.outputDir", recent: "fm.recent", prefTip: "fm.prefTip" };
 
 function fmKey(ref) {
   return `${ref.ref_pkg}|${ref.ref_path ?? ""}`;
@@ -10290,13 +10333,9 @@ function fmRenderSummary() {
   }
   const s = fmSummary();
   const has = (n, one, many) => (n === 1 ? one : many);
+  // Everything is chosen: the strip's full ring says so.
   if (!s.open) {
-    const next = [
-      s.chosen ? `Run Fixes rewrites the ${s.chosen} chosen.` : "Nothing to rewrite.",
-      s.downloading ? "It checks again when the downloads finish." : "",
-    ].join(" ");
-    host.innerHTML = `<div class="fm-summary is-done"><span class="material-symbols-outlined">task_alt</span>
-        <div>All ${s.total} are ready: ${escapeHtml(fmReadyText(s))}. ${escapeHtml(next)}</div></div>`;
+    host.innerHTML = "";
     return;
   }
   const exact = s.selfExact + s.otherExact;
@@ -11005,6 +11044,13 @@ function fmRenderDetail() {
     : noneAnywhere
       ? `<p class="fm-none-line fm-sources-none">No copy in your folders or the database.</p>`
       : `<section class="fm-sources">
+          ${
+            !fmStoreGet(FM_STORE.prefTip, "") && cands.some((c) => !c.isSelf)
+              ? `<p class="fm-tip"><span class="material-symbols-outlined">thumbs_up_down</span>
+                  <span>Hover a package to prefer it as a replacement source, or to avoid it. Fix Missing remembers it for every package you check.</span>
+                  <button type="button" class="fm-link" data-fm-act="tip-off">Got it</button></p>`
+              : ""
+          }
           <div class="fm-tabs" role="tablist">${tabs
             .map(
               ([k, label, n]) =>
@@ -11151,6 +11197,7 @@ function fmPickRow(el) {
 // copy, with its warning). Clicking the same button again clears it, and
 // puts back the choices that click moved.
 async function fmSetPref(pkg, val) {
+  fmStoreSet(FM_STORE.prefTip, "1");
   const prev = fmPref(pkg);
   const next = prev === val ? 0 : val;
   try {
@@ -11379,6 +11426,10 @@ function fmOnClick(e) {
       FM.refDetails = !FM.refDetails;
       fmRenderDetail();
       break;
+    case "tip-off":
+      fmStoreSet(FM_STORE.prefTip, "1");
+      fmRenderDetail();
+      break;
     case "sheet":
       FM.sheetOpen = !FM.sheetOpen;
       fmRenderDetail();
@@ -11545,6 +11596,7 @@ function setupFixMissing() {
     }, 250);
   });
   window.__refreshFixMissingView = () => fmRender();
+  setupPrefsSettings();
   fmLoadPrefs().then(() => {
     if (Array.isArray(FM.refs)) fmRefresh();
   });
