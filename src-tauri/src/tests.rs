@@ -7095,3 +7095,70 @@ fn database_log_is_emptied_at_open_and_kept_small() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn clean_var_points_used_files_at_copies_elsewhere() {
+    use crate::clean_var::{apply_clean, clean_candidates};
+
+    let dir = repo_root().join("tmp_clean_var_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    let scene = br#"{ "img": "SELF:/Custom/a.png", "cloth": "SELF:/Custom/Clothing/x.vam" }"#;
+    let target = vars.join("T.Scene.1.var");
+    write_test_var_with_deps(
+        &target,
+        &["D.Dep.1"],
+        &[
+            ("Saves/scene/s.json", &scene[..]),
+            ("Custom/a.png", &b"image-a"[..]),
+            ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/unused.png", &b"never-used"[..]),
+        ],
+    );
+    write_test_var_with_deps(
+        &vars.join("S.Pack.1.var"),
+        &[],
+        &[
+            ("Custom/a.png", &b"image-a"[..]),
+            ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/unused.png", &b"never-used"[..]),
+        ],
+    );
+    write_test_var_with_deps(&vars.join("D.Dep.1.var"), &[], &[("Other/a-copy.png", &b"image-a"[..])]);
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&target), |_, _| {}).expect("scan");
+
+    let report = clean_candidates(&target, &scanned, None).expect("candidates");
+    let paths: Vec<&str> = report.items.iter().map(|i| i.path.as_str()).collect();
+    assert!(paths.contains(&"Custom/a.png") && paths.contains(&"Custom/Clothing/x.vam"), "{paths:?}");
+    assert!(!paths.contains(&"Custom/Clothing/x.vaj"), "a bundle member comes with its .vam");
+    assert!(!paths.iter().any(|p| p.starts_with("Saves/scene/")));
+    assert_eq!(report.unreferenced_files, 1, "unused.png has a copy but isn't used");
+    let a = report.items.iter().find(|i| i.path == "Custom/a.png").expect("a");
+    let d = a.copies.iter().find(|c| c.package_id == "D.Dep.1").expect("D has it");
+    assert!(d.already_dependency && d.installed);
+    assert!(!a.copies.iter().find(|c| c.package_id == "S.Pack.1").unwrap().already_dependency);
+    let x = report.items.iter().find(|i| i.path == "Custom/Clothing/x.vam").expect("x");
+    assert_eq!(x.bundle, vec!["Custom/Clothing/x.vaj".to_string()]);
+
+    let mut keep = BTreeMap::new();
+    keep.insert(a.key.clone(), "D.Dep.1:Other/a-copy.png".to_string());
+    keep.insert(x.key.clone(), "S.Pack.1:Custom/Clothing/x.vam".to_string());
+    let backups = dir.join("bk");
+    let result = apply_clean(&target, scanned, &keep, Some(&backups), None).expect("clean");
+    let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
+    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    assert_eq!(result.removed_files, 3, "a.png, x.vam and its .vaj; left: {names:?}");
+    assert!(result.dependencies.iter().any(|d| d == "S.Pack.1"));
+    assert!(backups.join("T.Scene.1.var").is_file());
+    assert!(!names.iter().any(|n| n == "Custom/a.png" || n.starts_with("Custom/Clothing/")), "{names:?}");
+    assert!(names.iter().any(|n| n == "Custom/unused.png"), "left alone");
+    let mut text = String::new();
+    zip.by_name("Saves/scene/s.json").expect("scene").read_to_string(&mut text).expect("read");
+    assert!(text.contains("D.Dep.1:/Other/a-copy.png"), "{text}");
+    assert!(text.contains("S.Pack.1:/Custom/Clothing/x.vam"), "{text}");
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+

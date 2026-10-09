@@ -393,6 +393,9 @@ pub(crate) struct ProgressPayload {
     pub(crate) fix_report: Option<FixReport>,
     #[serde(default)]
     pub(crate) internalize_report: Option<InternalizeReport>,
+    /// Result payload for `start_clean_var_task` (Clean VARs).
+    #[serde(default)]
+    pub(crate) clean_result: Option<crate::clean_var::CleanResult>,
     /// Result payload for `start_package_usage_task` (Dependency Usage).
     #[serde(default)]
     pub(crate) package_usage_result: Option<PackageUsageReport>,

@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod archives;
+mod clean_var;
 mod config;
 mod db;
 mod dep_usage;
@@ -179,6 +180,8 @@ fn main() {
             scan_internalize_candidates,
             start_apply_internalize_task,
             dep_usage::start_package_usage_task,
+            clean_var::clean_var_candidates,
+            clean_var::start_clean_var_task,
             start_plan_clean_duplicates_task,
             start_plan_organize_by_creator_task,
             move_var_to_creator_folder,

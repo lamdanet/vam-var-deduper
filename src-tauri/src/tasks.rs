@@ -525,7 +525,7 @@ pub(crate) fn save_config(app: tauri::AppHandle, config: AppConfig) -> Result<()
 /// Trim, drop empties, and convert the UI-supplied additional scan folders to
 /// `PathBuf`s. Empty input yields an empty vec, which keeps the cache key and
 /// scan roots identical to the historical single-folder behavior.
-fn parse_additional_dirs(dirs: &[String]) -> Vec<PathBuf> {
+pub(crate) fn parse_additional_dirs(dirs: &[String]) -> Vec<PathBuf> {
     dirs.iter()
         .map(|dir| dir.trim())
         .filter(|dir| !dir.is_empty())

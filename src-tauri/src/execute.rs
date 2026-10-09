@@ -151,7 +151,7 @@ fn resolve_keep_value(
     Some(resolved)
 }
 
-fn prepare_package_changes(
+pub(crate) fn prepare_package_changes(
     scanned: &mut ScannedData,
     keep_map: &BTreeMap<String, String>,
     target_package_id: Option<&str>,
@@ -663,7 +663,7 @@ fn rewrite_vap_directory(
     Ok(())
 }
 
-fn rewrite_package(
+pub(crate) fn rewrite_package(
     scanned: &ScannedData,
     package: &PreparedPackage,
     target_path: &Path,
@@ -780,7 +780,7 @@ fn rewrite_package(
     Ok(())
 }
 
-fn sum_removed_bytes(package: &PreparedPackage) -> u64 {
+pub(crate) fn sum_removed_bytes(package: &PreparedPackage) -> u64 {
     let size_map = package
         .resource_refs
         .iter()
