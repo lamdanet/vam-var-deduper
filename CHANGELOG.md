@@ -63,9 +63,10 @@ release time, it fills it with the commit messages since the last release.
   download it and the file works as it is, and the page checks again when
   the download finishes, keeping your choices. The database lists the
   packages that have the most of your missing files first and offers to
-  download ones you don't have. Writing a fixed copy doesn't ask first; then
-  the page leads you to check the copy and put it in place of the original,
-  keeping a backup. The empty page lists packages you checked lately and the
+  download ones you don't have. Writing a fixed copy doesn't ask first, and
+  by default Run Fixes then checks the copy and puts it in place of the
+  original, keeping a backup, all in one click; if anything new is missing in
+  the copy, it stops there and shows you. The empty page lists packages you checked lately and the
   ones with missing dependencies. A package can be marked a preferred
   replacement source (thumbs up) or one to avoid (thumbs down): preferred packages are chosen
   over others wherever they have the same file, in every check, and avoided
