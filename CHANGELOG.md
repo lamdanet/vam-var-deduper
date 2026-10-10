@@ -115,6 +115,15 @@ release time, it fills it with the commit messages since the last release.
   all its files, or take the suggested copy for all. Clean writes the
   original after a backup, shows the real size before and after, and
   Restore puts the original back
+- **Clean many packages**, the second tab of Clean VARs (new): pick the
+  package to keep, and every other package that carries copies of its files
+  is listed. Tick the ones to clean: their copies of the files they use
+  come out, they point at the package you keep and depend on it. The package
+  you keep is never changed. The same rules as for one package decide what
+  can go, and each package shows what comes out and what stays. Before
+  anything is written, a last look says what changes and what doesn't. Each
+  original goes to the Recycle Bin instead of a backup folder; a package VaM
+  has open, or on a drive without a Recycle Bin, is left as it was
 
 ### Changed
 - Package Explorer replaces the VAR Details page, which is gone: everything
