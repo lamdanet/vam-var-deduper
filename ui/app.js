@@ -14147,7 +14147,7 @@ function cvInDep(c) {
 
 function cvTotals() {
   // files, bytes: those with a whole copy somewhere (they can go)
-  const t = { files: 0, bytes: 0, chosen: 0, chosenBytes: 0, newDeps: new Set(), absent: new Set(), points: new Set() };
+  const t = { files: 0, bytes: 0, chosen: 0, chosenBytes: 0, chosenDisk: 0, newDeps: new Set(), absent: new Set(), points: new Set() };
   for (const item of cvItems()) {
     // Chosen (from the folders or the database), or with a whole copy here.
     if (!cvFree(item) || (!CV.picks.has(item.key) && !(item.copies ?? []).some(cvUsable))) continue;
@@ -14157,11 +14157,96 @@ function cvTotals() {
     if (!p) continue;
     t.chosen += 1;
     t.chosenBytes += Number(item.size ?? 0);
+    t.chosenDisk += cvDisk(item);
     t.points.add(p.pkg);
     if (!p.dep) t.newDeps.add(p.pkg);
     if (p.installed === false) t.absent.add(p.pkg);
   }
   return t;
+}
+
+// The package in numbers, as the old page's stats: its size now, what can
+// go (with a copy in your folders, or only in the database), what's chosen,
+// what's left to choose, what stays, and its size after Clean.
+function cvFigures() {
+  const r = CV.report ?? {};
+  const f = {
+    now: Number(r.file_bytes ?? 0),
+    content: Number(r.content_bytes ?? 0),
+    files: Number(r.content_files ?? 0),
+    unused: { n: Number(r.unreferenced_files ?? 0), b: Number(r.unreferenced_disk_bytes ?? r.unreferenced_bytes ?? 0) },
+  };
+  for (const k of ["local", "db", "chosen", "left", "stays"]) f[k] = { n: 0, b: 0 };
+  for (const item of cvItems()) {
+    const add = (k) => {
+      f[k].n += 1;
+      f[k].b += cvDisk(item);
+    };
+    const picked = CV.picks.has(item.key);
+    const usable = (item.copies ?? []).filter(cvUsable);
+    if (!cvFree(item) || (!usable.length && !picked)) {
+      add("stays");
+      continue;
+    }
+    add(usable.some((c) => c.installed !== false) ? "local" : "db");
+    add(picked ? "chosen" : "left");
+  }
+  f.after = Math.max(0, f.now - f.chosen.b);
+  return f;
+}
+
+// What a file (with its bundle) takes in the package, compressed: what Clean
+// takes off the file on disk.
+function cvDisk(item) {
+  return Number(item?.disk_size || item?.size || 0);
+}
+
+function cvFiguresHtml() {
+  const f = cvFigures();
+  const size = (b) => escapeHtml(formatBytesLocal(b));
+  const files = (n) => pkgCount(n, "file", "files");
+  const can = f.local.b + f.db.b;
+  const pct = can ? Math.round((f.chosen.b / can) * 100) : 0;
+  const tile = (cls, label, value, sub, title = "") =>
+    `<div class="cv-fig${cls ? ` ${cls}` : ""}"${title ? ` title="${escapeAttribute(title)}"` : ""}><small>${label}</small><b>${value}</b><span>${sub}</span></div>`;
+  const lines = [
+    f.db.n
+      ? `<li><span class="material-symbols-outlined">cloud_download</span><span><b>${size(f.db.b)}</b> more (${files(f.db.n)}) only in packages you don't have: choosing those means downloading them.</span></li>`
+      : "",
+    f.stays.n
+      ? `<li><span class="material-symbols-outlined">lock</span><span><b>${size(f.stays.b)}</b> (${files(f.stays.n)}) ${f.stays.n === 1 ? "stays" : "stay"}: a plugin in it loads ${
+          f.stays.n === 1 ? "it" : "them"
+        } by path, ${f.stays.n === 1 ? "it's" : "they're"} a preset's picture, or no copy in your folders is whole.</span></li>`
+      : "",
+    f.unused.n
+      ? `<li><span class="material-symbols-outlined">do_not_disturb_on</span><span><b>${size(f.unused.b)}</b> (${files(f.unused.n)}) ${f.unused.n === 1 ? "has a copy" : "have copies"} elsewhere but ${cvSelfName()} doesn't use ${
+          f.unused.n === 1 ? "it" : "them"
+        } itself: left alone.</span></li>`
+      : "",
+  ].join("");
+  return `<div class="cv-figs">
+      ${tile("", "Package now", size(f.now), `${files(f.files)} · ${size(f.content)} unpacked`, "Its size on disk; inside, uncompressed")}
+      ${tile("is-good", "Reclaimable", size(f.local.b), f.local.n ? `${files(f.local.n)} with a copy in your folders` : "nothing in your folders", "As they take in the package (compressed)")}
+      ${tile(
+        "is-after",
+        "After Clean",
+        `≈ ${size(f.after)}`,
+        f.chosen.n ? `about ${size(f.now - f.after)} smaller` : "nothing chosen yet",
+        "About: the chosen files as they take in the package. The result shows the real size.",
+      )}
+    </div>
+    ${
+      can
+        ? `<div class="cv-fig-progress">
+            <div class="cv-fig-track" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div style="width:${pct}%"></div></div>
+            <div class="cv-fig-legend">
+              <span><i class="is-chosen"></i>Chosen <b>${size(f.chosen.b)}</b> · ${files(f.chosen.n)}</span>
+              <span><i></i>Left to choose <b>${size(f.left.b)}</b> · ${files(f.left.n)}</span>
+            </div>
+          </div>`
+        : ""
+    }
+    ${lines ? `<ul class="cv-fig-lines">${lines}</ul>` : ""}`;
 }
 
 function cvPick(item, copy) {
@@ -14407,10 +14492,7 @@ function cvInfoChip() {
   if (CV.scanning) return `<span class="chip">Checking…</span>`;
   if (CV.error) return `<span class="chip missing-kind-text-ref" title="${escapeAttribute(CV.error)}">Check failed</span>`;
   if (!CV.report) return `<span class="chip">Not checked yet</span>`;
-  const t = cvTotals();
-  return t.files
-    ? `<span class="chip fm-chip-info"><span class="material-symbols-outlined">compress</span>${pkgCount(t.files, "file", "files")} with copies elsewhere · ${escapeHtml(formatBytesLocal(t.bytes))}</span>`
-    : `<span class="chip chip-accent"><span class="material-symbols-outlined">check_circle</span>Nothing to clean</span>`;
+  return cvTotals().files ? "" : `<span class="chip chip-accent"><span class="material-symbols-outlined">check_circle</span>Nothing to clean</span>`;
 }
 
 function cvRenderSource() {
@@ -14420,8 +14502,9 @@ function cvRenderSource() {
       <input type="checkbox" id="cv-withdb" ${CV.withDb ? "checked" : ""} ${CV.applying ? "disabled" : ""} /><span>Also list files with copies only in the database</span></label>`;
   if (CV.target && !CV.configOpen) {
     const it = CV.item ?? pkgBareItem(CV.target);
+    const bytes = Number(it.size_bytes || CV.report?.file_bytes || 0);
     const facts = [
-      it.size_bytes ? formatBytesLocal(it.size_bytes) : "",
+      bytes ? formatBytesLocal(bytes) : "",
       it.item_count ? pkgCount(it.item_count, "item", "items") : "",
       it.dep_count ? pkgCount(it.dep_count, "dependency", "dependencies") : "",
       it.used_by_count ? `used by ${pkgCount(it.used_by_count, "package", "packages")}` : "",
@@ -14496,7 +14579,7 @@ function cvPlanHtml() {
   const dir = cvBackupDir();
   const where = `${cvSelfName()} itself${!cvBackup() ? ", without a backup" : dir ? `, after backing it up to …\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : " (choose a folder for the backup)"}`;
   const line = (icon, label, body) => `<div class="fm-plan-line"><span class="material-symbols-outlined">${icon}</span><span class="fm-plan-label">${label}</span><span class="fm-plan-body">${body}</span></div>`;
-  const summary = `${pkgCount(t.chosen, "file", "files")} · about ${formatBytesLocal(t.chosenBytes)} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`;
+  const summary = `${pkgCount(t.chosen, "file", "files")} · about ${formatBytesLocal(t.chosenDisk)} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`;
   const open = CV.planOpen;
   return `<div class="fm-plan${open ? "" : " is-folded"}">
       <button type="button" class="fm-plan-toggle" data-cv-act="plan" aria-expanded="${open}">
@@ -14505,7 +14588,7 @@ function cvPlanHtml() {
       </button>
       ${
         open
-          ? `${line("delete_sweep", "Remove", `${pkgCount(t.chosen, "file", "files")} with what goes with them: ${escapeHtml(formatBytesLocal(t.chosenBytes))} of files. The package shrinks a little less (it's compressed); the result shows the real size.`)}
+          ? `${line("delete_sweep", "Remove", `${pkgCount(t.chosen, "file", "files")} with what goes with them: about ${escapeHtml(formatBytesLocal(t.chosenDisk))} off the package (${escapeHtml(formatBytesLocal(t.chosenBytes))} unpacked). The result shows the real size.`)}
              ${line("link", "Point at", few([...t.points], (pkg) => fmPkgLabelHtml(pkg)))}
              ${t.newDeps.size ? line("add_link", "New dependencies", few([...t.newDeps], (pkg) => fmPkgLabelHtml(pkg))) : ""}
              ${t.absent.size ? line("warning", "Not installed", `${few([...t.absent], (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">${cvSelfName()} won't work until ${t.absent.size === 1 ? "it's" : "they're"} downloaded</small>`) : ""}
@@ -14571,7 +14654,8 @@ function cvRenderDetails() {
       : CV.scanning
         ? ""
         : `<p class="fm-details-hint">Check the package to see which of its files other packages have too.</p>`;
-  host.innerHTML = `<header class="card-eyebrow">Clean</header>${report}${settings}${has ? cvPlanHtml() : ""}${cta}`;
+  const figures = CV.report && !CV.error ? cvFiguresHtml() : "";
+  host.innerHTML = `<header class="card-eyebrow">Clean</header>${report}${figures}${settings}${has && cvTotals().chosen ? cvPlanHtml() : ""}${cta}`;
   $("cv-backup")?.addEventListener("change", (e) => {
     fmStoreSet(CV_BACKUP, e.target.checked ? "1" : "0");
     cvRenderDetails();
@@ -14593,15 +14677,12 @@ function cvRenderSummary() {
   const pictures = items.filter((i) => String(i.stays ?? "").startsWith("picture:"));
   const free = items.filter(cvFree);
   const inDep = free.filter((i) => (i.copies ?? []).some(cvInDep));
-  const onlyDb = free.filter((i) => (i.copies ?? []).filter(cvUsable).every((c) => !c.installed) && (i.copies ?? []).some(cvUsable));
   const stuck = free.filter((i) => !(i.copies ?? []).some(cvUsable));
   const openDep = inDep.filter((i) => !CV.picks.has(i.key));
   const open = cvOpenSuggestions();
   const t = cvTotals();
   const lines = [
-    items.length ? `<li><b>${items.length}</b> ${items.length === 1 ? "file it uses has" : "files it uses have"} an exact copy elsewhere: ${escapeHtml(formatBytesLocal(items.reduce((n, i) => n + Number(i.size ?? 0), 0)))} in all.</li>` : "",
     inDep.length ? `<li><b>${inDep.length}</b> ${inDep.length === 1 ? "is" : "are"} in an installed package ${self} already depends on: pointing there adds no dependency.</li>` : "",
-    onlyDb.length ? `<li><b>${onlyDb.length}</b> ${onlyDb.length === 1 ? "has copies" : "have copies"} only in packages you don't have (database).</li>` : "",
     scripted.length
       ? `<li><b>${scripted.length}</b> ${scripted.length === 1 ? "stays" : "stay"}: a plugin script in ${self} loads ${scripted.length === 1 ? "it" : "them"} by path, and Clean can't change code.</li>`
       : "",
@@ -14610,9 +14691,6 @@ function cvRenderSummary() {
       : "",
     stuck.length ? `<li><b>${stuck.length}</b> ${stuck.length === 1 ? "has" : "have"} no copy with the whole resource in your folders (its .vaj, .vab or textures missing or different there); the database tab may have one.</li>` : "",
     CV.hiddenCopies ? `<li>${pkgCount(CV.hiddenCopies, "copy", "copies")} from creators you blocked ${CV.hiddenCopies === 1 ? "is" : "are"} left out.</li>` : "",
-    CV.report.unreferenced_files
-      ? `<li><b>${CV.report.unreferenced_files}</b> more ${CV.report.unreferenced_files === 1 ? "file has" : "files have"} copies (${escapeHtml(formatBytesLocal(Number(CV.report.unreferenced_bytes ?? 0)))}) but ${self} doesn't use ${CV.report.unreferenced_files === 1 ? "it" : "them"} itself: left alone.</li>`
-      : "",
   ].join("");
   const acts = [
     openDep.length
@@ -14622,7 +14700,8 @@ function cvRenderSummary() {
       ? `<button type="button" class="ghost-button fm-small" data-cv-act="choose-suggested" title="Each file gets its Suggested copy: installed, already a dependency, a favourite first"><span class="material-symbols-outlined">auto_fix_high</span>Choose the suggested copy for ${open.length === items.length ? "all" : "the other"} ${open.length}</button>`
       : "",
   ].join("");
-  host.innerHTML = `<div class="fm-summary"><span class="material-symbols-outlined">info</span><div><ul>${lines}</ul>${acts ? `<div class="fm-summary-acts">${acts}</div>` : ""}</div></div>`;
+  // The totals are in the Clean card; this says only what to do about them.
+  host.innerHTML = lines || acts ? `<div class="fm-summary"><span class="material-symbols-outlined">info</span><div>${lines ? `<ul>${lines}</ul>` : ""}${acts ? `<div class="fm-summary-acts">${acts}</div>` : ""}</div></div>` : "";
 }
 
 function cvRenderStrip() {
@@ -14639,7 +14718,7 @@ function cvRenderStrip() {
   const note = CV.flash
     ? escapeHtml(CV.flash)
     : t.chosen
-      ? `about ${escapeHtml(formatBytesLocal(t.chosenBytes))} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`
+      ? `about ${escapeHtml(formatBytesLocal(t.chosenDisk))} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`
       : "Each file you choose points at its copy instead.";
   host.innerHTML = `<span class="fm-ring" title="${escapeAttribute(of)}">${pkgRing(t.files ? t.chosen / t.files : 0, t.chosen && t.chosen === t.files ? "var(--accent-success)" : "var(--primary)", { size: 38, track: "var(--line)" })}<b>${t.chosen}</b></span>
      <span class="fm-strip-text"><b>${of}</b><small>${note}</small></span>
