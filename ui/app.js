@@ -14331,8 +14331,13 @@ async function cvRestore() {
 function cvRender() {
   const view = cvView();
   if (!view) return;
+  // The page's second tab, Clean many packages.
+  if (cvMode() === "many") {
+    cmRender();
+    return;
+  }
   if (CV.configOpen == null || !CV.target) CV.configOpen = !CV.report;
-  view.innerHTML = `
+  view.innerHTML = `${cvModesHtml()}
     <section class="dashboard-grid fm-top">
       <article class="card source-card" id="cv-source"></article>
       <article class="card details-card" id="cv-details"></article>
@@ -14939,10 +14944,10 @@ function cvRenderDetail() {
 // Kept inside the window like Fix Missing's panel, so its end is reachable;
 // a narrow window shows it as a sheet at the bottom.
 function cvFitPanel() {
-  const card = $("cv-detail");
+  const card = cvView()?.querySelector(".cv-detail-card");
   if (!card || !cvVisible()) return;
   card.classList.add("is-open");
-  card.classList.toggle("is-empty", !cvItems().length);
+  card.classList.toggle("is-empty", !(cvMode() === "many" ? cmPkgs().length : cvItems().length));
   const grid = cvView()?.querySelector(".cv-grid");
   const pos = getComputedStyle(card).position;
   if (pos === "fixed") {
@@ -14974,6 +14979,11 @@ function cvFitPanel() {
 function cvOnClick(e) {
   const q = (sel) => e.target.closest?.(sel);
   let el;
+  if ((el = q("[data-cv-mode]"))) {
+    cvSetMode(el.getAttribute("data-cv-mode"));
+    return;
+  }
+  if (cvMode() !== "one") return;
   if ((el = q("[data-cv-file-clear]"))) {
     e.stopPropagation();
     CV.picks.delete(el.getAttribute("data-cv-file-clear"));
@@ -15126,7 +15136,7 @@ function cvOnClick(e) {
 }
 
 function cvOnChange(e) {
-  if (e.target.id === "cv-withdb") {
+  if (cvMode() === "one" && e.target.id === "cv-withdb") {
     if (CV.applying) {
       e.target.checked = CV.withDb;
       return;
@@ -15143,7 +15153,11 @@ function setupCleanVars() {
   if (view) {
     view.addEventListener("click", cvOnClick);
     view.addEventListener("change", cvOnChange);
+    view.addEventListener("click", cmOnClick);
+    view.addEventListener("change", cmOnChange);
+    view.addEventListener("keydown", cmOnKey);
     view.addEventListener("keydown", (e) => {
+      if (cvMode() !== "one") return;
       if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-cv-copy], [data-cv-frow]")) {
         e.preventDefault();
         e.target.click();
@@ -15174,9 +15188,915 @@ function setupCleanVars() {
     ?.listen?.("tauri://drag-drop", (event) => {
       if (!cvVisible() || document.querySelector(".dialog-backdrop:not(.hidden)")) return;
       const varPath = (event?.payload?.paths ?? []).map(String).find((p) => /\.var$/i.test(p));
-      if (varPath) cvOpen(varPath, { scan: true });
+      if (!varPath) return;
+      // On Clean many, the dropped package is the one to keep.
+      if (cvMode() === "many") cmOpen(varPath, { scan: true });
+      else cvOpen(varPath, { scan: true });
     })
     .catch(() => {});
+}
+
+// ---- Clean many: one package kept, the others cleaned against it -----------------------
+// The page's second tab. The package picked here is the source: it is never
+// written. The packages with copies of its files are listed; each one the
+// user ticks loses its copies of the files it uses itself, its references
+// point at the source and it depends on it (clean_many.rs, by the same rules
+// as one package). There's no backup folder: each original goes to the
+// Recycle Bin.
+
+const CV_MODE = "cv.mode";
+const CM_RECENT = "cm.recent";
+
+const CM = {
+  source: "",
+  item: null,
+  token: 0,
+  // CleanManyReport once checked; null before.
+  report: null,
+  scanning: false,
+  progress: 0,
+  message: "",
+  error: "",
+  // package ids to clean
+  ticked: new Set(),
+  // the package the right panel shows
+  sel: null,
+  filter: "all",
+  query: "",
+  applying: false,
+  confirming: false,
+  understood: false,
+  lastRun: null,
+  configOpen: null,
+  flash: "",
+  flashTimer: null,
+};
+
+function cvMode() {
+  return fmStoreGet(CV_MODE, "one") === "many" ? "many" : "one";
+}
+
+function cvModesHtml() {
+  const mode = cvMode();
+  const tab = (k, icon, title, sub) => `<button type="button" role="tab" class="cv-mode${mode === k ? " is-active" : ""}" aria-selected="${mode === k}" data-cv-mode="${k}">
+      <span class="material-symbols-outlined">${icon}</span><span class="cv-mode-text"><b>${title}</b><small>${sub}</small></span></button>`;
+  return `<nav class="cv-modes" role="tablist" aria-label="What Clean changes">${tab("one", "compress", "Clean one package", "The package you pick gets smaller")}${tab(
+    "many",
+    "hub",
+    "Clean many packages",
+    "The package you pick stays as it is: the others that carry its files use it",
+  )}</nav>`;
+}
+
+function cvSetMode(mode) {
+  if (mode === cvMode()) return;
+  if (CV.applying || CM.applying) {
+    showToast("Wait until Clean finishes writing.", "info");
+    return;
+  }
+  fmStoreSet(CV_MODE, mode);
+  cvRender();
+}
+
+function cmName() {
+  return CM.item ? libTitle(CM.item) : "the package you keep";
+}
+
+function cmBusy() {
+  return CM.scanning || CM.applying;
+}
+
+function cmRecentGet() {
+  try {
+    const list = JSON.parse(fmStoreGet(CM_RECENT, "[]"));
+    return Array.isArray(list) ? list.filter((r) => r && typeof r.path === "string") : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+function cmRecentAdd(path, note) {
+  const list = [{ path, note, at: Date.now() }, ...cmRecentGet().filter((r) => r.path !== path)].slice(0, 8);
+  fmStoreSet(CM_RECENT, JSON.stringify(list));
+}
+
+function cmOpen(target, { scan = false } = {}) {
+  const fp = typeof target === "string" ? target : target?.file_path;
+  if (!fp) return;
+  if (CM.applying) {
+    showToast("Wait until Clean finishes writing the packages.", "info");
+    return;
+  }
+  if (CM.source !== fp) {
+    CM.token += 1;
+    Object.assign(CM, {
+      source: fp,
+      item: libFindItem(fp) ?? pkgBareItem(fp),
+      report: null,
+      error: "",
+      ticked: new Set(),
+      sel: null,
+      filter: "all",
+      query: "",
+      confirming: false,
+      lastRun: null,
+      configOpen: null,
+    });
+  }
+  cvShowView();
+  cmRender();
+  if (scan && !CM.scanning) cmScan();
+}
+
+// ---- Check -------------------------------------------------------------------------------
+
+async function cmScan() {
+  if (!invoke || !CM.source || cmBusy()) return;
+  const addon = vamAddonPackagesDir();
+  if (!addon) {
+    showToast("Set your VaM folder in Settings first.", "error");
+    return;
+  }
+  const token = CM.token;
+  const extra = cvExtraDirs();
+  Object.assign(CM, { scanning: true, progress: 0, message: "Reading your packages…", error: "", report: null });
+  cmRender();
+  const step = (from, span) => (f, m) => {
+    if (token !== CM.token) return;
+    CM.progress = from + f * span;
+    if (m) CM.message = m;
+    cmRenderProgress();
+  };
+  try {
+    // The folder scan Clean one package uses, with this package as its
+    // target: it finds every exact copy of its files.
+    await fmPoll("start_scan_task", { request: { input_dir: addon, additional_input_dirs: extra, target_var_path: CM.source, skip_db: true } }, step(0, 0.7));
+    if (token !== CM.token) return;
+    const p = await fmPoll("start_clean_many_check_task", { inputDir: addon, additionalInputDirs: extra, sourceVarPath: CM.source }, step(0.7, 0.3));
+    if (token !== CM.token) return;
+    CM.report = p.clean_many_report ?? { packages: [] };
+    CM.configOpen = false;
+    // A tick stays while its package is still listed with something to go.
+    const live = new Set(cmPkgs().filter(cmCan).map((x) => x.package_id));
+    CM.ticked = new Set([...CM.ticked].filter((id) => live.has(id)));
+    if (!cmPkgs().some((x) => x.package_id === CM.sel)) CM.sel = cmPkgs()[0]?.package_id ?? null;
+    cmRecentAdd(CM.source, cmPkgs().length ? `${pkgCount(cmPkgs().length, "package carries", "packages carry")} its files` : "no package carries its files");
+  } catch (e) {
+    if (token !== CM.token) return;
+    CM.error = String(e?.message || e);
+  } finally {
+    if (token === CM.token) {
+      CM.scanning = false;
+      cmRender();
+    }
+  }
+}
+
+// ---- What the ticks add up to ------------------------------------------------------------
+
+function cmPkgs() {
+  return CM.report?.packages ?? [];
+}
+
+function cmPkg(id) {
+  return cmPkgs().find((x) => x.package_id === id) ?? null;
+}
+
+// The files that come out of it when it's cleaned.
+function cmGoes(p) {
+  return (p?.files ?? []).filter((f) => !f.stays);
+}
+
+function cmCan(p) {
+  return cmGoes(p).length > 0;
+}
+
+function cmGain(p) {
+  return cmGoes(p).reduce((n, f) => n + Number(f.size ?? 0), 0);
+}
+
+function cmTicked() {
+  return cmPkgs().filter((p) => CM.ticked.has(p.package_id) && cmCan(p));
+}
+
+function cmTotals() {
+  const ticked = cmTicked();
+  return {
+    can: cmPkgs().filter(cmCan).length,
+    ticked,
+    files: ticked.reduce((n, p) => n + cmGoes(p).length, 0),
+    bytes: ticked.reduce((n, p) => n + cmGain(p), 0),
+    newDeps: ticked.filter((p) => !p.already_dependency).length,
+    loops: ticked.filter((p) => p.source_depends_on_it),
+  };
+}
+
+function cmStaysText(f) {
+  const why = f?.stays ?? "";
+  if (why === "incomplete") {
+    return {
+      short: "not whole in the source",
+      long: `${cmName()} doesn't have all of it (${(f.lacks ?? []).join(", ")} missing or different there), so it can't stand in: it stays.`,
+    };
+  }
+  return cvStaysText({ stays: why });
+}
+
+function cmFlash(text) {
+  CM.flash = text;
+  const token = CM.token;
+  clearTimeout(CM.flashTimer);
+  CM.flashTimer = setTimeout(() => {
+    if (token !== CM.token) return;
+    CM.flash = "";
+    cmRenderStrip();
+  }, 4000);
+}
+
+function cmTick(id, on) {
+  const p = cmPkg(id);
+  if (!p || !cmCan(p) || CM.applying) return;
+  if (on) CM.ticked.add(id);
+  else CM.ticked.delete(id);
+}
+
+// ---- Clean -------------------------------------------------------------------------------
+
+function cmAskApply() {
+  if (!cmTicked().length || cmBusy()) return;
+  CM.confirming = true;
+  CM.understood = false;
+  cmRenderConfirm();
+  requestAnimationFrame(() => $("cm-confirm-understood")?.focus());
+}
+
+async function cmApply() {
+  const t = cmTotals();
+  if (!invoke || !t.ticked.length || cmBusy() || !CM.understood) return;
+  const token = CM.token;
+  const name = cmName();
+  Object.assign(CM, { confirming: false, applying: true, progress: 0, message: "Loading the folder scan…" });
+  cmRender();
+  let done = null;
+  let stale = false;
+  try {
+    const p = await fmPoll(
+      "start_clean_many_task",
+      { inputDir: vamAddonPackagesDir(), additionalInputDirs: cvExtraDirs(), sourceVarPath: CM.source, packagePaths: t.ticked.map((x) => x.file_path) },
+      (f, m) => {
+        if (token !== CM.token) return;
+        CM.progress = f;
+        if (m) CM.message = m;
+        cmRenderProgress();
+      },
+    );
+    done = p.clean_many_result ?? { done: [] };
+    vpRefreshAfterMutation().catch(() => {});
+  } catch (e) {
+    const msg = String(e?.message || e);
+    // A package changed since the check: nothing was written.
+    stale = /check (the package|it) again/i.test(msg);
+    if (!stale) showToast(`Clean failed: ${msg}`, "error", 8000);
+  } finally {
+    CM.applying = false;
+    cmRender();
+  }
+  if (token !== CM.token) return;
+  if (stale) {
+    await cmScan();
+    cmFlash("Your folders changed since the check: checked again, your ticks kept where they still fit. Press Clean again.");
+    cmRenderStrip();
+    return;
+  }
+  if (!done) return;
+  const ok = (done.done ?? []).filter((d) => d.result);
+  CM.lastRun = { name, done: done.done ?? [] };
+  CM.ticked = new Set();
+  cmRecentAdd(CM.source, `${pkgCount(ok.length, "package", "packages")} cleaned against it`);
+  cmFlash(ok.length ? `Cleaned ${pkgCount(ok.length, "package", "packages")}. Checking again…` : "Nothing was cleaned. Checking again…");
+  await cmScan();
+}
+
+// ---- Render ------------------------------------------------------------------------------
+
+function cmRender() {
+  const view = cvView();
+  if (!view || cvMode() !== "many") return;
+  if (CM.configOpen == null || !CM.source) CM.configOpen = !CM.report;
+  view.innerHTML = `${cvModesHtml()}
+    <section class="dashboard-grid fm-top">
+      <article class="card source-card cm-source-card" id="cm-source"></article>
+      <article class="card details-card" id="cm-details"></article>
+    </section>
+    <section class="progress-card card hidden" id="cm-progress">
+      <div class="progress-head"><strong id="cm-progress-h">Checking</strong><span id="cm-progress-pct">0%</span></div>
+      <div class="progress-track"><div class="progress-bar" id="cm-progress-bar"></div></div>
+      <p class="panel-subtitle" id="cm-progress-msg"></p>
+    </section>
+    <section class="content-grid fm-grid cv-grid">
+      <article class="panel card fm-list-card cv-list-card">
+        <div class="panel-head panel-head-groups">
+          <div class="panel-head-main">
+            <div class="groups-header-row">
+              <h2>Packages to clean</h2>
+              <div class="group-filter-stack">
+                <div class="input-with-icon">
+                  <span class="material-symbols-outlined input-leading-icon">search</span>
+                  <input id="cm-search" type="search" placeholder="Filter by package or file" value="${escapeAttribute(CM.query)}" />
+                </div>
+              </div>
+            </div>
+            <p class="panel-subtitle" id="cm-list-subtitle"></p>
+            <div id="cm-summary"></div>
+            <div class="fm-list-tools" id="cm-list-tools"></div>
+          </div>
+        </div>
+        <div id="cm-list" class="group-list" role="listbox" aria-multiselectable="true"></div>
+      </article>
+      <article class="panel card fm-detail-card cv-detail-card" id="cm-detail"></article>
+    </section>
+    <div id="cm-confirm"></div>`;
+  $("cm-search").addEventListener("input", (e) => {
+    CM.query = e.target.value.trim().toLowerCase();
+    cmRenderList();
+  });
+  cmRenderSource();
+  cmRenderDetails();
+  cmRenderProgress();
+  cmRenderSummary();
+  cmRenderList();
+  cmRenderDetail();
+  cmRenderConfirm();
+}
+
+function cmRefresh() {
+  cmRenderDetails();
+  cmRenderSummary();
+  cmRenderList();
+  cmRenderDetail();
+}
+
+function cmRenderProgress() {
+  const card = $("cm-progress");
+  if (!card) return;
+  card.classList.toggle("hidden", !cmBusy());
+  const pct = Math.round(CM.progress * 100);
+  const bar = $("cm-progress-bar");
+  if (bar) bar.style.width = `${pct}%`;
+  const label = $("cm-progress-pct");
+  if (label) label.textContent = `${pct}%`;
+  const h = $("cm-progress-h");
+  if (h) h.textContent = CM.applying ? "Cleaning" : "Checking";
+  const msg = $("cm-progress-msg");
+  if (msg) {
+    msg.textContent = CM.applying
+      ? `${CM.message || "Working…"} — each original goes to the Recycle Bin`
+      : `${CM.message || "Working…"}${CM.progress < 0.7 ? " — the first check reads every package in your folders; later ones reuse that" : ""}`;
+  }
+}
+
+function cmInfoChip() {
+  if (CM.scanning) return `<span class="chip">Checking…</span>`;
+  if (CM.error) return `<span class="chip missing-kind-text-ref" title="${escapeAttribute(CM.error)}">Check failed</span>`;
+  if (!CM.report) return `<span class="chip">Not checked yet</span>`;
+  const can = cmPkgs().filter(cmCan);
+  return can.length
+    ? `<span class="chip fm-chip-info"><span class="material-symbols-outlined">inventory_2</span>${pkgCount(can.length, "package", "packages")} could use it · ${escapeHtml(
+        formatBytesLocal(can.reduce((n, p) => n + cmGain(p), 0)),
+      )}</span>`
+    : `<span class="chip">No package could use it</span>`;
+}
+
+function cmRenderSource() {
+  const host = $("cm-source");
+  if (!host) return;
+  if (CM.source && !CM.configOpen) {
+    const it = CM.item ?? pkgBareItem(CM.source);
+    const facts = [
+      it.size_bytes ? formatBytesLocal(it.size_bytes) : "",
+      it.item_count ? pkgCount(it.item_count, "item", "items") : "",
+      it.used_by_count ? `used by ${pkgCount(it.used_by_count, "package", "packages")}` : "",
+    ].filter(Boolean);
+    host.innerHTML = `
+      <header class="card-eyebrow fm-eyebrow">The package to keep
+        <button type="button" class="fm-link" data-cm-act="config" title="Pick another .var" ${cmBusy() ? "disabled" : ""}>Change</button></header>
+      <div class="fm-hero">
+        ${libThumbHtml(CM.source, libGradient(it.file_name || it.package_id), "fm-hero-thumb")}</div>
+        <div class="fm-hero-main">
+          <div class="fm-hero-title" title="${escapeAttribute(CM.source)}">
+            <h2>${escapeHtml(libTitle(it))}</h2>${libVersion(it) ? `<span class="fm-hero-ver">v${escapeHtml(libVersion(it))}</span>` : ""}
+          </div>
+          <div class="fm-hero-by">by <b>${escapeHtml(libCreator(it))}</b>${facts.length ? ` · ${escapeHtml(facts.join(" · "))}` : ""}</div>
+          <div class="fm-info-chips">
+            <span class="chip cm-keep-chip" title="Clean many never writes this package: the packages you tick change, this one doesn't"><span class="material-symbols-outlined">lock</span>Kept as it is — never changed</span>
+            ${cmInfoChip()}
+          </div>
+          <div class="fm-hero-acts">
+            <button type="button" class="ghost-button fm-small" data-cm-act="explore"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
+            <button type="button" class="ghost-button fm-small" data-cm-act="show-file" title="${escapeAttribute(CM.source)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+            <button type="button" class="ghost-button fm-small" data-cm-act="scan" ${cmBusy() ? "disabled" : ""}><span class="material-symbols-outlined">refresh</span>${CM.scanning ? "Checking…" : "Check again"}</button>
+          </div>
+        </div>
+      </div>`;
+    libThumbWatch(host);
+    return;
+  }
+  host.innerHTML = `
+    <header class="card-eyebrow fm-eyebrow">The package to keep${CM.source && CM.report ? `<button type="button" class="fm-link" data-cm-act="config">Fold</button>` : ""}</header>
+    <div class="source-body">
+      <div class="var-details-dropzone missing-target-dropzone fm-dropzone${CM.source ? " is-compact" : ""}" data-cm-act="pick" role="button" tabindex="0">
+        <div class="var-details-dropzone-icon"><span class="material-symbols-outlined">lock</span></div>
+        <h4 class="var-details-dropzone-title">${CM.source ? "Drop another .var to keep instead" : "Drag and drop the package to keep"}</h4>
+        <p class="var-details-dropzone-subtitle">${
+          CM.source ? "or click to pick one" : "It isn't changed. The packages that carry copies of its files are listed: the ones you tick lose those copies and use it instead."
+        }</p>
+        ${CM.source ? "" : `<div class="var-details-dropzone-actions"><button type="button" class="primary-button" data-cm-act="pick">Select File</button></div>`}
+      </div>
+      <div class="action-row">
+        <button type="button" class="primary-button action-button fm-scan-btn" data-cm-act="scan" ${CM.source && !cmBusy() ? "" : "disabled"}>${
+          CM.scanning ? "Checking…" : CM.report ? "Check again" : "Find the packages with its files"
+        }</button>
+      </div>
+    </div>`;
+}
+
+// The three steps, before anything is checked.
+function cmHowHtml() {
+  const step = (n, icon, title, body) => `<li class="cm-step"><span class="cm-step-n">${n}</span><span class="material-symbols-outlined">${icon}</span>
+      <span class="cm-step-text"><b>${title}</b><small>${body}</small></span></li>`;
+  return `<ol class="cm-steps">
+      ${step(1, "lock", "Pick the package to keep", "It's the source the others will use. Clean never changes it.")}
+      ${step(2, "checklist", "Tick the packages to clean", "They carry copies of its files. Only the files they use themselves count.")}
+      ${step(3, "link", "Clean them", "Their copies come out, their references point at the package you keep, and they depend on it. Each original goes to the Recycle Bin.")}
+    </ol>`;
+}
+
+function cmStartHtml() {
+  const recent = cmRecentGet().slice(0, 6);
+  if (!recent.length) return "";
+  const row = (path, item, note) => `<button type="button" class="fm-start-row" data-cm-start="${escapeAttribute(path)}" title="${escapeAttribute(path)}">
+      <span class="fm-start-text"><b>${escapeHtml(libTitle(item))}</b><small>by ${escapeHtml(libCreator(item))}</small></span>
+      <span class="chip">${escapeHtml(note)}</span>
+    </button>`;
+  return `<div class="fm-start"><h3 class="fm-start-h">Kept lately</h3>${recent.map((r) => row(r.path, libFindItem(r.path) ?? pkgBareItem(r.path), r.note || "checked")).join("")}</div>`;
+}
+
+// The picture of what Clean does: the ticked packages on the left change,
+// the kept one on the right doesn't.
+function cmFlowHtml({ note = true } = {}) {
+  const t = cmTotals();
+  const left = t.ticked.length
+    ? `<b>${pkgCount(t.ticked.length, "ticked package", "ticked packages")}</b><small>${pkgCount(t.files, "file comes", "files come")} out · about ${escapeHtml(formatBytesLocal(t.bytes))}</small>`
+    : `<b>The packages you tick</b><small>${t.can ? `${pkgCount(t.can, "package", "packages")} could` : "none can"}</small>`;
+  return `<div class="cm-flow" aria-label="What Clean changes">
+      <div class="cm-flow-box is-change"><span class="material-symbols-outlined">content_cut</span><span class="cm-flow-text"><small class="cm-flow-tag">Changed</small>${left}</span></div>
+      <div class="cm-flow-arrow"><span>point at and depend on</span><span class="material-symbols-outlined">arrow_forward</span></div>
+      <div class="cm-flow-box is-keep"><span class="material-symbols-outlined">lock</span><span class="cm-flow-text"><small class="cm-flow-tag">Not changed</small><b>${escapeHtml(cmName())}</b><small>the package you keep</small></span></div>
+    </div>${
+      note ? `<p class="cm-note"><span class="material-symbols-outlined">recycling</span>No backup folder: each original goes to the Recycle Bin. To undo one, restore it from there.</p>` : ""
+    }`;
+}
+
+function cmRunHtml() {
+  const run = CM.lastRun;
+  if (!run) return "";
+  const ok = run.done.filter((d) => d.result);
+  const bad = run.done.filter((d) => !d.result);
+  const saved = ok.reduce((n, d) => n + cvSaved(d.result), 0);
+  // The name, and under it what happened: an error is read in full.
+  const line = (d) =>
+    d.result
+      ? `<li class="cm-run-ok"><span class="material-symbols-outlined">check</span><span class="cm-run-text">${fmPkgLabelHtml(d.package_id)}<small>${escapeHtml(
+          formatBytesLocal(Number(d.result.size_before ?? 0)),
+        )} → ${escapeHtml(formatBytesLocal(Number(d.result.size_after ?? 0)))}</small></span></li>`
+      : `<li class="cm-run-bad"><span class="material-symbols-outlined">block</span><span class="cm-run-text">${fmPkgLabelHtml(d.package_id)}<small>Not changed: ${escapeHtml(d.error ?? "")}</small></span></li>`;
+  return `<div class="fm-report cm-run${bad.length ? " has-errors" : ""}">
+      <span class="material-symbols-outlined">${ok.length ? "check_circle" : "error"}</span>
+      <button type="button" class="fm-icon-btn fm-report-close" data-cm-act="run-close" title="Close" aria-label="Close"><span class="material-symbols-outlined">close</span></button>
+      <div>
+        <b>${ok.length ? `Cleaned ${pkgCount(ok.length, "package", "packages")}: ${escapeHtml(formatBytesLocal(saved))} smaller in all.` : "Nothing was cleaned."}${bad.length ? ` ${bad.length} left as ${bad.length === 1 ? "it was" : "they were"}.` : ""}</b>
+        ${
+          ok.length
+            ? `<small>${ok.length === 1 ? "It points" : "They point"} at ${escapeHtml(run.name)} now and ${ok.length === 1 ? "depends" : "depend"} on it. ${
+                ok.length === 1 ? "Its original is" : "Their originals are"
+              } in the Recycle Bin.</small>`
+            : ""
+        }
+        <ul class="cm-run-list">${run.done.map(line).join("")}</ul>
+      </div>
+    </div>`;
+}
+
+function cmRenderDetails() {
+  const host = $("cm-details");
+  if (!host) return;
+  if (!CM.source) {
+    host.innerHTML = `<header class="card-eyebrow">How Clean many works</header>${cmHowHtml()}${cmStartHtml()}`;
+    return;
+  }
+  const empty = CM.report && !CM.error && !cmPkgs().length;
+  host.innerHTML = `<header class="card-eyebrow">Clean many</header>${cmRunHtml()}${
+    empty
+      ? `<p class="fm-details-hint fm-details-clean"><span class="material-symbols-outlined">check_circle</span>No other package uses a copy of its files${
+          Number(CM.report.unused_only ?? 0) ? ` (${pkgCount(Number(CM.report.unused_only), "package carries", "packages carry")} copies without using them: left alone)` : ""
+        }.</p>`
+      : CM.report
+        ? cmFlowHtml()
+        : cmHowHtml()
+  }`;
+}
+
+function cmRenderSummary() {
+  const host = $("cm-summary");
+  if (!host) return;
+  const pkgs = cmPkgs();
+  if (!CM.report || !pkgs.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const name = escapeHtml(cmName());
+  const can = pkgs.filter(cmCan);
+  const none = pkgs.filter((p) => !cmCan(p));
+  const deps = can.filter((p) => p.already_dependency);
+  const loops = can.filter((p) => p.source_depends_on_it);
+  const family = can.filter((p) => p.same_family);
+  const failed = CM.report.failed ?? [];
+  const lines = [
+    can.length
+      ? `<li><b>${can.length}</b> ${can.length === 1 ? "package carries" : "packages carry"} copies of files from ${name} that ${can.length === 1 ? "it" : "they"} could drop: ${escapeHtml(
+          formatBytesLocal(can.reduce((n, p) => n + cmGain(p), 0)),
+        )} in all.</li>`
+      : "",
+    deps.length ? `<li><b>${deps.length}</b> already ${deps.length === 1 ? "depends" : "depend"} on ${name}: cleaning adds no dependency.</li>` : "",
+    loops.length
+      ? `<li><b>${loops.length}</b> ${loops.length === 1 ? "is a dependency" : "are dependencies"} of ${name} itself: cleaned, ${loops.length === 1 ? "it" : "they"} and ${name} would depend on each other.</li>`
+      : "",
+    family.length ? `<li><b>${family.length}</b> ${family.length === 1 ? "is another version" : "are other versions"} of ${name}.</li>` : "",
+    none.length
+      ? `<li><b>${none.length}</b> ${none.length === 1 ? "has" : "have"} nothing that can go (a plugin in ${none.length === 1 ? "it" : "them"} loads the file by path, it's a preset's picture, or ${name} doesn't have the whole resource).</li>`
+      : "",
+    Number(CM.report.unused_only ?? 0)
+      ? `<li><b>${CM.report.unused_only}</b> more ${Number(CM.report.unused_only) === 1 ? "package carries" : "packages carry"} copies without using them: left alone.</li>`
+      : "",
+    failed.length ? `<li><b>${failed.length}</b> couldn't be read: ${escapeHtml(failed.map((f) => pkgIdParts(f.package_id).name).join(", "))}.</li>` : "",
+  ].join("");
+  host.innerHTML = `<div class="fm-summary"><span class="material-symbols-outlined">info</span><div><ul>${lines}</ul></div></div>`;
+}
+
+function cmChips(p) {
+  const name = escapeAttribute(cmName());
+  return [
+    p.already_dependency ? `<span class="chip fm-chip-good" title="It already lists ${name} as a dependency: cleaning adds none">already depends on it</span>` : "",
+    p.source_depends_on_it ? `<span class="chip fm-chip-warn" title="${name} depends on this package: cleaned, they would depend on each other">${escapeHtml(cmName())} depends on it</span>` : "",
+    p.same_family ? `<span class="chip" title="Another version of ${name}">another version</span>` : "",
+  ].join("");
+}
+
+function cmRenderList() {
+  const host = $("cm-list");
+  const subtitle = $("cm-list-subtitle");
+  const tools = $("cm-list-tools");
+  if (!host) return;
+  if (!CM.report) {
+    host.className = "group-list empty";
+    host.innerHTML = CM.scanning ? "Checking…" : CM.error ? escapeHtml(CM.error) : CM.source ? "Check to list the packages that carry its files." : "Pick the package to keep above.";
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  const pkgs = cmPkgs();
+  if (!pkgs.length) {
+    host.className = "group-list empty";
+    host.innerHTML = `<span class="fm-clean"><span class="material-symbols-outlined">check_circle</span>No other package uses a copy of its files.</span>`;
+    if (subtitle) subtitle.textContent = "";
+    if (tools) tools.innerHTML = "";
+    return;
+  }
+  host.className = "group-list";
+  if (subtitle) subtitle.textContent = `Tick the ones to clean — they change, ${cmName()} doesn't. The most to gain first.`;
+  const filters = [
+    ["all", "All", () => true],
+    ["ticked", "Ticked", (p) => CM.ticked.has(p.package_id) && cmCan(p)],
+    ["dep", "Already depend on it", (p) => cmCan(p) && p.already_dependency],
+    ["none", "Nothing can go", (p) => !cmCan(p)],
+  ];
+  const open = pkgs.filter((p) => cmCan(p) && !CM.ticked.has(p.package_id)).length;
+  if (tools) {
+    tools.innerHTML = `<div class="fm-filter-row">${filters
+      .map(([k, label, f]) => [k, label, pkgs.filter(f).length])
+      .filter(([k, , n]) => k === "all" || n || CM.filter === k)
+      .map(([k, label, n]) => `<button type="button" class="fm-filter${CM.filter === k ? " is-active" : ""}" data-cm-filter="${k}">${label} <small>${n}</small></button>`)
+      .join("")}</div>
+      <div class="cm-bulk">${
+        open ? `<button type="button" class="ghost-button fm-small" data-cm-act="tick-all" ${CM.applying ? "disabled" : ""}><span class="material-symbols-outlined">select_all</span>Tick all ${open === pkgs.filter(cmCan).length ? "" : "other "}${open} that can be cleaned</button>` : ""
+      }${CM.ticked.size ? `<button type="button" class="ghost-button fm-small" data-cm-act="clear-ticks" ${CM.applying ? "disabled" : ""}><span class="material-symbols-outlined">close</span>Untick all</button>` : ""}</div>`;
+  }
+  const f = (filters.find(([k]) => k === CM.filter) ?? filters[0])[2];
+  const q = CM.query;
+  const rows = pkgs.filter((p) => f(p) && (!q || `${p.package_id} ${p.files.map((x) => x.path).join(" ")}`.toLowerCase().includes(q)));
+  if (!rows.length) {
+    host.innerHTML = `<p class="fm-none">No package matches.</p>`;
+    return;
+  }
+  host.innerHTML = rows
+    .map((p) => {
+      const can = cmCan(p);
+      const on = can && CM.ticked.has(p.package_id);
+      const id = p.package_id;
+      const goes = cmGoes(p).length;
+      const meta = can
+        ? `<span class="fm-dim">${pkgCount(goes, "file", "files")} can go · ${escapeHtml(formatBytesLocal(cmGain(p)))}${p.files.length > goes ? ` · ${p.files.length - goes} stay` : ""}</span>`
+        : `<span class="fm-dim">nothing can go</span>`;
+      return `<div class="group-row missing-row fm-row cm-row${id === CM.sel ? " active focused" : ""}${on ? " is-chosen" : ""}${can ? "" : " is-muted"}" data-cm-row="${escapeAttribute(id)}" role="option" aria-selected="${on}" tabindex="${id === CM.sel ? 0 : -1}">
+          <label class="cm-tick" title="${can ? (on ? "Ticked: it will be cleaned" : "Tick it to clean it") : "Nothing in it can go"}" data-cm-tickbox>
+            <input type="checkbox" data-cm-tick="${escapeAttribute(id)}" ${on ? "checked" : ""} ${can && !CM.applying ? "" : "disabled"} aria-label="Clean ${escapeAttribute(id)}" /></label>
+          ${libThumbHtml(p.file_path, libGradient(id), "cv-row-thumb")}</div>
+          <span class="fm-row-text"><span class="fm-row-name" title="${escapeAttribute(p.file_path)}">${fmPkgLabelHtml(id)}</span>
+            <span class="cm-row-meta">${meta}</span></span>
+          <span class="fm-row-right cm-row-chips">${cmChips(p)}</span>
+        </div>`;
+    })
+    .join("");
+  libThumbWatch(host);
+}
+
+function cmRenderStrip() {
+  const host = $("cm-strip");
+  if (!host) return;
+  const t = cmTotals();
+  if (!t.can) {
+    host.innerHTML = "";
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+  const of = `${t.ticked.length} of ${pkgCount(t.can, "package", "packages")} ticked`;
+  const note = CM.flash
+    ? escapeHtml(CM.flash)
+    : t.ticked.length
+      ? `about ${escapeHtml(formatBytesLocal(t.bytes))} smaller · ${t.newDeps ? `${t.newDeps} will depend on ${escapeHtml(cmName())}` : "no new dependency"}`
+      : `Tick the packages to clean. ${escapeHtml(cmName())} isn't changed.`;
+  host.innerHTML = `<span class="fm-ring" title="${escapeAttribute(of)}">${pkgRing(t.can ? t.ticked.length / t.can : 0, "var(--primary)", { size: 38, track: "var(--line)" })}<b>${t.ticked.length}</b></span>
+     <span class="fm-strip-text"><b>${of}</b><small>${note}</small></span>
+     <button type="button" class="accent-button fm-small" data-cm-act="apply" ${t.ticked.length && !cmBusy() ? "" : "disabled"}>${
+       CM.applying ? "Cleaning…" : t.ticked.length ? `Clean ${pkgCount(t.ticked.length, "package", "packages")}…` : "Clean"
+     }</button>`;
+}
+
+function cmRenderDetail() {
+  const host = $("cm-detail");
+  if (!host) return;
+  const p = cmPkg(CM.sel);
+  if (!p) {
+    host.innerHTML = `<div class="fm-strip hidden" id="cm-strip"></div>
+      <div class="panel-head"><div><h2>What changes in it</h2><p class="panel-subtitle">${cmPkgs().length ? "Select a package to see what comes out of it." : "The files each package would lose are shown here."}</p></div></div>
+      <div class="detail-empty">No package selected.</div>`;
+    cmRenderStrip();
+    requestAnimationFrame(cvFitPanel);
+    return;
+  }
+  const can = cmCan(p);
+  const on = can && CM.ticked.has(p.package_id);
+  const name = escapeHtml(cmName());
+  const goes = cmGoes(p);
+  const stays = p.files.filter((f) => f.stays);
+  const fileRow = (f) => {
+    const ft = cvFileText(f.path);
+    const right = f.stays
+      ? `<span class="fm-dim" title="${escapeAttribute(cmStaysText(f).long)}">stays: ${escapeHtml(cmStaysText(f).short)}</span>`
+      : `<span class="cm-goes" title="${escapeAttribute(`Its references will point at ${cmName()}:/${f.source_path}`)}"><span class="material-symbols-outlined">arrow_forward</span>${name}${
+          f.source_path !== f.path ? `<small>${escapeHtml(f.source_path)}</small>` : ""
+        }</span>`;
+    return `<li class="cm-file${f.stays ? " is-stays" : ""}">
+        <span class="material-symbols-outlined">${f.stays ? "lock" : "content_cut"}</span>
+        <span class="cm-file-text"><b title="${escapeAttribute(f.path)}">${escapeHtml(ft.name)}</b><small>${fmTypeChip(ft.type.label)}${ft.type.rest ? ` ${escapeHtml(ft.type.rest)}` : ""} · ${escapeHtml(
+          formatBytesLocal(Number(f.size ?? 0)),
+        )}${(f.bundle ?? []).length ? ` · + ${pkgCount(f.bundle.length, "file", "files")} with it` : ""}</small></span>
+        ${right}
+      </li>`;
+  };
+  host.innerHTML = `<div class="fm-strip" id="cm-strip"></div><h2 class="sr-only">What changes in it</h2>
+    <div class="detail-panel fm-detail-body">
+      <div class="cm-pkg-head">
+        ${libThumbHtml(p.file_path, libGradient(p.package_id), "fm-cand-thumb")}</div>
+        <div class="cm-pkg-text">${fmPkgLabelHtml(p.package_id)}<small>${escapeHtml(formatBytesLocal(Number(p.size_bytes ?? 0)))} on disk${
+          p.unreferenced_files ? ` · ${pkgCount(p.unreferenced_files, "more copy", "more copies")} it doesn't use: left alone` : ""
+        }</small><span class="cm-pkg-chips">${cmChips(p)}</span></div>
+        <div class="cm-pkg-acts">
+          <button type="button" class="fm-icon-btn" data-cm-explore="${escapeAttribute(p.file_path)}" title="Explore it"><span class="material-symbols-outlined">space_dashboard</span></button>
+          <button type="button" class="fm-icon-btn" data-cm-show="${escapeAttribute(p.file_path)}" title="Show the file"><span class="material-symbols-outlined">folder_open</span></button>
+        </div>
+      </div>
+      ${
+        can
+          ? `<button type="button" class="cm-tick-big${on ? " is-on" : ""}" data-cm-toggle="${escapeAttribute(p.package_id)}" aria-pressed="${on}" ${CM.applying ? "disabled" : ""}>
+              <span class="material-symbols-outlined">${on ? "check_box" : "check_box_outline_blank"}</span>
+              <span><b>${on ? "Ticked: this package will be cleaned" : "Clean this package"}</b><small>${pkgCount(goes.length, "file", "files")} (${escapeHtml(formatBytesLocal(cmGain(p)))}) ${goes.length === 1 ? "comes" : "come"} out of it; it points at ${name} for ${goes.length === 1 ? "it" : "them"}${
+                p.already_dependency ? "" : ` and depends on ${name}`
+              }.</small></span></button>`
+          : `<div class="fm-best cv-warn-box cv-stays"><span class="material-symbols-outlined">lock</span><div><b>Nothing can go from it.</b><small>Each file it shares with ${name} stays: see why below.</small></div></div>`
+      }
+      ${p.source_depends_on_it && can ? `<p class="cm-warn-line"><span class="material-symbols-outlined">sync_problem</span>${name} depends on this package: cleaned, they would depend on each other. VaM loads both, but neither works without the other.</p>` : ""}
+      ${goes.length ? `<h3 class="cm-files-h">Comes out <small>${goes.length}</small></h3><ul class="cm-files">${goes.map(fileRow).join("")}</ul>` : ""}
+      ${stays.length ? `<h3 class="cm-files-h">Stays in it <small>${stays.length}</small></h3><ul class="cm-files">${stays.map(fileRow).join("")}</ul>` : ""}
+    </div>`;
+  libThumbWatch(host);
+  cmRenderStrip();
+  requestAnimationFrame(cvFitPanel);
+}
+
+// The last look before anything is written: what changes, what doesn't, and
+// how to undo it.
+function cmRenderConfirm() {
+  const host = $("cm-confirm");
+  if (!host) return;
+  if (!CM.confirming) {
+    host.innerHTML = "";
+    return;
+  }
+  const t = cmTotals();
+  const name = escapeHtml(cmName());
+  const names = t.ticked.slice(0, 6).map((p) => `<li>${fmPkgLabelHtml(p.package_id)}<small>${pkgCount(cmGoes(p).length, "file", "files")} · ${escapeHtml(formatBytesLocal(cmGain(p)))}</small></li>`).join("");
+  const more = t.ticked.length > 6 ? `<li class="cm-more">and ${t.ticked.length - 6} more</li>` : "";
+  const point = (icon, cls, html) => `<li class="${cls}"><span class="material-symbols-outlined">${icon}</span><span>${html}</span></li>`;
+  host.innerHTML = `<div class="cm-confirm-backdrop" data-cm-act="confirm-cancel">
+      <div class="cm-confirm" role="dialog" aria-modal="true" aria-labelledby="cm-confirm-h" data-cm-dialog>
+        <h2 id="cm-confirm-h">Clean ${pkgCount(t.ticked.length, "package", "packages")}?</h2>
+        ${cmFlowHtml({ note: false })}
+        <ul class="cm-confirm-pkgs">${names}${more}</ul>
+        <ul class="cm-confirm-points">
+          ${point(
+            "edit_document",
+            "is-change",
+            `<b>${t.ticked.length === 1 ? "This package is" : `These ${t.ticked.length} packages are`} rewritten.</b> ${pkgCount(t.files, "file", "files")} (${escapeHtml(
+              formatBytesLocal(t.bytes),
+            )}) ${t.files === 1 ? "comes" : "come"} out; ${t.ticked.length === 1 ? "its" : "their"} references point at ${name} instead.`,
+          )}
+          ${point("lock", "is-keep", `<b>${name} isn't changed.</b> Keep it installed and enabled: if it goes, the cleaned ${t.ticked.length === 1 ? "package loses" : "packages lose"} those files.`)}
+          ${point("recycling", "", `<b>No backup folder.</b> Each original goes to the Recycle Bin. To undo one, restore it from there (it replaces the cleaned one).`)}
+          ${point("warning", "is-warn", `A package that loads one of these files <i>from a cleaned package</i> (not from ${name}) won't find it there any more.`)}
+          ${t.loops.length ? point("sync_problem", "is-warn", `${name} depends on ${t.loops.length === 1 ? "one of them" : `${t.loops.length} of them`}: they'll depend on each other.`) : ""}
+          ${point("info", "", "Close VaM first: a package it has open can't be changed, and is left as it was.")}
+        </ul>
+        <label class="check-row cm-understood"><input type="checkbox" id="cm-confirm-understood" ${CM.understood ? "checked" : ""} />
+          <span>I understand: the ticked packages are changed, ${name} isn't.</span></label>
+        <div class="cm-confirm-acts">
+          <button type="button" class="ghost-button" data-cm-act="confirm-cancel">Cancel</button>
+          <button type="button" class="cm-danger-btn" data-cm-act="confirm-go" ${CM.understood ? "" : "disabled"}><span class="material-symbols-outlined">cleaning_services</span>Clean ${pkgCount(t.ticked.length, "package", "packages")}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ---- Events --------------------------------------------------------------------------------
+
+function cmSelect(id, focus = false) {
+  CM.sel = id;
+  cmRenderList();
+  cmRenderDetail();
+  if (focus) {
+    const row = document.querySelector(`#cm-list [data-cm-row="${CSS.escape(id)}"]`);
+    row?.focus();
+    row?.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function cmOnClick(e) {
+  if (cvMode() !== "many") return;
+  const q = (sel) => e.target.closest?.(sel);
+  let el;
+  if (CM.confirming) {
+    // Only the sheet answers while it's open: its buttons, or a click on the
+    // backdrop around it (which cancels).
+    const act = q("[data-cm-act]")?.getAttribute("data-cm-act");
+    if (act === "confirm-go") cmApply();
+    else if (act === "confirm-cancel" && (q("button") || !q("[data-cm-dialog]"))) {
+      CM.confirming = false;
+      cmRenderConfirm();
+    }
+    return;
+  }
+  if ((el = q("[data-cm-tickbox]"))) {
+    // The checkbox ticks; the row around it isn't selected by that click.
+    e.stopPropagation();
+    return;
+  }
+  if ((el = q("[data-cm-toggle]"))) {
+    const id = el.getAttribute("data-cm-toggle");
+    cmTick(id, !CM.ticked.has(id));
+    cmRefresh();
+    return;
+  }
+  if ((el = q("[data-cm-explore]"))) {
+    pkgOpen(el.getAttribute("data-cm-explore"));
+    return;
+  }
+  if ((el = q("[data-cm-show]"))) {
+    invoke("show_in_explorer", { path: el.getAttribute("data-cm-show") }).catch(() => {});
+    return;
+  }
+  if ((el = q("[data-cm-start]"))) {
+    cmOpen(el.getAttribute("data-cm-start"), { scan: true });
+    return;
+  }
+  if ((el = q("[data-cm-row]"))) {
+    cmSelect(el.getAttribute("data-cm-row"));
+    return;
+  }
+  if ((el = q("[data-cm-filter]"))) {
+    CM.filter = el.getAttribute("data-cm-filter");
+    cmRenderList();
+    return;
+  }
+  if (!(el = q("[data-cm-act]"))) return;
+  switch (el.getAttribute("data-cm-act")) {
+    case "pick":
+      invoke("pick_var_file").then((picked) => picked && cmOpen(picked, { scan: true })).catch(() => {});
+      break;
+    case "config":
+      CM.configOpen = !CM.configOpen;
+      cmRenderSource();
+      break;
+    case "scan":
+      cmScan();
+      break;
+    case "explore":
+      if (CM.source) pkgOpen(CM.item?.__lib ? CM.item : CM.source);
+      break;
+    case "show-file":
+      invoke("show_in_explorer", { path: CM.source }).catch(() => {});
+      break;
+    case "run-close":
+      CM.lastRun = null;
+      cmRenderDetails();
+      break;
+    case "tick-all": {
+      const open = cmPkgs().filter((p) => cmCan(p) && !CM.ticked.has(p.package_id));
+      for (const p of open) cmTick(p.package_id, true);
+      cmFlash(`${pkgCount(open.length, "package", "packages")} ticked.`);
+      cmRefresh();
+      break;
+    }
+    case "clear-ticks":
+      CM.ticked.clear();
+      cmFlash("Nothing ticked.");
+      cmRefresh();
+      break;
+    case "apply":
+      cmAskApply();
+      break;
+    default:
+      break;
+  }
+}
+
+function cmOnChange(e) {
+  if (cvMode() !== "many") return;
+  const id = e.target.getAttribute?.("data-cm-tick");
+  if (id != null) {
+    cmTick(id, e.target.checked);
+    CM.sel = id;
+    cmRefresh();
+    return;
+  }
+  if (e.target.id === "cm-confirm-understood") {
+    CM.understood = e.target.checked;
+    const go = cvView()?.querySelector('[data-cm-act="confirm-go"]');
+    if (go) go.disabled = !CM.understood;
+  }
+}
+
+function cmOnKey(e) {
+  if (cvMode() !== "many") return;
+  if (CM.confirming) {
+    if (e.key === "Escape") {
+      CM.confirming = false;
+      cmRenderConfirm();
+    }
+    return;
+  }
+  if (!e.target.matches?.("[data-cm-row]")) return;
+  const id = e.target.getAttribute("data-cm-row");
+  if (e.key === "Enter") {
+    e.preventDefault();
+    cmSelect(id, true);
+    return;
+  }
+  if (e.key === " ") {
+    // Space ticks, as on a checkbox list.
+    e.preventDefault();
+    cmTick(id, !CM.ticked.has(id));
+    cmRefresh();
+    $("cm-list")?.querySelector(`[data-cm-row="${CSS.escape(id)}"]`)?.focus();
+    return;
+  }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const rows = [...document.querySelectorAll("#cm-list [data-cm-row]")];
+    const next = rows[rows.indexOf(e.target) + (e.key === "ArrowDown" ? 1 : -1)];
+    if (!next) return;
+    e.preventDefault();
+    cmSelect(next.getAttribute("data-cm-row"), true);
+  }
 }
 
 // ---- Drop .var files on the window (dropin.rs) ---------------------------------------
