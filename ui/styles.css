@@ -20042,14 +20042,13 @@ button.pkg-stat:focus-visible::after {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin-bottom: 14px;
 }
 .cv-mode {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 10px 14px;
+  padding: 8px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
@@ -20089,88 +20088,88 @@ button.pkg-stat:focus-visible::after {
   white-space: nowrap;
 }
 
-/* The kept package says so on itself. */
-.fm-info-chips .chip.cm-keep-chip {
-  border-color: color-mix(in srgb, var(--accent-success) 45%, var(--line));
-  background: color-mix(in srgb, var(--accent-success) 12%, transparent);
-  color: var(--accent-success);
-  font-weight: 600;
-}
-.cm-keep-chip .material-symbols-outlined {
-  font-size: 15px;
-}
+/* Clean many's colours: green is the source (or a success), amber is
+   "will be cleaned", purple only marks the row whose details are shown. */
 
-.cm-steps {
+/* ---- Picking the source ---- */
+.cm-pick {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 22px 24px 18px;
+  box-sizing: border-box;
+}
+.cm-pick-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cm-pick-head h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.cm-pick-head p {
   margin: 0;
-  padding: 6px 20px 14px;
-  list-style: none;
-}
-.cm-step {
-  display: grid;
-  grid-template-columns: 22px 22px minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-}
-.cm-step-n {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--surface-3);
   color: var(--text-muted);
-  font-size: 11.5px;
-  font-weight: 700;
-}
-.cm-step > .material-symbols-outlined {
-  color: var(--primary);
-  font-size: 20px;
-}
-.cm-step-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   font-size: 13px;
+  line-height: 1.45;
 }
-.cm-step-text small {
-  color: var(--text-dim);
-  font-size: 12px;
-  line-height: 1.4;
+.cm-pick-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+.cm-pick-body:has(> :only-child) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.cm-pick .cm-drop {
+  margin: 0;
+  padding: 22px 16px;
+}
+.cm-pick .cm-recent {
+  padding: 0;
+}
+.cm-pick .cm-note {
+  margin: 0;
 }
 
-/* Changed on the left, not changed on the right. */
+/* Source on the left, the packages that use it on the right. */
 .cm-flow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: stretch;
-  gap: 8px;
-  margin: 4px 20px 10px;
+  gap: 10px;
 }
 .cm-flow-box {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
 }
-.cm-flow-box.is-change {
-  border-color: color-mix(in srgb, var(--accent-warn) 50%, var(--line));
-  background: color-mix(in srgb, var(--accent-warn) 9%, transparent);
-}
-.cm-flow-box.is-change > .material-symbols-outlined {
-  color: var(--accent-warn);
+.cm-flow-box > .material-symbols-outlined {
+  font-size: 24px;
 }
 .cm-flow-box.is-keep {
   border-color: color-mix(in srgb, var(--accent-success) 50%, var(--line));
-  background: color-mix(in srgb, var(--accent-success) 9%, transparent);
+  background: color-mix(in srgb, var(--accent-success) 8%, transparent);
 }
 .cm-flow-box.is-keep > .material-symbols-outlined {
   color: var(--accent-success);
+}
+.cm-flow-box.is-change {
+  border-color: color-mix(in srgb, var(--accent-warn) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent-warn) 8%, transparent);
+}
+.cm-flow-box.is-change > .material-symbols-outlined {
+  color: var(--accent-warn);
 }
 .cm-flow-text {
   display: flex;
@@ -20178,12 +20177,9 @@ button.pkg-stat:focus-visible::after {
   min-width: 0;
   font-size: 13px;
 }
-.cm-flow-text b {
-  overflow-wrap: anywhere;
-}
 .cm-flow-text small {
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .cm-flow-text .cm-flow-tag {
   color: var(--text-muted);
@@ -20197,92 +20193,291 @@ button.pkg-stat:focus-visible::after {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  max-width: 96px;
   color: var(--text-dim);
-  font-size: 10.5px;
-  line-height: 1.2;
-  text-align: center;
+  font-size: 11.5px;
+  font-weight: 600;
 }
-.cm-note,
-.cm-warn-line {
+.cm-note {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin: 0 20px 14px;
   color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.4;
 }
-.cm-note .material-symbols-outlined,
-.cm-warn-line .material-symbols-outlined {
+.cm-note .material-symbols-outlined {
   font-size: 18px;
 }
-.cm-warn-line {
-  margin: 0 20px 12px;
-}
-.cm-warn-line .material-symbols-outlined {
-  color: var(--accent-warn);
-}
 
-/* The last run: one line per package. */
-.cm-run.has-errors > .material-symbols-outlined:first-child {
-  color: var(--accent-warn);
+/* ---- The source bar ---- */
+.cm-srcbar {
+  display: grid;
+  grid-template-columns: 32px 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--accent-success);
+  background: color-mix(in srgb, var(--accent-success) 6%, var(--surface));
 }
-.cm-run-list {
+.cm-srcbar.is-outside {
+  border-left-color: var(--accent-warn);
+}
+.cm-srcbar-lock {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent-success) 18%, transparent);
+  color: var(--accent-success);
+}
+.cm-srcbar-lock .material-symbols-outlined {
+  font-size: 18px;
+}
+.cm-srcbar-thumb {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--lib-thumb-bg);
+}
+.cm-srcbar-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cm-srcbar-text {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-height: 180px;
-  margin: 8px 0 0;
-  padding: 0;
-  overflow: auto;
-  list-style: none;
+  gap: 2px;
+  min-width: 0;
 }
-.cm-run > div {
-  padding-right: 22px;
+.cm-srcbar-tag {
+  color: var(--accent-success);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
-.cm-run-list li {
+.cm-srcbar-name {
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 8px;
   min-width: 0;
+}
+.cm-srcbar-name b {
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-srcbar-facts {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-srcbar-note {
+  color: var(--text-muted);
   font-size: 12.5px;
 }
-.cm-run-text {
+.cm-srcbar-note.is-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--accent-warn);
+}
+.cm-srcbar-note.is-warn .material-symbols-outlined {
+  font-size: 16px;
+}
+.cm-srcbar-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* ---- After a run ---- */
+.fm-report.cm-run {
+  margin: 0;
+  padding: 14px 40px 14px 16px;
+}
+.fm-report.cm-run.is-partial {
+  border-color: color-mix(in srgb, var(--accent-warn) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent-warn) 8%, transparent);
+}
+.fm-report.cm-run.is-partial > .material-symbols-outlined {
+  color: var(--accent-warn);
+}
+.fm-report.cm-run.is-failed {
+  border-color: color-mix(in srgb, var(--accent-danger) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent-danger) 8%, transparent);
+}
+.fm-report.cm-run.is-failed > .material-symbols-outlined {
+  color: var(--accent-danger);
+}
+.cm-run-body {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+.cm-run-fails {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.cm-run-group ul,
+.cm-run-ok {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.cm-run-group li {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
-.cm-run-text > small {
+.cm-run-group li small {
   color: var(--text-dim);
-  line-height: 1.35;
   overflow-wrap: anywhere;
 }
-.cm-run-bad .cm-run-text > small {
-  color: var(--text-muted);
+.cm-run-ok {
+  flex-direction: column;
 }
-.cm-run-list .material-symbols-outlined {
-  font-size: 16px;
+.cm-run-ok li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cm-run-ok li small {
+  color: var(--text-dim);
 }
 .cm-run-ok .material-symbols-outlined {
   color: var(--accent-success);
+  font-size: 16px;
 }
-.cm-run-bad .material-symbols-outlined {
-  color: var(--accent-danger);
-}
-
-.cm-bulk {
+.cm-run-acts {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  align-items: center;
+  gap: 10px;
 }
-.cm-bulk:empty {
+.cm-run-acts:empty {
   display: none;
 }
 
-/* A row: its tick, picture, name, chips. */
+/* ---- Nothing to list ---- */
+.cm-empty {
+  display: flex;
+  gap: 12px;
+  padding: 18px 20px;
+}
+.cm-empty > .material-symbols-outlined {
+  font-size: 26px;
+}
+.cm-empty > .is-good {
+  color: var(--accent-success);
+}
+.cm-empty > .is-bad {
+  color: var(--accent-danger);
+}
+.cm-empty > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13.5px;
+}
+.cm-empty small {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.cm-empty-acts {
+  margin-top: 8px;
+}
+
+/* ---- The list ---- */
+.cm-list-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cm-list-h .material-symbols-outlined {
+  color: var(--accent-warn);
+  font-size: 20px;
+}
+.cm-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 10px;
+}
+.cm-bulk-tick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 15px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cm-bulk-tick input,
+.cm-tick input,
+.cm-tick-big input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent-warn);
+  cursor: pointer;
+}
+.cm-sort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.cm-sort select {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+/* A row: its tick, picture, name and what comes out, chips. */
+.cv-view .fm-row.group-row.cm-row {
+  grid-template-columns: 22px 36px minmax(0, 1fr) auto;
+  gap: 12px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  border-left-color: transparent;
+}
+.cv-view .fm-row.group-row.cm-row.is-ticked {
+  border-left-color: var(--accent-warn);
+  background: color-mix(in srgb, var(--accent-warn) 6%, transparent);
+}
+.cm-row.is-focus {
+  outline: 1px solid var(--primary);
+  outline-offset: -1px;
+}
+.cm-row.is-cant .fm-row-text,
+.cm-row.is-cant .cm-row-thumb {
+  opacity: 0.55;
+}
 .cm-tick {
   display: grid;
   place-items: center;
@@ -20291,22 +20486,21 @@ button.pkg-stat:focus-visible::after {
   margin: 0;
   cursor: pointer;
 }
-.cm-tick input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--primary);
-  cursor: inherit;
+.cm-tick.is-none {
+  color: var(--text-dim);
+  cursor: default;
 }
-.cm-tick input:disabled {
-  cursor: not-allowed;
+.cm-tick.is-none .material-symbols-outlined {
+  font-size: 16px;
 }
-.cm-row.is-muted .fm-row-text,
-.cm-row.is-muted .cv-row-thumb {
-  opacity: 0.55;
+.cv-row-thumb.cm-row-thumb {
+  width: 36px;
+  height: 36px;
+  background: var(--lib-thumb-bg, var(--surface-2));
 }
 .cm-row-meta {
   overflow: hidden;
+  color: var(--text-dim);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -20316,10 +20510,65 @@ button.pkg-stat:focus-visible::after {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 4px;
-  max-width: 220px;
+  max-width: 300px;
+}
+.cm-row-chips .chip,
+.cm-pkg-chips .chip {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-cant-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.cm-cant-head:hover {
+  color: var(--text);
+}
+.cm-cant-head small {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.cm-list-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 16px 14px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.cm-list-foot ul {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.cm-list-foot li {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
 }
 
-/* The panel: the package, its tick, what comes out and what stays. */
+/* ---- The detail panel ---- */
+.cm-detail-empty {
+  padding: 40px 24px;
+  text-align: center;
+}
 .cm-pkg-head {
   display: grid;
   grid-template-columns: 56px minmax(0, 1fr) auto;
@@ -20342,39 +20591,35 @@ button.pkg-stat:focus-visible::after {
   flex-wrap: wrap;
   gap: 4px;
 }
-.cm-pkg-chips:empty {
-  display: none;
-}
 .cm-pkg-acts {
   display: flex;
   gap: 2px;
 }
+.cm-sheet-close {
+  display: none;
+}
 .cm-tick-big {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  width: calc(100% - 40px);
+  gap: 12px;
   margin: 0 20px 12px;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  text-align: left;
   cursor: pointer;
 }
-.cm-tick-big:hover:not(:disabled) {
+.cm-tick-big:hover {
   border-color: var(--line-strong);
 }
-.cm-tick-big > .material-symbols-outlined {
-  color: var(--text-dim);
-  font-size: 22px;
+.cm-tick-big input {
+  margin-top: 2px;
 }
-.cm-tick-big > span:last-child {
+.cm-tick-big > span {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  font-size: 13.5px;
 }
 .cm-tick-big small {
   color: var(--text-dim);
@@ -20385,14 +20630,49 @@ button.pkg-stat:focus-visible::after {
   border-color: color-mix(in srgb, var(--accent-warn) 55%, var(--line));
   background: color-mix(in srgb, var(--accent-warn) 9%, var(--surface));
 }
-.cm-tick-big.is-on > .material-symbols-outlined {
+.cm-tick-big.is-on b {
   color: var(--accent-warn);
+}
+.cm-cant-box {
+  display: flex;
+  gap: 10px;
+  margin: 0 20px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.cm-cant-box > .material-symbols-outlined {
+  color: var(--text-dim);
+}
+.cm-cant-box > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13.5px;
+}
+.cm-cant-box small {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.cm-warn-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px 12px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.cm-warn-line .material-symbols-outlined {
+  color: var(--accent-warn);
+  font-size: 18px;
 }
 .cm-files-h {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 6px 20px;
+  margin: 8px 20px 2px;
   color: var(--text-dim);
   font-size: 11px;
   font-weight: 700;
@@ -20406,18 +20686,26 @@ button.pkg-stat:focus-visible::after {
   font-size: 10.5px;
   letter-spacing: 0;
 }
+.cm-files-cap {
+  margin: 0 20px 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.cm-files-foot {
+  margin: 4px 20px 16px;
+}
 .cm-files {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 0 12px 12px;
+  margin: 0 12px 10px;
   padding: 0;
   list-style: none;
 }
 .cm-file {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
   gap: 8px;
   padding: 7px 8px;
   border-radius: 8px;
@@ -20426,6 +20714,7 @@ button.pkg-stat:focus-visible::after {
   background: var(--surface-2);
 }
 .cm-file > .material-symbols-outlined {
+  margin-top: 1px;
   color: var(--accent-warn);
   font-size: 18px;
 }
@@ -20435,6 +20724,7 @@ button.pkg-stat:focus-visible::after {
 .cm-file-text {
   display: flex;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
 .cm-file-text b {
@@ -20451,34 +20741,74 @@ button.pkg-stat:focus-visible::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cm-file > .fm-dim {
-  max-width: 180px;
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cm-goes {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 200px;
-  color: var(--accent-success);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.cm-goes .material-symbols-outlined {
-  font-size: 15px;
-}
-.cm-goes small {
-  overflow: hidden;
-  color: var(--text-dim);
-  font-weight: 400;
-  text-overflow: ellipsis;
+.cm-file-text .cm-file-why {
+  color: var(--text-muted);
+  white-space: normal;
 }
 
-/* The sheet before anything is written. */
+/* ---- The action bar ---- */
+.cm-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--bg-elev, var(--surface));
+  box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.35);
+}
+.cm-bar.hidden {
+  display: none;
+}
+.cm-bar-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13.5px;
+}
+.cm-bar-text small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-src-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent-success);
+  font-weight: 600;
+}
+.cm-src-ok .material-symbols-outlined {
+  font-size: 14px;
+}
+.cm-bar-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+}
+.cm-bar-go .material-symbols-outlined {
+  font-size: 18px;
+}
+.cm-bar-progress {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+}
+.cm-bar-progress small {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ---- The last look before anything is written ---- */
 .cm-confirm-backdrop {
   position: fixed;
   inset: 0;
@@ -20486,54 +20816,114 @@ button.pkg-stat:focus-visible::after {
   display: grid;
   place-items: center;
   padding: 16px;
-  background: color-mix(in srgb, #000 55%, transparent);
+  background: color-mix(in srgb, #000 60%, transparent);
 }
 .cm-confirm {
   display: flex;
   flex-direction: column;
-  width: min(620px, 100%);
+  gap: 12px;
+  width: min(640px, 100%);
   max-height: calc(100vh - 32px);
   overflow: auto;
+  padding: 20px;
+  box-sizing: border-box;
   border: 1px solid var(--line-strong);
   border-radius: 16px;
   background: var(--bg-elev, var(--surface));
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
 }
 .cm-confirm h2 {
   margin: 0;
-  padding: 18px 20px 10px;
-  font-size: 18px;
+  font-size: 19px;
 }
-.cm-confirm-pkgs {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 0 20px 12px;
-  padding: 8px 10px;
+.cm-confirm-sub {
+  margin: -6px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.cm-confirm-block {
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface-2);
+  border-radius: 12px;
+}
+.cm-confirm-block.is-change {
+  border-color: color-mix(in srgb, var(--accent-warn) 50%, var(--line));
+}
+.cm-confirm-block.is-change header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 6px;
+  color: var(--accent-warn);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.cm-confirm-block.is-change header .material-symbols-outlined {
+  font-size: 17px;
+}
+.cm-confirm-list {
+  max-height: 240px;
+  margin: 0;
+  padding: 0 12px;
+  overflow: auto;
   list-style: none;
 }
-.cm-confirm-pkgs li {
+.cm-confirm-list li {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
   font-size: 12.5px;
 }
-.cm-confirm-pkgs li small {
-  color: var(--text-dim);
+.cm-confirm-list li:last-child {
+  border-bottom: 0;
+}
+.cm-confirm-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
 }
-.cm-confirm-pkgs .cm-more {
+.cm-confirm-meta small {
   color: var(--text-dim);
+}
+.cm-confirm-meta .material-symbols-outlined {
+  color: var(--accent-warn);
+  font-size: 16px;
+}
+.cm-confirm-block.is-change footer {
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.cm-confirm-block.is-keep {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-color: color-mix(in srgb, var(--accent-success) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent-success) 7%, transparent);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.cm-confirm-block.is-keep b {
+  color: var(--text);
+}
+.cm-confirm-block.is-keep .material-symbols-outlined {
+  color: var(--accent-success);
+  font-size: 19px;
 }
 .cm-confirm-points {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 0 20px 14px;
+  margin: 2px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -20552,15 +20942,14 @@ button.pkg-stat:focus-visible::after {
   color: var(--text-dim);
   font-size: 19px;
 }
-.cm-confirm-points .is-change .material-symbols-outlined,
+.cm-confirm-points .is-first .material-symbols-outlined {
+  color: var(--primary);
+}
 .cm-confirm-points .is-warn .material-symbols-outlined {
   color: var(--accent-warn);
 }
-.cm-confirm-points .is-keep .material-symbols-outlined {
-  color: var(--accent-success);
-}
 .cm-understood {
-  margin: 0 20px 4px;
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -20570,7 +20959,6 @@ button.pkg-stat:focus-visible::after {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 14px 20px 18px;
 }
 .cm-danger-btn {
   display: inline-flex;
@@ -20596,17 +20984,54 @@ button.pkg-stat:focus-visible::after {
   font-size: 18px;
 }
 
+/* ---- Narrower windows ---- */
+@media (max-width: 1180px) {
+  /* The detail is a sheet above the bar, shown when a package is picked. */
+  .cm-grid .panel.card.fm-detail-card:not(.is-open) {
+    display: none;
+  }
+  .cm-sheet-close {
+    display: grid;
+  }
+}
+@media (max-width: 1000px) {
+  .cv-mode-text small {
+    display: none;
+  }
+  .cm-srcbar {
+    grid-template-columns: 32px 40px minmax(0, 1fr);
+  }
+  .cm-srcbar-thumb {
+    width: 40px;
+    height: 40px;
+  }
+  .cm-srcbar-acts {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .cm-pick-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cv-view .fm-row.group-row.cm-row {
+    grid-template-columns: 22px 36px minmax(0, 1fr);
+  }
+  .cm-row-chips {
+    grid-column: 3;
+    justify-content: flex-start;
+  }
+}
 @media (max-width: 720px) {
-  .cv-modes,
   .cm-flow {
     grid-template-columns: minmax(0, 1fr);
   }
   .cm-flow-arrow {
     flex-direction: row;
     gap: 6px;
-    max-width: none;
   }
   .cm-flow-arrow .material-symbols-outlined {
     transform: rotate(90deg);
+  }
+  .cm-bar {
+    flex-wrap: wrap;
   }
 }
