@@ -1114,6 +1114,26 @@ pub(crate) struct VarPackagePage {
     pub(crate) total: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) facets: Option<VarPackageFacets>,
+    /// The folders the listing covers, with their package counts (when asked).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) folders: Option<VarPackageFolders>,
+}
+
+/// The scanned roots and every folder under them that holds packages.
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct VarPackageFolders {
+    pub(crate) roots: Vec<String>,
+    pub(crate) folders: Vec<VarPackageFolder>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct VarPackageFolder {
+    pub(crate) path: String,
+    /// Packages directly in it, and in it with its subfolders.
+    pub(crate) direct: u32,
+    pub(crate) total: u32,
+    /// Their size on disk, with its subfolders.
+    pub(crate) bytes: u64,
 }
 
 // ----------------------------------------------------------------------------
@@ -1286,6 +1306,12 @@ pub(crate) struct VarPackageFilters {
     /// Folder mode only: `"active"` (outside the offload folder) or `"offloaded"`.
     #[serde(default)]
     pub(crate) location: Option<String>,
+    /// Folder mode only (VAR Packages' Explore tab): the packages in this
+    /// folder; with `folder_deep`, in its subfolders too.
+    #[serde(default)]
+    pub(crate) folder: Option<String>,
+    #[serde(default)]
+    pub(crate) folder_deep: Option<bool>,
 }
 
 /// Single row in the global Resource List page. Joins `resources` with

@@ -7597,3 +7597,43 @@ fn clean_many_points_the_ticked_packages_at_the_source() {
     assert!(!vars.join("T.One.1.var.clean-tmp").exists(), "nothing left beside it");
     fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+#[test]
+fn var_packages_folders_count_and_filter() {
+    use crate::library::{folder_counts, folder_matches};
+    use crate::models::{VarPackageFilters, VarPackageListItem};
+
+    let item = |path: &str, size: u64| VarPackageListItem {
+        file_path: path.to_string(),
+        size_bytes: size,
+        ..VarPackageListItem::default()
+    };
+    let items = vec![
+        item(r"D:\VaM\AddonPackages\A.One.1.var", 10),
+        item(r"D:\VaM\AddonPackages\Sub\B.Two.1.var", 20),
+        item(r"D:\VaM\AddonPackages\Sub\Deep\C.Three.1.var", 30),
+        item(r"D:\Other\D.Four.1.var", 40),
+    ];
+    let roots = vec![r"D:\VaM\AddonPackages\".to_string(), r"D:\VaM\Offload".to_string()];
+    let tree = folder_counts(&items, &roots);
+    assert_eq!(tree.roots, vec![r"D:\VaM\AddonPackages".to_string(), r"D:\VaM\Offload".to_string()]);
+    let get = |p: &str| tree.folders.iter().find(|f| f.path.eq_ignore_ascii_case(p)).unwrap_or_else(|| panic!("{p}"));
+    let root = get(r"D:\VaM\AddonPackages");
+    assert_eq!((root.direct, root.total, root.bytes), (1, 3, 60), "its subfolders count in its total");
+    assert_eq!((get(r"D:\VaM\AddonPackages\Sub").direct, get(r"D:\VaM\AddonPackages\Sub").total), (1, 2));
+    assert_eq!(get(r"D:\VaM\Offload").total, 0, "an empty root is still listed");
+    assert_eq!(get(r"D:\Other").total, 1, "outside every root: its own folder only");
+    assert!(tree.folders.iter().all(|f| !f.path.eq_ignore_ascii_case(r"D:\VaM")), "nothing above a root");
+
+    let only = |folder: &str, deep: bool| {
+        let filters = VarPackageFilters {
+            folder: Some(folder.to_string()),
+            folder_deep: Some(deep),
+            ..VarPackageFilters::default()
+        };
+        items.iter().filter(|i| folder_matches(i, &filters)).count()
+    };
+    assert_eq!(only(r"d:/vam/addonpackages/sub/", false), 1, "however the path is spelled");
+    assert_eq!(only(r"D:\VaM\AddonPackages\Sub", true), 2, "with its subfolders");
+    assert_eq!(only(r"D:\VaM\AddonPackages\Su", true), 0, "not a prefix of a name");
+}

@@ -25,7 +25,7 @@ use zip::ZipArchive;
 
 use crate::{
     db::Db,
-    models::{AppState, VarFileEntry, VarPackageFilters, VarPackageListItem, META_PATH},
+    models::{AppState, VarFileEntry, VarPackageFilters, VarPackageFolders, VarPackageListItem, META_PATH},
     naming,
     utils::{normalize_zip_path, read_json_bytes},
 };
@@ -901,6 +901,66 @@ pub(crate) fn type_matches(item: &VarPackageListItem, filters: &VarPackageFilter
     match filters.pkg_type.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(t) => item.pkg_type == t,
         None => true,
+    }
+}
+
+/// A folder path as compared: backslashes, no trailing one, lowercase.
+fn folder_key(path: &str) -> String {
+    let p = path.replace('/', "\\");
+    p.strip_prefix("\\\\?\\").unwrap_or(&p).trim_end_matches('\\').to_lowercase()
+}
+
+/// The folder a package file is in, as written.
+fn parent_of(path: &str) -> &str {
+    path.rfind(['\\', '/']).map_or("", |i| &path[..i])
+}
+
+pub(crate) fn folder_matches(item: &VarPackageListItem, filters: &VarPackageFilters) -> bool {
+    let Some(folder) = filters.folder.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let want = folder_key(folder);
+    let parent = folder_key(parent_of(&item.file_path));
+    parent == want || (filters.folder_deep == Some(true) && parent.starts_with(&format!("{want}\\")))
+}
+
+/// Every folder from each package's own up to its root, with counts. A
+/// package outside every root counts in its own folder only.
+pub(crate) fn folder_counts(items: &[VarPackageListItem], roots: &[String]) -> VarPackageFolders {
+    let root_keys: Vec<String> = roots.iter().map(|r| folder_key(r)).collect();
+    // key -> (path as written, direct, total, bytes)
+    let mut map: BTreeMap<String, (String, u32, u32, u64)> = BTreeMap::new();
+    for (root, key) in roots.iter().zip(&root_keys) {
+        map.entry(key.clone()).or_insert_with(|| (root.trim_end_matches(['\\', '/']).to_string(), 0, 0, 0));
+    }
+    for item in items {
+        let mut dir = parent_of(&item.file_path).to_string();
+        let mut first = true;
+        loop {
+            let key = folder_key(&dir);
+            let e = map.entry(key.clone()).or_insert_with(|| (dir.clone(), 0, 0, 0));
+            if first {
+                e.1 += 1;
+            }
+            e.2 += 1;
+            e.3 += item.size_bytes;
+            first = false;
+            let under_root = root_keys.iter().any(|r| key.starts_with(&format!("{r}\\")));
+            if root_keys.contains(&key) || !under_root {
+                break;
+            }
+            dir = parent_of(&dir).to_string();
+            if dir.is_empty() {
+                break;
+            }
+        }
+    }
+    VarPackageFolders {
+        roots: roots.iter().map(|r| r.trim_end_matches(['\\', '/']).to_string()).collect(),
+        folders: map
+            .into_values()
+            .map(|(path, direct, total, bytes)| crate::models::VarPackageFolder { path, direct, total, bytes })
+            .collect(),
     }
 }
 

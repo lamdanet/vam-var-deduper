@@ -1501,6 +1501,8 @@ pub(crate) fn list_var_packages(
     // The offload folder. Packages under it are flagged `offloaded`; the caller
     // also lists it among the additional dirs when it should be scanned.
     offload_dir: Option<String>,
+    // The Explore tab: also return the folders with their package counts.
+    with_folders: Option<bool>,
     db: State<'_, Db>,
     state: State<'_, AppState>,
 ) -> Result<VarPackagePage, String> {
@@ -1696,11 +1698,16 @@ pub(crate) fn list_var_packages(
                 items: Vec::new(),
                 total: 0,
                 facets: None,
+                folders: None,
             })
         }
     };
 
     let query = crate::library::SearchQuery::parse(search.as_deref());
+    let folders = with_folders.unwrap_or(false).then(|| {
+        let roots: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
+        crate::library::folder_counts(items, &roots)
+    });
 
     // `base` passes every filter except the two facets (status, type), so the
     // facet counts can each ignore their own selection.
@@ -1714,6 +1721,7 @@ pub(crate) fn list_var_packages(
             }
             matches_var_package_filters(item, &filters, &marks.favorites)
                 && crate::library::location_matches(item, &filters)
+                && crate::library::folder_matches(item, &filters)
         })
         .collect();
     let mut facets = crate::library::compute_facets(items, &base, &filters, &marks, missing_unique);
@@ -1745,6 +1753,7 @@ pub(crate) fn list_var_packages(
         items: page,
         total,
         facets: Some(facets),
+        folders,
     })
 }
 
@@ -2175,6 +2184,7 @@ pub(crate) fn list_var_packages_from_db(
             items,
             total,
             facets: None,
+            folders: None,
         });
     }
 
@@ -2223,6 +2233,7 @@ pub(crate) fn list_var_packages_from_db(
         items,
         total,
         facets: None,
+        folders: None,
     })
 }
 
