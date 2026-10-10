@@ -535,6 +535,11 @@
              (Clean Duplicates, Organize by Creator, Export Scene Images) are on
              the grid's right-click menu; Find Dependencies is in the app header. -->
         <div class="lib-topbar" id="var-packages-folder-controls">
+          <!-- Library: every package; Explore: one folder at a time. -->
+          <div class="lib-seg vp-tabs" role="tablist" aria-label="View">
+            <button type="button" class="lib-seg-btn active" role="tab" aria-selected="true" data-vp-tab="library" title="Every package in your folders">Library</button>
+            <button type="button" class="lib-seg-btn" role="tab" aria-selected="false" data-vp-tab="explore" title="Browse one folder at a time">Explore</button>
+          </div>
           <div class="vam-source vam-source-compact" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
           <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
           <input id="var-packages-input-dir" type="hidden" />
@@ -661,8 +666,12 @@
         </div>
 
         <div class="lib-layout">
+          <!-- Explore: the folder tree (rendered by app.js). -->
+          <aside class="lib-folders hidden" id="lib-folders" aria-label="Folders"></aside>
           <!-- Centre: toolbar + grid / table -->
           <div class="lib-center">
+            <!-- Explore: the open folder and its subfolders. -->
+            <div class="lib-crumbs hidden" id="lib-crumbs"></div>
             <div class="lib-toolbar" id="lib-toolbar">
               <div class="lib-toolbar-actions" id="lib-toolbar-actions"></div>
               <span class="lib-count" id="var-packages-count">0 packages</span>

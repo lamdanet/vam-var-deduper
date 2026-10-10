@@ -2693,6 +2693,17 @@ function libEmptyHtml() {
       <span class="lib-empty-sub"><button type="button" class="lib-btn lib-btn-gradient lib-btn-sm" data-lib-action="scan">
         <span class="material-symbols-outlined">sync</span>Scan ${escapeHtml(dir)}</button></span></div>`;
   }
+  // Explore: a folder with no packages of its own, only subfolders.
+  const here = vpExploring() && !hasQuery && !VPX.deep ? vpxFolder(VPX.folder) : null;
+  if (here && !Number(here.direct ?? 0)) {
+    const below = Number(here.total ?? 0);
+    return `<div class="lib-empty">No packages directly in ${escapeHtml(vpxName(VPX.folder))}<span class="lib-empty-sub">${
+      below
+        ? `${escapeHtml(pkgCount(below, "package is", "packages are"))} in its subfolders: open one above, or
+           <button type="button" class="lib-btn lib-btn-gradient lib-btn-sm" data-vpx-deep-on>Include subfolders</button>`
+        : "Nor in its subfolders."
+    }</span></div>`;
+  }
   return `<div class="lib-empty">No items found<span class="lib-empty-sub">${escapeHtml(
     t("varPackagesNoResults"),
   )}</span></div>`;
@@ -3608,19 +3619,24 @@ async function refreshVarPackagesFromFolder({
 
   let listed = false;
   try {
+    // Explore: one folder, and maybe a folder from outside the library.
+    const ex = vpxListArgs();
+    const filters = { ...(serializeVarPackageFilters(state.varPackagesFilters) ?? {}), ...(ex.filtersExtra ?? {}) };
     const page = await invoke("list_var_packages", {
       inputDir,
-      additionalInputDirs: getAdditionalDirs("varPackages"),
+      additionalInputDirs: ex.additionalInputDirs ?? getAdditionalDirs("varPackages"),
       offset,
       limit,
       search: String(state.varPackagesFilter ?? "").trim() || null,
-      filters: serializeVarPackageFilters(state.varPackagesFilters),
+      filters: Object.keys(filters).length ? filters : null,
       ...varPackagesSortArgs(),
       forceRescan,
       // The committed depth, never the switch position — see varPackagesScannedDeep.
       deepScan: state.varPackagesScannedDeep !== false,
       offloadDir: offloadDir() || null,
+      withFolders: Boolean(ex.withFolders),
     });
+    if (vpxAfterListing(page)) state.varPackagesRequery = true;
     const items = Array.isArray(page?.items) ? page.items : [];
     state.varPackagesItems = append ? [...(state.varPackagesItems ?? []), ...items] : items;
     state.varPackagesTotal = Math.max(0, Number(page?.total ?? 0));
@@ -3645,6 +3661,7 @@ async function refreshVarPackagesFromFolder({
     }
     renderVarPackagesFilterBar();
     renderVarPackages(listed && append ? { appendFrom: loaded } : {});
+    vpxRender();
 
     if (listed && !append) {
       // The Author suggestions come from the folder cache this call just left
@@ -17583,6 +17600,7 @@ function libContextMenu(event, item) {
       ]
     : [
         { label: "Open Details", action: () => openPackageDetails(item, "folder") },
+        { label: "Show its folder", action: () => vpxReveal(filePath) },
         {
           label: "Show in Explorer",
           action: () =>
@@ -17762,6 +17780,414 @@ function libHandleSharedClick(event) {
     return true;
   }
   return false;
+}
+
+// ---- VAR Packages: the Explore tab (one folder at a time) -----------------------------
+// The second tab of VAR Packages. The same cards, details and tools as the
+// Library tab, one folder at a time: a folder tree on the left with each
+// folder's package count, a breadcrumb with the open folder's subfolders above
+// the grid. A folder outside the library can be opened too: it's listed with
+// the library (so "used by" and dependencies stay right) without being added
+// to it. The listing is list_var_packages with a folder filter; the tree comes
+// from the same cached listing.
+
+const VP_TAB_KEY = "vp.tab";
+const VPX_KEY = "vp.explore";
+
+const VPX = {
+  // the open folder (as the tree spells it); null until the first listing
+  folder: null,
+  // its subfolders' packages too
+  deep: false,
+  // a folder outside the library, opened for this session
+  outside: null,
+  // { roots, folders } from the last listing
+  tree: null,
+  // folder keys unfolded in the tree
+  open: new Set(),
+  query: "",
+};
+
+function vpTab() {
+  return libStoreGet(VP_TAB_KEY, "library") === "explore" ? "explore" : "library";
+}
+
+function vpExploring() {
+  return vpTab() === "explore";
+}
+
+function vpxKey(path) {
+  return String(path ?? "")
+    .replaceAll("/", "\\")
+    .replace(/\\+$/, "")
+    .toLowerCase();
+}
+
+function vpxParent(path) {
+  const p = String(path ?? "").replace(/[\\/]+$/, "");
+  const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+  return i > 0 ? p.slice(0, i) : "";
+}
+
+function vpxName(path) {
+  const p = String(path ?? "").replace(/[\\/]+$/, "");
+  return p.slice(Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")) + 1) || p;
+}
+
+function vpxLoad() {
+  try {
+    const saved = JSON.parse(libStoreGet(VPX_KEY, "{}"));
+    VPX.folder = typeof saved.folder === "string" ? saved.folder : null;
+    VPX.deep = Boolean(saved.deep);
+    VPX.open = new Set(Array.isArray(saved.open) ? saved.open : []);
+  } catch (_e) {
+    // a fresh start
+  }
+}
+
+function vpxSave() {
+  libStoreSet(VPX_KEY, JSON.stringify({ folder: VPX.outside ? null : VPX.folder, deep: VPX.deep, open: [...VPX.open].slice(0, 300) }));
+}
+
+// The listing's arguments in Explore: the outside folder joins the roots, the
+// open folder filters the packages.
+function vpxListArgs() {
+  if (!vpExploring()) return {};
+  const extra = getAdditionalDirs("varPackages");
+  if (!VPX.folder) VPX.folder = VPX.outside || vpResolveInputDir() || null;
+  return {
+    additionalInputDirs: VPX.outside && !extra.some((d) => vpxKey(d) === vpxKey(VPX.outside)) ? [...extra, VPX.outside] : extra,
+    filtersExtra: VPX.folder ? { folder: VPX.folder, folderDeep: VPX.deep } : {},
+    withFolders: true,
+  };
+}
+
+// After a listing in Explore: keep the tree; a folder that's gone falls back
+// to the first root (and lists again).
+function vpxAfterListing(page) {
+  if (!vpExploring() || !page?.folders) return false;
+  VPX.tree = page.folders;
+  const known = new Set((VPX.tree.folders ?? []).map((f) => vpxKey(f.path)));
+  if (VPX.folder && !known.has(vpxKey(VPX.folder))) {
+    VPX.folder = VPX.tree.roots?.[0] ?? null;
+    vpxSave();
+    return true;
+  }
+  vpxRevealInTree(VPX.folder);
+  return false;
+}
+
+function vpxFolders() {
+  return VPX.tree?.folders ?? [];
+}
+
+function vpxFolder(path) {
+  const k = vpxKey(path);
+  return vpxFolders().find((f) => vpxKey(f.path) === k) ?? null;
+}
+
+function vpxRootOf(path) {
+  const k = vpxKey(path);
+  const roots = [...(VPX.tree?.roots ?? []), ...(VPX.outside ? [VPX.outside] : [])];
+  return roots.filter((r) => k === vpxKey(r) || k.startsWith(`${vpxKey(r)}\\`)).sort((a, b) => b.length - a.length)[0] ?? null;
+}
+
+// The folders right under `path` that hold packages.
+function vpxChildren(path) {
+  const k = vpxKey(path);
+  return vpxFolders()
+    .filter((f) => vpxKey(vpxParent(f.path)) === k)
+    .sort((a, b) => vpxName(a.path).localeCompare(vpxName(b.path), undefined, { numeric: true, sensitivity: "base" }));
+}
+
+// The tree's top level: the library's roots, then the outside folder.
+function vpxTops() {
+  const tops = [];
+  const seen = new Set();
+  const add = (path) => {
+    const f = vpxFolder(path);
+    if (f && !seen.has(vpxKey(f.path))) {
+      seen.add(vpxKey(f.path));
+      tops.push(f);
+    }
+  };
+  for (const r of VPX.tree?.roots ?? []) {
+    // A root inside another root (the offload folder under the VaM folder,
+    // say) shows under that one, not twice.
+    const inner = (VPX.tree?.roots ?? []).some((o) => vpxKey(o) !== vpxKey(r) && vpxKey(r).startsWith(`${vpxKey(o)}\\`));
+    if (!inner) add(r);
+  }
+  if (VPX.outside) add(VPX.outside);
+  return tops;
+}
+
+function vpxRevealInTree(path) {
+  let p = vpxParent(path);
+  const root = vpxRootOf(path);
+  while (p && root && vpxKey(p).startsWith(vpxKey(root))) {
+    VPX.open.add(vpxKey(p));
+    p = vpxParent(p);
+  }
+}
+
+function vpxOpenFolder(path, { deep = null } = {}) {
+  if (!path) return;
+  VPX.folder = path;
+  if (deep != null) VPX.deep = deep;
+  vpxRevealInTree(path);
+  vpxSave();
+  state.vpSelected.clear();
+  state.vpSelAnchor = null;
+  vpxRender();
+  refreshVarPackagesFromFolder({ forceRescan: false, reset: true });
+}
+
+function vpSetTab(tab) {
+  if (tab === vpTab()) return;
+  libStoreSet(VP_TAB_KEY, tab);
+  // Leaving Explore closes a folder from outside the library.
+  if (tab === "library") VPX.outside = null;
+  state.vpSelected.clear();
+  state.vpSelAnchor = null;
+  vpxApplyTabUi();
+  refreshVarPackagesFromFolder({ forceRescan: false, reset: true });
+}
+
+function vpxApplyTabUi() {
+  const exploring = vpExploring();
+  document.querySelectorAll("[data-vp-tab]").forEach((b) => {
+    const on = b.getAttribute("data-vp-tab") === vpTab();
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  $("lib-folders")?.classList.toggle("hidden", !exploring);
+  $("lib-crumbs")?.classList.toggle("hidden", !exploring);
+  vpxRender();
+}
+
+// A package's own folder, opened in Explore with the package selected.
+function vpxReveal(filePath) {
+  const folder = vpxParent(filePath);
+  if (!folder) return;
+  if (!vpExploring()) libStoreSet(VP_TAB_KEY, "explore");
+  VPX.folder = folder;
+  VPX.deep = false;
+  vpxRevealInTree(folder);
+  vpxSave();
+  state.vpRevealPath = filePath;
+  vpxApplyTabUi();
+  refreshVarPackagesFromFolder({ forceRescan: false, reset: true });
+}
+
+async function vpxOpenOutside() {
+  const dir = await invoke("pick_folder").catch(() => null);
+  if (!dir) return;
+  const inLibrary = vpxRootOf(dir) && vpxKey(vpxRootOf(dir)) !== vpxKey(VPX.outside ?? "");
+  VPX.outside = inLibrary ? null : dir;
+  vpxOpenFolder(dir);
+}
+
+// ---- Render ------------------------------------------------------------------------------
+
+function vpxRender() {
+  if (!vpExploring()) return;
+  vpxRenderTree();
+  vpxRenderCrumbs();
+}
+
+function vpxCount(f) {
+  return f ? Number(f.total ?? 0) : 0;
+}
+
+function vpxRenderTree() {
+  const host = $("lib-folders");
+  if (!host) return;
+  const cur = vpxKey(VPX.folder);
+  const row = (f, depth, { flat = false } = {}) => {
+    const k = vpxKey(f.path);
+    const kids = flat ? [] : vpxChildren(f.path);
+    const open = VPX.open.has(k);
+    const isOutside = VPX.outside && k === vpxKey(VPX.outside);
+    const isRoot = depth === 0 && !flat;
+    const label = flat ? vpxRelative(f.path) : isRoot ? vpxRootLabel(f.path) : vpxName(f.path);
+    return `<div class="vpx-row${k === cur ? " is-current" : ""}${isRoot ? " is-root" : ""}" style="--vpx-depth:${depth}" role="treeitem" aria-selected="${k === cur}" ${kids.length ? `aria-expanded="${open}"` : ""}>
+        ${
+          kids.length
+            ? `<button type="button" class="vpx-caret" data-vpx-toggle="${escapeAttribute(f.path)}" aria-label="${open ? "Fold" : "Unfold"}"><span class="material-symbols-outlined">${open ? "expand_more" : "chevron_right"}</span></button>`
+            : `<span class="vpx-caret is-leaf"></span>`
+        }
+        <button type="button" class="vpx-name" data-vpx-open="${escapeAttribute(f.path)}" title="${escapeAttribute(f.path)}">
+          <span class="material-symbols-outlined">${isOutside ? "folder_special" : isRoot ? "hard_drive" : k === cur ? "folder_open" : "folder"}</span>
+          <span class="vpx-label">${escapeHtml(label)}</span>
+          <span class="vpx-count">${vpxCount(f).toLocaleString()}</span>
+        </button>
+        ${isOutside ? `<button type="button" class="vpx-close" data-vpx-act="close-outside" title="Close this folder (it was never added to the library)"><span class="material-symbols-outlined">close</span></button>` : ""}
+      </div>${open && kids.length ? kids.map((c) => row(c, depth + 1)).join("") : ""}`;
+  };
+  const q = VPX.query;
+  const body = !VPX.tree
+    ? `<p class="vpx-empty">${state.varPackagesLoading ? "Reading your folders…" : "No folders yet."}</p>`
+    : q
+      ? (() => {
+          const hits = vpxFolders().filter((f) => vpxRelative(f.path).toLowerCase().includes(q)).slice(0, 200);
+          return hits.length ? hits.map((f) => row(f, 0, { flat: true })).join("") : `<p class="vpx-empty">No folder matches.</p>`;
+        })()
+      : vpxTops()
+          .map((f) => row(f, 0))
+          .join("");
+  const keepFocus = document.activeElement?.id === "vpx-find";
+  host.innerHTML = `
+    <div class="vpx-head"><span>Folders</span>
+      <button type="button" class="lib-icon-btn" data-vpx-act="fold-all" title="Fold every folder"><span class="material-symbols-outlined">unfold_less</span></button></div>
+    <div class="vpx-find"><span class="material-symbols-outlined">search</span><input id="vpx-find" type="search" placeholder="Find a folder" value="${escapeAttribute(VPX.query)}" spellcheck="false" autocomplete="off" /></div>
+    <div class="vpx-tree" role="tree" aria-label="Folders">${body}</div>
+    <div class="vpx-foot">
+      <button type="button" class="lib-btn lib-btn-sm vpx-outside-btn" data-vpx-act="open-outside" title="Browse a folder that isn't in your library, without adding it"><span class="material-symbols-outlined">create_new_folder</span>Open a folder…</button>
+    </div>`;
+  if (keepFocus) {
+    const input = $("vpx-find");
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  }
+  host.querySelector(".vpx-row.is-current")?.scrollIntoView({ block: "nearest" });
+}
+
+function vpxRootLabel(path) {
+  const k = vpxKey(path);
+  if (VPX.outside && k === vpxKey(VPX.outside)) return vpxName(path);
+  const addon = vpxKey(vpResolveInputDir());
+  if (k === addon) return "AddonPackages";
+  if (offloadDir() && k === vpxKey(offloadDir())) return `${vpxName(path)} (offload)`;
+  return vpxName(path);
+}
+
+// A folder named from its root: "AddonPackages › New folder › Paid".
+function vpxSegments(path) {
+  const root = vpxRootOf(path);
+  if (!root) return [{ path, label: path }];
+  const segs = [{ path: root, label: vpxRootLabel(root) }];
+  const rest = String(path).slice(root.replace(/[\\/]+$/, "").length).split(/[\\/]+/).filter(Boolean);
+  let acc = root.replace(/[\\/]+$/, "");
+  for (const s of rest) {
+    acc = `${acc}\\${s}`;
+    segs.push({ path: acc, label: s });
+  }
+  return segs;
+}
+
+function vpxRelative(path) {
+  return vpxSegments(path)
+    .map((s) => s.label)
+    .join(" › ");
+}
+
+function vpxRenderCrumbs() {
+  const host = $("lib-crumbs");
+  if (!host) return;
+  if (!VPX.folder) {
+    host.innerHTML = "";
+    return;
+  }
+  const segs = vpxSegments(VPX.folder);
+  const here = vpxFolder(VPX.folder);
+  const kids = vpxChildren(VPX.folder);
+  const direct = Number(here?.direct ?? 0);
+  const total = vpxCount(here);
+  const outside = VPX.outside && vpxRootOf(VPX.folder) && vpxKey(vpxRootOf(VPX.folder)) === vpxKey(VPX.outside);
+  host.innerHTML = `
+    <div class="vpx-crumbs-row">
+      <nav class="vpx-path" aria-label="Folder">${segs
+        .map((s, i) =>
+          i === segs.length - 1
+            ? `<span class="vpx-seg is-current" title="${escapeAttribute(s.path)}">${escapeHtml(s.label)}</span>`
+            : `<button type="button" class="vpx-seg" data-vpx-open="${escapeAttribute(s.path)}" title="${escapeAttribute(s.path)}">${escapeHtml(s.label)}</button><span class="material-symbols-outlined vpx-sep">chevron_right</span>`,
+        )
+        .join("")}</nav>
+      ${outside ? `<span class="lib-pill lib-pill-info" title="Browsed only: not added to your library or its scans">Outside your library</span>` : ""}
+      <span class="vpx-facts">${pkgCount(direct, "package", "packages")} here${total > direct ? ` · ${total.toLocaleString()} with subfolders` : ""}</span>
+      <label class="vpx-deep" title="Also list the packages in its subfolders"><input type="checkbox" id="vpx-deep" ${VPX.deep ? "checked" : ""} ${total > direct ? "" : "disabled"} /><span>Include subfolders</span></label>
+      <button type="button" class="lib-icon-btn" data-vpx-act="show" title="Show this folder in Explorer"><span class="material-symbols-outlined">folder_open</span></button>
+      ${segs.length > 1 ? `<button type="button" class="lib-icon-btn" data-vpx-act="up" title="Up one folder"><span class="material-symbols-outlined">arrow_upward</span></button>` : ""}
+    </div>
+    ${
+      kids.length
+        ? `<div class="vpx-subs">${kids
+            .map(
+              (c) =>
+                `<button type="button" class="vpx-sub" data-vpx-open="${escapeAttribute(c.path)}" title="${escapeAttribute(c.path)}"><span class="material-symbols-outlined">folder</span><span class="vpx-sub-name">${escapeHtml(
+                  vpxName(c.path),
+                )}</span><span class="vpx-count">${vpxCount(c).toLocaleString()}</span></button>`,
+            )
+            .join("")}</div>`
+        : ""
+    }`;
+}
+
+// ---- Events --------------------------------------------------------------------------------
+
+function setupVarPackagesExplore() {
+  vpxLoad();
+  document.querySelectorAll("[data-vp-tab]").forEach((b) =>
+    b.addEventListener("click", () => vpSetTab(b.getAttribute("data-vp-tab"))),
+  );
+  const onClick = (e) => {
+    const q = (sel) => e.target.closest?.(sel);
+    let el;
+    if ((el = q("[data-vpx-toggle]"))) {
+      const k = vpxKey(el.getAttribute("data-vpx-toggle"));
+      if (VPX.open.has(k)) VPX.open.delete(k);
+      else VPX.open.add(k);
+      vpxSave();
+      vpxRenderTree();
+      return;
+    }
+    if ((el = q("[data-vpx-open]"))) {
+      VPX.query = "";
+      vpxOpenFolder(el.getAttribute("data-vpx-open"));
+      return;
+    }
+    if (!(el = q("[data-vpx-act]"))) return;
+    switch (el.getAttribute("data-vpx-act")) {
+      case "fold-all":
+        VPX.open.clear();
+        vpxRevealInTree(VPX.folder);
+        vpxSave();
+        vpxRenderTree();
+        break;
+      case "open-outside":
+        vpxOpenOutside();
+        break;
+      case "close-outside":
+        VPX.outside = null;
+        vpxOpenFolder(vpResolveInputDir());
+        break;
+      case "show":
+        if (VPX.folder) invoke("show_in_explorer", { path: VPX.folder }).catch(() => {});
+        break;
+      case "up": {
+        const segs = vpxSegments(VPX.folder);
+        if (segs.length > 1) vpxOpenFolder(segs[segs.length - 2].path);
+        break;
+      }
+      default:
+        break;
+    }
+  };
+  $("lib-folders")?.addEventListener("click", onClick);
+  $("lib-crumbs")?.addEventListener("click", onClick);
+  $("var-packages-grid")?.addEventListener("click", (e) => {
+    if (e.target.closest?.("[data-vpx-deep-on]")) vpxOpenFolder(VPX.folder, { deep: true });
+  });
+  $("lib-folders")?.addEventListener("input", (e) => {
+    if (e.target.id !== "vpx-find") return;
+    VPX.query = e.target.value.trim().toLowerCase();
+    vpxRenderTree();
+  });
+  $("lib-crumbs")?.addEventListener("change", (e) => {
+    if (e.target.id !== "vpx-deep") return;
+    vpxOpenFolder(VPX.folder, { deep: e.target.checked });
+  });
+  vpxApplyTabUi();
 }
 
 function setupLibraryView() {
@@ -25608,6 +26034,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupSources();
   setupSourcesPage();
   setupLibraryView();
+  setupVarPackagesExplore();
   setupDatabasePackages();
   setupHubView();
 
