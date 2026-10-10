@@ -104,7 +104,7 @@ release time, it fills it with the commit messages since the last release.
   free once each user has its own copy of what it uses. A big package its
   users barely touch can go; a shared library should stay, and is a good
   replacement source to prefer in Fix Missing
-- **Clean VARs (new)**, beside the old Clean VARs page while it's finished:
+- **Clean VARs**, rebuilt (it replaces the old page):
   make one package smaller by pointing its files at exact copies in other
   packages, which become its dependencies. It shows each file the package
   uses with a copy elsewhere, a preview, and the packages that have it, in
@@ -119,7 +119,7 @@ release time, it fills it with the commit messages since the last release.
   copies in your folders, how much is chosen and how much is left to choose,
   its estimated size after Clean, and what more the database offers, what
   stays and what it doesn't use
-- **Clean many packages**, the second tab of Clean VARs (new): pick a source
+- **Clean many packages**, the second tab of Clean VARs: pick a source
   package, and every other package that carries copies of its files is
   listed. Tick the ones to clean: their copies of the files they use come
   out, and they use the source instead (it becomes their dependency). The
@@ -132,6 +132,14 @@ release time, it fills it with the commit messages since the last release.
   was, and the report can tick those again
 
 ### Changed
+- The old Clean VARs page is gone: Clean VARs is the rebuilt page, at the
+  top of the sidebar and where the app opens. What only the old page did is
+  dropped: writing cleaned copies to a separate output folder, rewriting loose
+  .vap presets outside packages, exporting a resource, and searching or
+  copying a file's CRC. Its Settings (output folder, VAP folder, run
+  defaults) are gone with it. Send to > Clean VARs opens a package to make
+  it smaller; Send to > Clean VARs, as the source and Package Explorer's
+  Clean against it open it in Clean many
 - Package Explorer replaces the VAR Details page, which is gone: everything
   it did is in Package Explorer
 - Downloads resume where they stopped instead of starting over, retry by
