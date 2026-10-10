@@ -107,8 +107,8 @@ release time, it fills it with the commit messages since the last release.
 - **Clean VARs (new)**, beside the old Clean VARs page while it's finished:
   make one package smaller by pointing its files at exact copies in other
   packages, which become its dependencies. It shows each file the package
-  uses with a copy elsewhere, a preview, and the packages that have it; a
-  copy counts only if that package has the whole resource (a clothing
+  uses with a copy elsewhere, a preview, and the packages that have it, in
+  your folders or, on their own tab, in the database; a copy counts only if that package has the whole resource (a clothing
   item's .vaj and .vab, the files a preset loads, a plugin's scripts).
   Files the package itself needs in place stay: one a plugin script in it
   loads by path, or a preset's picture. Choose per file, use one package for
