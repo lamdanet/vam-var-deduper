@@ -10,6 +10,8 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
 ### Added
 - **Extract presets**: save the people in a package's scenes, legacy looks
   and appearance presets as VaM presets: their whole appearance, clothing,
