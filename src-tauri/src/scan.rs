@@ -1111,6 +1111,7 @@ fn scan_package(file_path: &Path) -> Result<PreparedPackage> {
         removed_paths: BTreeSet::new(),
         required_dependencies: BTreeSet::new(),
         replacement_map: BTreeMap::new(),
+        self_aliases: BTreeSet::new(),
     })
 }
 

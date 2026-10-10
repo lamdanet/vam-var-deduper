@@ -541,6 +541,9 @@ fn rewrite_text_payload(package: &PreparedPackage, raw: &[u8]) -> Vec<u8> {
             let old_latest = format!("{}:/{}", latest_id, old_path);
             updated = updated.replace(&old_latest, &new_ref);
         }
+        for alias in &package.self_aliases {
+            updated = updated.replace(&format!("{alias}:/{old_path}"), &new_ref);
+        }
     }
 
     if updated == text {

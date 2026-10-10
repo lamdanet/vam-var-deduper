@@ -343,6 +343,10 @@ pub(crate) struct PreparedPackage {
     pub(crate) removed_paths: BTreeSet<String>,
     pub(crate) required_dependencies: BTreeSet<String>,
     pub(crate) replacement_map: BTreeMap<String, ResourceRef>,
+    /// Other versions of its own id its text uses for its own files
+    /// (`Creator.Name.1:/…` inside version 2, when version 1 isn't there):
+    /// the rewrite treats them like `SELF:/`. Empty unless a caller sets it.
+    pub(crate) self_aliases: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
