@@ -400,6 +400,11 @@ pub(crate) struct ProgressPayload {
     /// Result payload for `start_clean_var_task` (Clean VARs).
     #[serde(default)]
     pub(crate) clean_result: Option<crate::clean_var::CleanResult>,
+    /// Result payloads for `start_clean_many_check_task` / `start_clean_many_task`.
+    #[serde(default)]
+    pub(crate) clean_many_report: Option<crate::clean_many::CleanManyReport>,
+    #[serde(default)]
+    pub(crate) clean_many_result: Option<crate::clean_many::CleanManyResult>,
     /// Result payload for `start_package_usage_task` (Dependency Usage).
     #[serde(default)]
     pub(crate) package_usage_result: Option<PackageUsageReport>,

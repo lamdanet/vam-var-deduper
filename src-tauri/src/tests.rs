@@ -7485,3 +7485,110 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
     fs::remove_dir_all(&dir).expect("cleanup");
 }
 
+
+#[test]
+fn clean_many_points_the_ticked_packages_at_the_source() {
+    use crate::clean_many::{clean_many, clean_many_candidates};
+
+    let dir = repo_root().join("tmp_clean_many_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let png = &b"image-a-0123456789"[..];
+    let source = vars.join("S.Pack.1.var");
+    write_test_var_with_deps(
+        &source,
+        &[],
+        &[
+            ("Custom/a.png", png),
+            ("Custom/Clothing/x.vam", &br#"{ "id": "x" }"#[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/Clothing/x.vab", &b"unity-x"[..]),
+        ],
+    );
+    // Uses both: both go.
+    let one = vars.join("T.One.1.var");
+    let scene = br#"{ "img": "SELF:/Custom/a.png", "cloth": "SELF:/Custom/Clothing/x.vam" }"#;
+    write_test_var_with_deps(
+        &one,
+        &[],
+        &[
+            ("Saves/scene/s.json", &scene[..]),
+            ("Custom/a.png", png),
+            ("Custom/Clothing/x.vam", &br#"{ "id": "x" }"#[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/Clothing/x.vab", &b"unity-x"[..]),
+        ],
+    );
+    // Its item's .vab differs from the source's, and a plugin script in it
+    // names the image: nothing can go.
+    let two = vars.join("T.Two.1.var");
+    write_test_var_with_deps(
+        &two,
+        &[],
+        &[
+            ("Saves/scene/s.json", &scene[..]),
+            ("Custom/a.png", png),
+            ("Custom/Scripts/p.cs", &br#"class P { string f = "Custom/a.png"; }"#[..]),
+            ("Custom/Clothing/x.vam", &br#"{ "id": "x" }"#[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/Clothing/x.vab", &b"unity-other"[..]),
+        ],
+    );
+    // Carries the image without using it.
+    write_test_var_with_deps(&vars.join("T.Three.1.var"), &[], &[("Custom/a.png", png)]);
+    // Uses it, on a drive without a Recycle Bin (as the test says).
+    let four = vars.join("T.Four.1.var");
+    let four_scene = br#"{ "img": "SELF:/Custom/a.png" }"#;
+    write_test_var_with_deps(&four, &[], &[("Saves/scene/s.json", &four_scene[..]), ("Custom/a.png", png)]);
+
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&source), |_, _| {}).expect("scan");
+    let report = clean_many_candidates(&source, &scanned, &|_, _, _| {}).expect("candidates");
+    assert_eq!(report.source_package_id, "S.Pack.1");
+    assert_eq!(report.unused_only, 1, "T.Three only carries it");
+    let pkg = |id: &str| report.packages.iter().find(|p| p.package_id == id).unwrap_or_else(|| panic!("{id}"));
+    assert!(report.packages.iter().all(|p| p.package_id != "S.Pack.1"), "never the source");
+    let files = |id: &str| pkg(id).files.iter().map(|f| (f.path.clone(), f.stays.clone())).collect::<Vec<_>>();
+    assert!(files("T.One.1").iter().all(|(_, stays)| stays.is_none()), "{:?}", files("T.One.1"));
+    assert_eq!(files("T.One.1").len(), 2);
+    let two_files = files("T.Two.1");
+    assert!(two_files.contains(&("Custom/a.png".to_string(), Some("script".to_string()))), "{two_files:?}");
+    assert!(two_files.contains(&("Custom/Clothing/x.vam".to_string(), Some("incomplete".to_string()))), "{two_files:?}");
+
+    let source_before = fs::read(&source).expect("read");
+    let one_before = fs::read(&one).expect("read");
+    let four_before = fs::read(&four).expect("read");
+    let recycle = |p: &Path| {
+        let to = bin.join(p.file_name().expect("name"));
+        fs::rename(p, to).map_err(|e| e.to_string())
+    };
+    let recycle_ok = |p: &Path| !p.ends_with("T.Four.1.var");
+    assert!(
+        clean_many(&source, std::slice::from_ref(&source), &scanned, &recycle_ok, &recycle, None, &|_, _, _| {}).is_err(),
+        "the source is never cleaned"
+    );
+    let result = clean_many(&source, &[one.clone(), two.clone(), four.clone()], &scanned, &recycle_ok, &recycle, None, &|_, _, _| {})
+        .expect("clean many");
+    let done = |id: &str| result.done.iter().find(|d| d.package_id == id).unwrap_or_else(|| panic!("{id}"));
+    let r = done("T.One.1").result.clone().expect("cleaned");
+    assert!(r.recycled);
+    assert_eq!(r.removed_files, 4, "the image, the item and its .vaj, .vab");
+    assert_eq!(r.dependencies, vec!["S.Pack.1".to_string()]);
+    assert_eq!(fs::read(bin.join("T.One.1.var")).expect("in the bin"), one_before, "the original, as it was");
+    let mut zip = zip::ZipArchive::new(fs::File::open(&one).expect("open")).expect("zip");
+    let mut text = String::new();
+    zip.by_name("Saves/scene/s.json").expect("scene").read_to_string(&mut text).expect("read");
+    assert!(text.contains("S.Pack.1:/Custom/a.png") && text.contains("S.Pack.1:/Custom/Clothing/x.vam"), "{text}");
+    assert!(zip.by_name("Custom/a.png").is_err(), "its copy is gone");
+    drop(zip);
+    assert!(done("T.Two.1").error.is_some(), "nothing of it can go");
+    assert!(two.exists() && !bin.join("T.Two.1.var").exists(), "left as it was");
+    assert!(done("T.Four.1").error.as_deref().unwrap_or_default().contains("Recycle Bin"));
+    assert_eq!(fs::read(&four).expect("read"), four_before, "not touched");
+    assert_eq!(fs::read(&source).expect("read"), source_before, "the source isn't changed");
+    assert!(!vars.join("T.One.1.var.clean-tmp").exists(), "nothing left beside it");
+    fs::remove_dir_all(&dir).expect("cleanup");
+}

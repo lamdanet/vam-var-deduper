@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod archives;
+mod clean_many;
 mod clean_var;
 mod config;
 mod db;
@@ -184,6 +185,8 @@ fn main() {
             clean_var::clean_var_db_copies,
             clean_var::start_clean_var_task,
             clean_var::restore_clean_backup,
+            clean_many::start_clean_many_check_task,
+            clean_many::start_clean_many_task,
             start_plan_clean_duplicates_task,
             start_plan_organize_by_creator_task,
             move_var_to_creator_folder,
