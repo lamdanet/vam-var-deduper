@@ -12,6 +12,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
+    io::Read,
     path::Path,
     sync::{atomic::Ordering, Arc, Mutex},
     thread,
@@ -28,8 +29,11 @@ use crate::{
     models::{AppState, PreparedPackage, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
     naming,
     scan::{compute_missing_siblings, load_cached_scan_with_target},
+    fix_var::{collect_pkg_refs, is_text_path},
     tasks::{list_target_var_text_refs, new_progress_payload, parse_additional_dirs, set_task_progress},
+    utils::{decode_text, normalize_zip_path},
 };
+use zip::ZipArchive;
 
 /// A package that has an exact copy of a file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -85,6 +89,58 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 /// A scene is the package itself, not a resource to point elsewhere (the old
 /// page's rule: `Saves/scene/` at any depth).
+/// The scanned package that is this file: by its path as written first (one
+/// pass over strings), else by the real file (a package outside the folders
+/// is kept under its canonical form).
+fn find_target<'a>(scanned: &'a ScannedData, target_path: &Path) -> Option<&'a PreparedPackage> {
+    let plain = |p: &Path| {
+        let s = p.to_string_lossy().replace('\\', "/");
+        s.strip_prefix("//?/").unwrap_or(&s).to_lowercase()
+    };
+    let want = plain(target_path);
+    scanned
+        .packages
+        .values()
+        .find(|p| plain(&p.file_path) == want)
+        .or_else(|| scanned.packages.values().find(|p| same_file(&p.file_path, target_path)))
+}
+
+/// Other versions of the package's own id its text uses (`Creator.Name.1:/…`
+/// inside version 2) that aren't in the folders: VaM falls back to this
+/// version for those, so they point at its files like `SELF:/`. An installed
+/// version answers for itself and is left alone.
+fn self_aliases(target_path: &Path, target_id: &str, scanned: &ScannedData) -> Result<BTreeSet<String>> {
+    let family = naming::package_base(target_id).to_ascii_lowercase();
+    let installed: HashSet<String> = scanned.packages.keys().map(|k| k.to_ascii_lowercase()).collect();
+    let mut archive = ZipArchive::new(fs::File::open(target_path)?)?;
+    let mut out = BTreeSet::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = normalize_zip_path(entry.name());
+        if entry.is_dir() || !is_text_path(&name) {
+            continue;
+        }
+        let mut raw = Vec::new();
+        if entry.read_to_end(&mut raw).is_err() {
+            continue;
+        }
+        let Some((text, _)) = decode_text(&raw) else {
+            continue;
+        };
+        for (pkg, _) in collect_pkg_refs(&text) {
+            let lower = pkg.to_ascii_lowercase();
+            if naming::package_base(&pkg).eq_ignore_ascii_case(&family)
+                && !lower.ends_with(".latest")
+                && !pkg.eq_ignore_ascii_case(target_id)
+                && !installed.contains(&lower)
+            {
+                out.insert(pkg);
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn is_scene(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.starts_with("saves/scene/") || lower.contains("/saves/scene/")
@@ -163,11 +219,7 @@ pub(crate) fn clean_candidates(
     db: Option<&Db>,
 ) -> Result<CleanReport> {
     let target_str = target_path.to_string_lossy().to_string();
-    let target = scanned
-        .packages
-        .values()
-        .find(|p| same_file(&p.file_path, target_path))
-        .ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
+    let target = find_target(scanned, target_path).ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
     let target_id = target.package_id.clone();
 
     // What it references itself; a bundle's members come with their parent.
@@ -347,6 +399,10 @@ pub(crate) struct CleanResult {
     pub(crate) dependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) backup_path: Option<String>,
+    /// The file on disk before and after (removed_bytes is what came out,
+    /// uncompressed).
+    pub(crate) size_before: u64,
+    pub(crate) size_after: u64,
 }
 
 /// Applies `keep_map` (item key → `package:path` of the copy to point at)
@@ -358,10 +414,7 @@ pub(crate) fn apply_clean(
     backup_dir: Option<&Path>,
     db: Option<&Db>,
 ) -> Result<CleanResult> {
-    let target_id = scanned
-        .packages
-        .values()
-        .find(|p| same_file(&p.file_path, target_path))
+    let target_id = find_target(&scanned, target_path)
         .map(|p| p.package_id.clone())
         .ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
     // Only what was chosen changes: every other duplicate group stays as it
@@ -405,6 +458,10 @@ pub(crate) fn apply_clean(
         keep_map.entry(group.key.clone()).or_insert_with(|| KEEP_ALL_VALUE.to_string());
     }
     prepare_package_changes(&mut scanned, &keep_map, Some(&target_id), db)?;
+    let aliases = self_aliases(target_path, &target_id, &scanned)?;
+    if let Some(p) = scanned.packages.get_mut(&target_id) {
+        p.self_aliases = aliases;
+    }
     let package = scanned
         .packages
         .get(&target_id)
@@ -417,6 +474,8 @@ pub(crate) fn apply_clean(
         removed_bytes: sum_removed_bytes(package),
         dependencies: package.required_dependencies.iter().cloned().collect(),
         backup_path: None,
+        size_before: fs::metadata(target_path).map(|m| m.len()).unwrap_or(0),
+        size_after: 0,
     };
     if let Some(dir) = backup_dir {
         fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
@@ -429,7 +488,46 @@ pub(crate) fn apply_clean(
         result.backup_path = Some(backup.to_string_lossy().to_string());
     }
     rewrite_package(&scanned, package, &package.file_path)?;
+    result.size_after = fs::metadata(target_path).map(|m| m.len()).unwrap_or(0);
     Ok(result)
+}
+
+/// Puts the backup Clean made back in place of the package. The backup must
+/// be a copy of this package (its name, or its name with a ` (n)` Clean adds)
+/// and a readable package; it's copied beside the package first, then moved
+/// over it. Returns the size written.
+pub(crate) fn restore_backup(backup: &Path, target: &Path) -> Result<u64> {
+    let name = target.file_name().and_then(|n| n.to_str()).ok_or_else(|| anyhow!("invalid file name"))?;
+    let stem = name.strip_suffix(".var").unwrap_or(name);
+    let backup_name = backup.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let same_name = backup_name.eq_ignore_ascii_case(name)
+        || backup_name
+            .strip_prefix(stem)
+            .and_then(|rest| rest.strip_prefix(" ("))
+            .and_then(|rest| rest.strip_suffix(").var"))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    if !same_name {
+        bail!("{backup_name} isn't a backup of {name}");
+    }
+    let mut archive = ZipArchive::new(fs::File::open(backup).with_context(|| format!("can't open {}", backup.display()))?)
+        .with_context(|| format!("{backup_name} isn't a readable package"))?;
+    if archive.by_name(META_PATH).is_err() {
+        bail!("{backup_name} has no meta.json: not a package");
+    }
+    drop(archive);
+    let staging = target.with_file_name(format!("{name}.restore-tmp"));
+    fs::copy(backup, &staging).with_context(|| format!("failed to copy {}", backup.display()))?;
+    if let Err(err) = fs::rename(&staging, target) {
+        let _ = fs::remove_file(&staging);
+        return Err(err).with_context(|| format!("failed to replace {}", target.display()));
+    }
+    Ok(fs::metadata(target).map(|m| m.len()).unwrap_or(0))
+}
+
+/// Restore the original from Clean's backup (the report's button).
+#[tauri::command(async)]
+pub(crate) fn restore_clean_backup(backup_path: String, target_var_path: String) -> Result<u64, String> {
+    restore_backup(Path::new(&backup_path), Path::new(&target_var_path)).map_err(|e| e.to_string())
 }
 
 /// Runs Clean on a worker thread; the UI polls `get_task_progress` and reads

@@ -7096,6 +7096,53 @@ fn database_log_is_emptied_at_open_and_kept_small() {
 }
 
 #[test]
+fn clean_var_rewrites_older_self_versions_and_restores() {
+    use crate::clean_var::{apply_clean, clean_candidates, restore_backup};
+
+    let dir = repo_root().join("tmp_clean_var_rest_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    // Version 2 still names version 1 (not installed) for its own file, and
+    // version 0 (installed: VaM loads that one's file, so it's left alone).
+    let scene = br#"{ "a": "T.Look.1:/Custom/a.png", "b": "SELF:/Custom/a.png", "c": "T.Look.0:/Custom/a.png" }"#;
+    let target = vars.join("T.Look.2.var");
+    write_test_var_with_deps(&target, &[], &[("Saves/scene/s.json", &scene[..]), ("Custom/a.png", &b"image-a-0123456789"[..])]);
+    write_test_var_with_deps(&vars.join("T.Look.0.var"), &[], &[("Custom/a.png", &b"older"[..])]);
+    write_test_var_with_deps(&vars.join("S.Pack.1.var"), &[], &[("Custom/a.png", &b"image-a-0123456789"[..])]);
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&target), |_, _| {}).expect("scan");
+    let report = clean_candidates(&target, &scanned, None).expect("candidates");
+    let a = report.items.iter().find(|i| i.path == "Custom/a.png").expect("a");
+    let mut keep = BTreeMap::new();
+    keep.insert(a.key.clone(), "S.Pack.1:Custom/a.png".to_string());
+    let backups = dir.join("bk");
+    let original = fs::read(&target).expect("read");
+    let result = apply_clean(&target, scanned, &keep, Some(&backups), None).expect("clean");
+    assert_eq!(result.size_before, original.len() as u64);
+    assert_eq!(result.size_after, fs::metadata(&target).expect("meta").len());
+    let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
+    let mut text = String::new();
+    zip.by_name("Saves/scene/s.json").expect("scene").read_to_string(&mut text).expect("read");
+    assert!(!text.contains("T.Look.1:/"), "the older version not installed points at the copy: {text}");
+    assert_eq!(text.matches("S.Pack.1:/Custom/a.png").count(), 2, "{text}");
+    assert!(text.contains("T.Look.0:/Custom/a.png"), "an installed version answers for itself: {text}");
+    drop(zip);
+
+    // Restore: only a backup of this package, then byte for byte.
+    let backup = std::path::PathBuf::from(result.backup_path.expect("backup"));
+    let stranger = backups.join("S.Pack.1.var");
+    fs::copy(vars.join("S.Pack.1.var"), &stranger).expect("copy");
+    assert!(restore_backup(&stranger, &target).is_err(), "not its backup");
+    let numbered = backups.join("T.Look.2 (2).var");
+    fs::copy(&backup, &numbered).expect("copy");
+    restore_backup(&numbered, &target).expect("a numbered backup works too");
+    assert_eq!(fs::read(&target).expect("read"), original, "the original is back");
+    assert!(!vars.join("T.Look.2.var.restore-tmp").exists());
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
 fn clean_var_points_used_files_at_copies_elsewhere() {
     use crate::clean_var::{apply_clean, clean_candidates};
 
