@@ -7096,6 +7096,94 @@ fn database_log_is_emptied_at_open_and_kept_small() {
 }
 
 #[test]
+fn clean_var_presets_and_plugins_need_their_files_in_the_copy() {
+    use crate::clean_var::{apply_clean, clean_candidates};
+
+    let dir = repo_root().join("tmp_clean_var_needs_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    let scene = br#"{ "preset": "SELF:/Custom/P/Preset_A.vap", "plugin": "SELF:/Custom/Scripts/Me/Plug/p.cslist" }"#;
+    // The preset loads a texture from the package it is in; the list names
+    // two scripts beside it.
+    let preset = br#"{ "tex": "SELF:/Custom/T/tex.png" }"#;
+    let list = b"a.cs\r\nsub\\b.cs\r\n";
+    let target = vars.join("T.Scene.1.var");
+    write_test_var_with_deps(
+        &target,
+        &[],
+        &[
+            ("Saves/scene/s.json", &scene[..]),
+            ("Custom/P/Preset_A.vap", &preset[..]),
+            ("Custom/T/tex.png", &b"texture"[..]),
+            ("Custom/Scripts/Me/Plug/p.cslist", &list[..]),
+            ("Custom/Scripts/Me/Plug/a.cs", &b"class A {}"[..]),
+            ("Custom/Scripts/Me/Plug/sub/b.cs", &b"class B {}"[..]),
+        ],
+    );
+    // Whole: the preset with its texture; the plugin at another path, its
+    // scripts beside it.
+    write_test_var_with_deps(
+        &vars.join("S.Good.1.var"),
+        &[],
+        &[
+            ("Custom/P/Preset_A.vap", &preset[..]),
+            ("Custom/T/tex.png", &b"texture"[..]),
+            ("Custom/Scripts/Other/Plug/p.cslist", &list[..]),
+            ("Custom/Scripts/Other/Plug/a.cs", &b"class A {}"[..]),
+            ("Custom/Scripts/Other/Plug/sub/b.cs", &b"class B {}"[..]),
+        ],
+    );
+    // The preset without its texture; the plugin with another script.
+    write_test_var_with_deps(
+        &vars.join("S.Bad.1.var"),
+        &[],
+        &[
+            ("Custom/P/Preset_A.vap", &preset[..]),
+            ("Custom/Scripts/Me/Plug/p.cslist", &list[..]),
+            ("Custom/Scripts/Me/Plug/a.cs", &b"class A {}"[..]),
+            ("Custom/Scripts/Me/Plug/sub/b.cs", &b"class B { changed }"[..]),
+        ],
+    );
+    // The preset with another texture at its path.
+    write_test_var_with_deps(
+        &vars.join("S.Other.1.var"),
+        &[],
+        &[("Custom/P/Preset_A.vap", &preset[..]), ("Custom/T/tex.png", &b"another"[..])],
+    );
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&target), |_, _| {}).expect("scan");
+    let report = clean_candidates(&target, &scanned, None).expect("candidates");
+    let lacks = |path: &str, pkg: &str| {
+        let item = report.items.iter().find(|i| i.path == path).unwrap_or_else(|| panic!("{path}"));
+        item.copies.iter().find(|c| c.package_id == pkg).unwrap_or_else(|| panic!("{pkg}")).incomplete.clone()
+    };
+    let tex = vec!["Custom/T/tex.png".to_string()];
+    assert!(lacks("Custom/P/Preset_A.vap", "S.Good.1").is_empty());
+    assert_eq!(lacks("Custom/P/Preset_A.vap", "S.Bad.1"), tex, "its texture missing there");
+    assert_eq!(lacks("Custom/P/Preset_A.vap", "S.Other.1"), tex, "another texture there");
+    let list_path = "Custom/Scripts/Me/Plug/p.cslist";
+    assert!(lacks(list_path, "S.Good.1").is_empty(), "same scripts beside it, at another path");
+    assert_eq!(lacks(list_path, "S.Bad.1"), vec!["Custom/Scripts/Me/Plug/sub/b.cs".to_string()]);
+
+    let key = |path: &str| report.items.iter().find(|i| i.path == path).expect("item").key.clone();
+    let mut bad = BTreeMap::new();
+    bad.insert(key("Custom/P/Preset_A.vap"), "S.Bad.1:Custom/P/Preset_A.vap".to_string());
+    assert!(apply_clean(&target, scanned.clone(), &bad, None, None).is_err(), "refused");
+    let mut good = BTreeMap::new();
+    good.insert(key("Custom/P/Preset_A.vap"), "S.Good.1:Custom/P/Preset_A.vap".to_string());
+    good.insert(key(list_path), "S.Good.1:Custom/Scripts/Other/Plug/p.cslist".to_string());
+    let result = apply_clean(&target, scanned, &good, None, None).expect("clean");
+    assert_eq!(result.removed_files, 2, "the preset and the list; their files stay");
+    assert!(!vars.join("T.Scene.1.var.clean-tmp").exists(), "nothing left beside it");
+    let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
+    let mut text = String::new();
+    zip.by_name("Saves/scene/s.json").expect("scene").read_to_string(&mut text).expect("read");
+    assert!(text.contains("S.Good.1:/Custom/Scripts/Other/Plug/p.cslist"), "{text}");
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
 fn clean_var_keeps_what_the_package_itself_needs() {
     use crate::clean_var::{apply_clean, clean_candidates};
 

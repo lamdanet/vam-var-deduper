@@ -25,11 +25,10 @@ use tauri::State;
 use crate::{
     db::{self, Db},
     execute::{prepare_package_changes, rewrite_package, sum_removed_bytes},
-    fix_var::free_backup_path,
+    fix_var::{collect_pkg_refs, free_backup_path, is_text_path},
     models::{AppState, PreparedPackage, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
     naming,
     scan::{compute_missing_siblings, load_cached_scan_with_target},
-    fix_var::{collect_pkg_refs, is_text_path},
     tasks::{list_target_var_text_refs, new_progress_payload, parse_additional_dirs, set_task_progress},
     utils::{decode_text, normalize_zip_path},
 };
@@ -91,8 +90,6 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// A scene is the package itself, not a resource to point elsewhere (the old
-/// page's rule: `Saves/scene/` at any depth).
 /// The scanned package that is this file: by its path as written first (one
 /// pass over strings), else by the real file (a package outside the folders
 /// is kept under its canonical form).
@@ -219,6 +216,8 @@ impl Keeps {
     }
 }
 
+/// A scene is the package itself, not a resource to point elsewhere (the old
+/// page's rule: `Saves/scene/` at any depth).
 fn is_scene(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.starts_with("saves/scene/") || lower.contains("/saves/scene/")
@@ -233,6 +232,152 @@ fn bundle_in(package: &PreparedPackage, path: &str) -> Vec<String> {
         .get(path)
         .map(|s| s.iter().filter(|m| inside.contains(m.as_str())).cloned().collect())
         .unwrap_or_default()
+}
+
+fn parent_dir(path: &str) -> &str {
+    path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
+}
+
+/// `dir` joined with a relative path, `.` and `..` resolved.
+fn join_rel(dir: &str, rel: &str) -> String {
+    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    for p in rel.split('/') {
+        match p {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(p),
+        }
+    }
+    parts.join("/")
+}
+
+/// The `SELF:/…` paths in a text, as written.
+fn self_refs(text: &str) -> Vec<String> {
+    text.match_indices("SELF:/")
+        .map(|(i, _)| {
+            let rest = &text[i + 6..];
+            let end = rest.find(['"', '\'', '\r', '\n']).unwrap_or(rest.len());
+            normalize_zip_path(rest[..end].trim())
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// What another package's copy must also have for the resource to work
+/// from there: files at the same path (`same`: a preset's `SELF:/` files load
+/// from the package it is in), or at the same place relative to the
+/// resource's folder (`beside`: a plugin runs with the files beside it).
+#[derive(Default)]
+struct Needs {
+    same: Vec<String>,
+    beside: Vec<String>,
+}
+
+/// The package's own files its presets, sub-scenes and plugin lists name,
+/// read once.
+struct OwnRefs {
+    /// .vap/.json -> the package's files it refers to (SELF:/ or its own id).
+    refs: HashMap<String, Vec<String>>,
+    /// .cslist -> the files it lists.
+    lists: HashMap<String, Vec<String>>,
+    files: BTreeSet<String>,
+}
+
+impl OwnRefs {
+    fn read(target_path: &Path, target: &PreparedPackage) -> Result<Self> {
+        let files: BTreeSet<String> = target.resource_refs.iter().map(|r| r.internal_path.clone()).collect();
+        let family = naming::package_base(&target.package_id).to_ascii_lowercase();
+        let (mut refs, mut lists) = (HashMap::new(), HashMap::new());
+        let mut archive = ZipArchive::new(fs::File::open(target_path)?)?;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            let name = normalize_zip_path(entry.name());
+            let ext = ext_of(&name);
+            if entry.is_dir() || name == META_PATH || !matches!(ext.as_str(), "json" | "vap" | "cslist") {
+                continue;
+            }
+            let mut raw = Vec::new();
+            if entry.read_to_end(&mut raw).is_err() {
+                continue;
+            }
+            let Some((text, _)) = decode_text(&raw) else {
+                continue;
+            };
+            if ext == "cslist" {
+                let dir = parent_dir(&name).to_string();
+                let listed: Vec<String> = text
+                    .lines()
+                    .map(|l| normalize_zip_path(l.trim()))
+                    .filter(|l| !l.is_empty())
+                    .map(|l| join_rel(&dir, &l))
+                    .filter(|p| files.contains(p))
+                    .collect();
+                lists.insert(name, listed);
+                continue;
+            }
+            let mut found: Vec<String> = self_refs(&text);
+            found.extend(
+                collect_pkg_refs(&text)
+                    .into_iter()
+                    .filter(|(pkg, _)| naming::package_base(pkg).eq_ignore_ascii_case(&family))
+                    .map(|(_, p)| normalize_zip_path(&p)),
+            );
+            found.retain(|p| files.contains(p) && *p != name);
+            found.sort();
+            found.dedup();
+            if !found.is_empty() {
+                refs.insert(name, found);
+            }
+        }
+        Ok(Self { refs, lists, files })
+    }
+
+    fn needs(&self, path: &str) -> Needs {
+        let mut needs = Needs::default();
+        match ext_of(path).as_str() {
+            // Presets inside presets too.
+            "json" | "vap" => {
+                let mut seen: BTreeSet<&str> = BTreeSet::from([path]);
+                let mut todo = vec![path];
+                while let Some(p) = todo.pop() {
+                    for r in self.refs.get(p).into_iter().flatten() {
+                        if seen.insert(r.as_str()) {
+                            needs.same.push(r.clone());
+                            if matches!(ext_of(r).as_str(), "json" | "vap") {
+                                todo.push(r.as_str());
+                            }
+                        }
+                    }
+                }
+            }
+            // A plugin: what its list names, and its own folder (unless it
+            // sits loose in Custom/Scripts beside unrelated plugins).
+            "cs" | "cslist" | "dll" => {
+                let dir = parent_dir(path);
+                let mut beside: BTreeSet<String> = self.lists.get(path).cloned().unwrap_or_default().into_iter().collect();
+                if !dir.is_empty() && !dir.eq_ignore_ascii_case("custom/scripts") {
+                    let prefix = format!("{dir}/");
+                    beside.extend(self.files.iter().filter(|f| f.starts_with(&prefix) && f.as_str() != path).cloned());
+                }
+                needs.beside = beside.into_iter().collect();
+            }
+            _ => {}
+        }
+        needs
+    }
+}
+
+/// Where a plugin's file `member` (beside `item`) is in a copy of `item` at
+/// `copy`: the same place relative to the folder.
+fn beside_at(item: &str, copy: &str, member: &str) -> String {
+    let (item_dir, copy_dir) = (parent_dir(item), parent_dir(copy));
+    match member.strip_prefix(&format!("{item_dir}/")) {
+        Some(rest) if copy_dir.is_empty() => rest.to_string(),
+        Some(rest) => format!("{copy_dir}/{rest}"),
+        None => member.to_string(),
+    }
 }
 
 type FileMap<'a> = HashMap<&'a str, (Option<u32>, u64)>;
@@ -265,12 +410,13 @@ impl<'a> Whole<'a> {
     }
 
     /// What `src`'s copy at `src_path` lacks to stand in for the target's
-    /// file with its `bundle`: each member the same, at the member's own path
-    /// (where Clean points references to it), and the copy's own bundle whole
+    /// `item` with its `bundle` and what it `needs`: each the same, at the
+    /// member's own path (where Clean points references to it, or a preset
+    /// loads it) or beside it (a plugin), and the copy's own bundle whole
     /// (the old page's rule). Empty: the whole resource is there.
-    fn lacks(&mut self, bundle: &[String], src_id: &str, src_path: &str) -> Vec<String> {
+    fn lacks(&mut self, item: &str, bundle: &[String], needs: &Needs, src_id: &str, src_path: &str) -> Vec<String> {
         let Some(src) = self.scanned.packages.get(src_id) else {
-            return bundle.to_vec();
+            return bundle.iter().chain(&needs.same).chain(&needs.beside).cloned().collect();
         };
         let mut out: BTreeSet<String> = self
             .missing
@@ -279,10 +425,13 @@ impl<'a> Whole<'a> {
             .get(src_path)
             .cloned()
             .unwrap_or_default();
+        let target_files = &self.target_files;
         let files = self.files.entry(src_id.to_string()).or_insert_with(|| file_map(src));
-        for m in bundle {
-            let want = self.target_files.get(m.as_str());
-            if want.is_none() || files.get(m.as_str()) != want {
+        let same = bundle.iter().chain(&needs.same).map(|m| (m, m.clone()));
+        let beside = needs.beside.iter().map(|m| (m, beside_at(item, src_path, m)));
+        for (m, at) in same.chain(beside) {
+            let want = target_files.get(m.as_str());
+            if want.is_none() || files.get(at.as_str()) != want {
                 out.insert(m.clone());
             }
         }
@@ -319,6 +468,7 @@ pub(crate) fn clean_candidates(
     };
     let mut by_path: HashMap<String, usize> = HashMap::new();
     let mut whole = Whole::new(scanned, target);
+    let own_refs = OwnRefs::read(target_path, target)?;
     for group in &scanned.duplicate_groups {
         let Some(own) = group.refs.iter().find(|r| r.package_id == target_id) else {
             continue;
@@ -333,13 +483,14 @@ pub(crate) fn clean_candidates(
             continue;
         }
         let bundle = bundle_in(target, &path);
+        let needs = own_refs.needs(&path);
         let mut seen: HashSet<&str> = HashSet::new();
         let mut copies: Vec<CleanSource> = Vec::new();
         for r in &group.refs {
             if r.package_id == target_id || !seen.insert(r.package_id.as_str()) {
                 continue;
             }
-            let lacks = whole.lacks(&bundle, &r.package_id, &r.internal_path);
+            let lacks = whole.lacks(&path, &bundle, &needs, &r.package_id, &r.internal_path);
             copies.push(CleanSource {
                 package_id: r.package_id.clone(),
                 file_path: r.package_file.clone(),
@@ -382,9 +533,12 @@ pub(crate) fn clean_candidates(
         let crcs: Vec<u32> = wanted
             .iter()
             .flat_map(|r| {
+                let needs = own_refs.needs(&r.internal_path);
                 std::iter::once(r.crc32).chain(
                     bundle_in(target, &r.internal_path)
                         .iter()
+                        .chain(&needs.same)
+                        .chain(&needs.beside)
                         .map(|m| target_files.get(m.as_str()).and_then(|(crc, _)| *crc))
                         .collect::<Vec<_>>(),
                 )
@@ -402,13 +556,19 @@ pub(crate) fn clean_candidates(
                 continue;
             };
             let bundle = bundle_in(target, &r.internal_path);
+            let needs = own_refs.needs(&r.internal_path);
             // A member is there when the database has the same file (crc,
-            // size) in that package at the member's path.
-            let has = |pkg: &str, m: &String| {
+            // size) in that package where it must be.
+            let has = |pkg: &str, m: &String, at: &str| {
                 target_files.get(m.as_str()).is_some_and(|(crc, size)| {
                     crc.and_then(|c| found.get(&c))
-                        .is_some_and(|hs| hs.iter().any(|h| h.package_id == pkg && &h.internal_path == m && h.size as u64 == *size))
+                        .is_some_and(|hs| hs.iter().any(|h| h.package_id == pkg && h.internal_path == at && h.size as u64 == *size))
                 })
+            };
+            let lacks = |pkg: &str, copy: &str| -> Vec<String> {
+                let same = bundle.iter().chain(&needs.same).filter(|m| !has(pkg, m, m));
+                let beside = needs.beside.iter().filter(|m| !has(pkg, m, &beside_at(&r.internal_path, copy, m)));
+                same.chain(beside).cloned().collect()
             };
             let mut seen: HashSet<&str> = HashSet::new();
             let extra: Vec<CleanSource> = hits
@@ -421,7 +581,7 @@ pub(crate) fn clean_candidates(
                     internal_path: h.internal_path.clone(),
                     installed: false,
                     already_dependency: is_dep(&h.package_id),
-                    incomplete: bundle.iter().filter(|m| !has(&h.package_id, m)).cloned().collect(),
+                    incomplete: lacks(&h.package_id, &h.internal_path),
                 })
                 .collect();
             if extra.is_empty() {
@@ -506,9 +666,6 @@ pub(crate) fn apply_clean(
     let target_id = find_target(&scanned, target_path)
         .map(|p| p.package_id.clone())
         .ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
-    // Only what was chosen changes: every other duplicate group stays as it
-    // is (the engine would otherwise fall back to a group's first copy,
-    // whichever package that is).
     // Never point at a copy without the whole resource (the page doesn't
     // offer one).
     {
@@ -522,6 +679,7 @@ pub(crate) fn apply_clean(
             .filter_map(|g| g.refs.iter().find(|r| r.package_id == target_id).map(|r| (g.key.as_str(), r.internal_path.as_str())))
             .collect();
         let mut whole = Whole::new(&scanned, target);
+        let own_refs = OwnRefs::read(target_path, target)?;
         for (key, value) in keep_map {
             let Some((pkg, path)) = value.split_once(':') else {
                 continue;
@@ -536,12 +694,15 @@ pub(crate) fn apply_clean(
             let Some(own) = own else {
                 continue;
             };
-            let lacks = whole.lacks(&bundle_in(target, own), pkg, path);
+            let lacks = whole.lacks(own, &bundle_in(target, own), &own_refs.needs(own), pkg, path);
             if !lacks.is_empty() {
                 bail!("{pkg} doesn't have all of {own} ({}): choose another copy", lacks.join(", "));
             }
         }
     }
+    // Only what was chosen changes: every other duplicate group stays as it
+    // is (the engine would otherwise fall back to a group's first copy,
+    // whichever package that is).
     let mut keep_map = keep_map.clone();
     for group in &scanned.duplicate_groups {
         keep_map.entry(group.key.clone()).or_insert_with(|| KEEP_ALL_VALUE.to_string());
@@ -586,7 +747,20 @@ pub(crate) fn apply_clean(
         fs::copy(target_path, &backup).with_context(|| format!("failed to back up to {}", backup.display()))?;
         result.backup_path = Some(backup.to_string_lossy().to_string());
     }
-    rewrite_package(&scanned, package, &package.file_path)?;
+    // Written beside the package, then moved over it in one step: the package
+    // is never missing, and nothing is left behind if either step fails.
+    let file_name = package
+        .file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow!("invalid file name"))?;
+    let staging = package.file_path.with_file_name(format!("{file_name}.clean-tmp"));
+    let written = rewrite_package(&scanned, package, &staging)
+        .and_then(|()| fs::rename(&staging, &package.file_path).map_err(anyhow::Error::from));
+    if let Err(err) = written {
+        let _ = fs::remove_file(&staging);
+        return Err(err).with_context(|| format!("couldn't write {} (is VaM using it?)", package.file_path.display()));
+    }
     result.size_after = fs::metadata(target_path).map(|m| m.len()).unwrap_or(0);
     Ok(result)
 }
