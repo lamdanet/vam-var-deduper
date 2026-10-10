@@ -65,6 +65,10 @@ pub(crate) struct CleanItem {
     pub(crate) bundle: Vec<String>,
     /// Installed packages first.
     pub(crate) copies: Vec<CleanSource>,
+    /// Why it stays whatever copy exists (see `Keeps`): `script` or
+    /// `picture:<the file it is the picture of>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stays: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,6 +143,80 @@ fn self_aliases(target_path: &Path, target_id: &str, scanned: &ScannedData) -> R
         }
     }
     Ok(out)
+}
+
+const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff", "tga"];
+
+fn ext_of(path: &str) -> String {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
+/// What in the package itself keeps a file where it is, whatever copy exists:
+/// - a plugin script in it names the path (code builds it at runtime, e.g.
+///   `GetPackagePath(this) + "Custom/…/LensDirt00.png"`): Clean can't change
+///   code;
+/// - an image that is the picture of a file beside it (`Preset_X.jpg` next to
+///   `Preset_X.vap`): VaM finds it by name, there is no reference to point
+///   elsewhere. A .vam/.vmi's picture goes with its item instead.
+struct Keeps {
+    scripts: String,
+    /// Lowercase path without extension -> the non-image files with it.
+    named: HashMap<String, Vec<String>>,
+}
+
+impl Keeps {
+    fn read(target_path: &Path, target: &PreparedPackage) -> Result<Self> {
+        let mut scripts = String::new();
+        let mut archive = ZipArchive::new(fs::File::open(target_path)?)?;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            let name = normalize_zip_path(entry.name());
+            if entry.is_dir() || !matches!(ext_of(&name).as_str(), "cs" | "cslist") {
+                continue;
+            }
+            let mut raw = Vec::new();
+            if entry.read_to_end(&mut raw).is_ok() {
+                if let Some((text, _)) = decode_text(&raw) {
+                    scripts.push_str(&text.to_lowercase());
+                    scripts.push('\n');
+                }
+            }
+        }
+        let mut named: HashMap<String, Vec<String>> = HashMap::new();
+        for r in &target.resource_refs {
+            let ext = ext_of(&r.internal_path);
+            if IMAGE_EXTS.contains(&ext.as_str()) || r.internal_path == META_PATH {
+                continue;
+            }
+            let stem = r.internal_path[..r.internal_path.len() - ext.len()].trim_end_matches('.').to_lowercase();
+            named.entry(stem).or_default().push(r.internal_path.clone());
+        }
+        Ok(Self { scripts, named })
+    }
+
+    /// Why `path` stays, if it does; `gone` are the paths leaving with it (a
+    /// picture goes along when the file it shows goes too).
+    fn reason(&self, path: &str, gone: &dyn Fn(&str) -> bool) -> Option<String> {
+        if self.scripts.contains(&path.to_lowercase()) {
+            return Some("script".to_string());
+        }
+        let ext = ext_of(path);
+        if !IMAGE_EXTS.contains(&ext.as_str()) {
+            return None;
+        }
+        let stem = path[..path.len() - ext.len()].trim_end_matches('.').to_lowercase();
+        let files = self.named.get(&stem)?;
+        // A .vam/.vmi's picture (beside its .vaj/.vab/.vmb too) belongs to
+        // that item and moves with it.
+        if files.iter().any(|f| matches!(ext_of(f).as_str(), "vam" | "vmi")) {
+            return None;
+        }
+        files.iter().find(|f| !gone(f)).map(|f| format!("picture:{f}"))
+    }
 }
 
 fn is_scene(path: &str) -> bool {
@@ -281,6 +359,7 @@ pub(crate) fn clean_candidates(
             bundle,
             path,
             copies,
+            stays: None,
         });
     }
 
@@ -358,10 +437,20 @@ pub(crate) fn clean_candidates(
                         size: r.effective_size.max(r.size),
                         bundle,
                         copies: extra,
+                        stays: None,
                     });
                 }
             }
         }
+    }
+
+    // What the package itself keeps in place: a file a plugin script in it
+    // names, or the picture of a file beside it.
+    let keeps = Keeps::read(target_path, target)?;
+    for item in &mut report.items {
+        item.stays = std::iter::once(&item.path)
+            .chain(item.bundle.iter())
+            .find_map(|p| keeps.reason(p, &|_| false));
     }
 
     report.items.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
@@ -468,6 +557,16 @@ pub(crate) fn apply_clean(
         .ok_or_else(|| anyhow!("the package isn't in the scan"))?;
     if package.removed_paths.is_empty() && package.required_dependencies.is_empty() {
         bail!("nothing to change");
+    }
+    // Never remove what the package itself keeps in place (the page doesn't
+    // offer it).
+    let keeps = Keeps::read(target_path, package)?;
+    let gone = |p: &str| package.removed_paths.contains(p);
+    if let Some((path, why)) = package.removed_paths.iter().find_map(|p| keeps.reason(p, &gone).map(|w| (p, w))) {
+        match why.strip_prefix("picture:") {
+            Some(of) => bail!("{path} is the picture of {of}: it stays"),
+            None => bail!("a plugin script in the package loads {path} by its path: it stays"),
+        }
     }
     let mut result = CleanResult {
         removed_files: package.removed_paths.len() as u32,

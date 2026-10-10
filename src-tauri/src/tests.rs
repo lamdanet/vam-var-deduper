@@ -7096,6 +7096,61 @@ fn database_log_is_emptied_at_open_and_kept_small() {
 }
 
 #[test]
+fn clean_var_keeps_what_the_package_itself_needs() {
+    use crate::clean_var::{apply_clean, clean_candidates};
+
+    let dir = repo_root().join("tmp_clean_var_keeps_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    let scene = br#"{ "lut": "SELF:/Custom/Assets/lut.png", "pic": "SELF:/Custom/Presets/Preset_A.jpg", "tex": "SELF:/Custom/tex.png", "cloth": "SELF:/Custom/Clothing/x.vam" }"#;
+    // A plugin builds this path in code: Clean can't rewrite it.
+    let script = br#"string lut = Utils.GetPackagePath(this) + "Custom/Assets/LUT.png";"#;
+    let files: Vec<(&str, &[u8])> = vec![
+        ("Custom/Assets/lut.png", &b"lut-image"[..]),
+        ("Custom/Presets/Preset_A.vap", &b"{ }"[..]),
+        ("Custom/Presets/Preset_A.jpg", &b"preset-picture"[..]),
+        ("Custom/tex.png", &b"plain-texture"[..]),
+        ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
+        ("Custom/Clothing/x.vaj", &b"{}"[..]),
+        ("Custom/Clothing/x.vab", &b"unity-x"[..]),
+        ("Custom/Clothing/x.jpg", &b"clothing-picture"[..]),
+    ];
+    let target = vars.join("T.Scene.1.var");
+    let mut own = files.clone();
+    own.push(("Saves/scene/s.json", &scene[..]));
+    own.push(("Custom/Scripts/p.cs", &script[..]));
+    write_test_var_with_deps(&target, &[], &own);
+    write_test_var_with_deps(&vars.join("S.Pack.1.var"), &[], &files);
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&target), |_, _| {}).expect("scan");
+    let report = clean_candidates(&target, &scanned, None).expect("candidates");
+    let item = |p: &str| report.items.iter().find(|i| i.path == p).unwrap_or_else(|| panic!("{p}"));
+    assert_eq!(item("Custom/Assets/lut.png").stays.as_deref(), Some("script"), "named in a script (any case)");
+    assert_eq!(item("Custom/Presets/Preset_A.jpg").stays.as_deref(), Some("picture:Custom/Presets/Preset_A.vap"));
+    assert_eq!(item("Custom/tex.png").stays, None);
+    assert_eq!(item("Custom/Clothing/x.vam").stays, None, "a .vam's own picture goes with it");
+
+    let pick = |p: &str| {
+        let mut keep = BTreeMap::new();
+        keep.insert(item(p).key.clone(), format!("S.Pack.1:{p}"));
+        keep
+    };
+    let err = apply_clean(&target, scanned.clone(), &pick("Custom/Assets/lut.png"), None, None).expect_err("refused");
+    assert!(err.to_string().contains("plugin script"), "{err}");
+    let err = apply_clean(&target, scanned.clone(), &pick("Custom/Presets/Preset_A.jpg"), None, None).expect_err("refused");
+    assert!(err.to_string().contains("picture of Custom/Presets/Preset_A.vap"), "{err}");
+    let mut keep = pick("Custom/tex.png");
+    keep.extend(pick("Custom/Clothing/x.vam"));
+    let result = apply_clean(&target, scanned, &keep, None, None).expect("clean");
+    assert_eq!(result.removed_files, 5, "tex.png, and x.vam with its .vaj, .vab and picture");
+    let zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
+    let names: Vec<&str> = zip.file_names().collect();
+    assert!(names.contains(&"Custom/Assets/lut.png") && names.contains(&"Custom/Presets/Preset_A.jpg"), "{names:?}");
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
 fn clean_var_rewrites_older_self_versions_and_restores() {
     use crate::clean_var::{apply_clean, clean_candidates, restore_backup};
 
