@@ -19933,6 +19933,54 @@ button.pkg-stat:focus-visible::after {
   font-size: 12.5px;
 }
 
+/* Clean VARs (new): a small preview in each row, a larger one for the
+   selected file. */
+.cv-view .fm-row.group-row {
+  grid-template-columns: 22px 42px minmax(0, 1fr) auto;
+}
+.cv-row-thumb {
+  display: block;
+  width: 42px;
+  height: 42px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--lib-thumb-bg, var(--surface-2));
+}
+.cv-row-thumb img,
+.cv-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cv-row-thumb.is-none {
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--line) 35%, transparent);
+}
+.cv-preview-btn {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 16px 20px 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.cv-preview {
+  display: block;
+  height: 180px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--lib-thumb-bg, var(--surface-2));
+}
+.cv-preview img {
+  object-fit: contain;
+}
+
 /* A copy missing part of its bundle: shown, not choosable (old page rule). */
 .fm-cand-row.is-disabled {
   cursor: not-allowed;

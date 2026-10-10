@@ -14180,7 +14180,7 @@ async function cvApply() {
       backup,
       backupDir: backup ? backupDir : null,
     });
-    done = { ...(p.clean_result ?? {}), name, points: [...t.points] };
+    done = { ...(p.clean_result ?? {}), name, target, points: [...t.points] };
     vpRefreshAfterMutation().catch(() => {});
   } catch (e) {
     showToast(`Clean failed: ${String(e?.message || e)}`, "error", 8000);
@@ -14190,14 +14190,47 @@ async function cvApply() {
   }
   if (done && token !== CV.token) {
     // Another package was opened meanwhile: say so, don't show it there.
-    showToast(`Cleaned ${name}: ${formatBytesLocal(Number(done.removed_bytes ?? 0))} smaller.`, "success", 8000);
+    showToast(`Cleaned ${name}: ${formatBytesLocal(cvSaved(done))} smaller.`, "success", 8000);
     cvRecentAdd(target, "cleaned");
     return;
   }
   if (done) {
     CV.lastFix = done;
     CV.picks = new Map();
-    cvFlash(`Cleaned: ${formatBytesLocal(Number(done.removed_bytes ?? 0))} smaller. Checking it again…`);
+    cvFlash(`Cleaned: ${formatBytesLocal(cvSaved(done))} smaller. Checking it again…`);
+    await cvScan();
+  }
+}
+
+// What the file on disk lost (the removed files' bytes when the sizes are
+// unknown).
+function cvSaved(fix) {
+  const before = Number(fix?.size_before ?? 0);
+  const after = Number(fix?.size_after ?? 0);
+  return before && after ? Math.max(0, before - after) : Number(fix?.removed_bytes ?? 0);
+}
+
+// #10: put the backup back in place of the package, then check it again.
+async function cvRestore() {
+  const fix = CV.lastFix;
+  if (!invoke || !fix?.backup_path || !fix.target || CV.applying) return;
+  const ok = await showAppConfirm(`Put the backup back in place of ${fix.name}? The cleaned version is replaced by the original.`);
+  if (!ok) return;
+  CV.applying = true;
+  cvRenderStrip();
+  try {
+    const size = await invoke("restore_clean_backup", { backupPath: fix.backup_path, targetVarPath: fix.target });
+    CV.lastFix = { ...fix, restored: Number(size ?? 0) };
+    vpRefreshAfterMutation().catch(() => {});
+  } catch (e) {
+    showToast(`Restore failed: ${String(e?.message || e)}`, "error", 8000);
+    return;
+  } finally {
+    CV.applying = false;
+    cvRender();
+  }
+  if (CV.target === fix.target) {
+    cvFlash("The original is back. Checking it again…");
     await cvScan();
   }
 }
@@ -14398,11 +14431,26 @@ function cvRenderDetails() {
     ? `<div class="fm-report">
         <span class="material-symbols-outlined">check_circle</span>
         <button type="button" class="fm-icon-btn fm-report-close" data-cv-act="fix-report-close" title="Close" aria-label="Close"><span class="material-symbols-outlined">close</span></button>
-        <div><b>Cleaned ${escapeHtml(fix.name)}: ${escapeHtml(formatBytesLocal(Number(fix.removed_bytes ?? 0)))} smaller.</b>
+        <div>${
+          fix.restored
+            ? `<b>Restored ${escapeHtml(fix.name)}: the original is back (${escapeHtml(formatBytesLocal(fix.restored))}).</b>
+               <small>The backup is still in its folder.</small>`
+            : `<b>Cleaned ${escapeHtml(fix.name)}: ${escapeHtml(formatBytesLocal(cvSaved(fix)))} smaller${
+                fix.size_before && fix.size_after ? ` (${escapeHtml(formatBytesLocal(Number(fix.size_before)))} → ${escapeHtml(formatBytesLocal(Number(fix.size_after)))})` : ""
+              }.</b>
           <small>${pkgCount(Number(fix.removed_files ?? 0), "file", "files")} removed; its references point at the copies now.</small>
           ${(fix.dependencies ?? []).length ? `<small class="fm-report-pkgs">Now depends on ${fix.dependencies.map((pkg) => fmPkgLabelHtml(pkg)).join("")}</small>` : ""}
-          <small>${fix.backup_path ? `The original is backed up: <span title="${escapeAttribute(fix.backup_path)}">${escapeHtml(fix.backup_path.split(/[\\/]/).slice(-2).join("\\"))}</span>` : "No backup of the original was kept."}</small>
-          ${fix.backup_path ? `<div class="fm-replace-acts"><button type="button" class="ghost-button fm-small" data-cv-act="show-backup"><span class="material-symbols-outlined">folder_open</span>Show the backup</button></div>` : ""}
+          <small>${fix.backup_path ? `The original is backed up: <span title="${escapeAttribute(fix.backup_path)}">${escapeHtml(fix.backup_path.split(/[\\/]/).slice(-2).join("\\"))}</span>` : "No backup of the original was kept."}</small>`
+        }
+          ${
+            fix.backup_path
+              ? `<div class="fm-replace-acts">${
+                  fix.restored
+                    ? ""
+                    : `<button type="button" class="ghost-button fm-small" data-cv-act="restore" ${CV.applying ? "disabled" : ""}><span class="material-symbols-outlined">undo</span>Restore the original</button>`
+                }<button type="button" class="ghost-button fm-small" data-cv-act="show-backup"><span class="material-symbols-outlined">folder_open</span>Show the backup</button></div>`
+              : ""
+          }
         </div>
       </div>`
     : "";
@@ -14503,6 +14551,95 @@ function cvPkgChips(p) {
   ].join("");
 }
 
+const CV_ROW_PREVIEW_MAX = 4 * 1024 * 1024;
+
+// This page's previews: each image is read once, shrunk here, and only the
+// small copy is kept (a texture can be 15 MB).
+const CV_THUMBS = new Map();
+const CV_THUMB_MAX = 120;
+const CV_THUMB_Q = { active: 0, queue: [] };
+
+function cvThumbKey(entry, px) {
+  return `${CV.target}::${entry}::${px}`;
+}
+
+function cvThumbHtml(entry, cls, px) {
+  const url = CV_THUMBS.get(cvThumbKey(entry, px));
+  return `<span class="${cls}" data-cv-thumb="${escapeAttribute(entry)}" data-cv-px="${px}">${url ? `<img alt="" src="${escapeAttribute(url)}" />` : ""}</span>`;
+}
+
+function cvShrink(url, px) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, px / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+function cvThumbWatch(root) {
+  root?.querySelectorAll("[data-cv-thumb]").forEach((el) => {
+    if (el.querySelector("img") || CV_THUMBS.get(cvThumbKey(el.getAttribute("data-cv-thumb"), el.getAttribute("data-cv-px"))) === null) return;
+    CV_THUMB_Q.queue.push(el);
+  });
+  cvThumbPump();
+}
+
+// Two at a time: each reads an archive entry, then the page shrinks it.
+function cvThumbPump() {
+  while (CV_THUMB_Q.active < 2 && CV_THUMB_Q.queue.length) {
+    const el = CV_THUMB_Q.queue.shift();
+    if (!el.isConnected) continue;
+    const entry = el.getAttribute("data-cv-thumb");
+    const px = Number(el.getAttribute("data-cv-px")) || 96;
+    const key = cvThumbKey(entry, px);
+    if (CV_THUMBS.has(key)) {
+      cvThumbPaint(entry, px, CV_THUMBS.get(key));
+      continue;
+    }
+    const target = CV.target;
+    CV_THUMB_Q.active += 1;
+    invoke("get_var_image", { filePath: target, entry })
+      .then((url) => (url ? cvShrink(url, px) : null))
+      .catch(() => null)
+      .then((small) => {
+        if (CV_THUMBS.size >= CV_THUMB_MAX) CV_THUMBS.delete(CV_THUMBS.keys().next().value);
+        CV_THUMBS.set(`${target}::${entry}::${px}`, small);
+        if (target === CV.target) cvThumbPaint(entry, px, small);
+      })
+      .finally(() => {
+        CV_THUMB_Q.active -= 1;
+        cvThumbPump();
+      });
+  }
+}
+
+function cvThumbPaint(entry, px, url) {
+  if (!url) return;
+  cvView()
+    ?.querySelectorAll("[data-cv-thumb]")
+    .forEach((el) => {
+      if (el.getAttribute("data-cv-thumb") === entry && Number(el.getAttribute("data-cv-px")) === px && !el.querySelector("img")) {
+        el.innerHTML = `<img alt="" src="${escapeAttribute(url)}" />`;
+      }
+    });
+}
+
+// The image to show for a file: itself, or a .vam/.vmi's same-stem image.
+function cvPreviewEntry(item) {
+  const path = item?.path ?? "";
+  if (/\.(png|jpe?g)$/i.test(path)) return path;
+  const stem = path.replace(/\.[^./]+$/, "").toLowerCase();
+  return (item?.bundle ?? []).find((m) => /\.(png|jpe?g)$/i.test(m) && m.replace(/\.[^./]+$/, "").toLowerCase() === stem) ?? "";
+}
+
 function cvFileText(path) {
   const slash = path.lastIndexOf("/");
   const type = fmFileType(path);
@@ -14565,12 +14702,19 @@ function cvRenderList() {
           : `<span class="fm-dim" title="No copy has the whole resource">stays: no whole copy</span>`;
       return `<div class="group-row missing-row fm-row${i.key === CV.selFile ? " active focused" : ""}${pick ? " is-chosen" : ""}" data-cv-frow="${escapeAttribute(i.key)}" role="option" tabindex="${i.key === CV.selFile ? 0 : -1}">
           <span class="material-symbols-outlined fm-row-state${pick ? "" : " is-dot"}">${pick ? "check_circle" : "fiber_manual_record"}</span>
+          ${(() => {
+            const entry = cvPreviewEntry(i);
+            return entry && (entry !== i.path || Number(i.size ?? 0) <= CV_ROW_PREVIEW_MAX)
+              ? cvThumbHtml(entry, "cv-row-thumb", 96)
+              : `<span class="cv-row-thumb is-none" title="${entry ? "A large image: shown when you select it" : ""}"><span class="material-symbols-outlined">${entry ? "image" : "draft"}</span></span>`;
+          })()}
           <span class="fm-row-text"><span class="fm-row-name" title="${escapeAttribute(i.path)}">${escapeHtml(ft.name)}</span>
             <span class="fm-row-dir">${fmTypeChip(ft.type.label)}${ft.type.rest ? `<span class="fm-row-folder"><span class="material-symbols-outlined">folder</span><span class="fm-trunc">${escapeHtml(ft.type.rest)}</span></span>` : ""}<span class="fm-dim">${escapeHtml(formatBytesLocal(Number(i.size ?? 0)))}</span></span></span>
           ${right}
         </div>`;
     })
     .join("");
+  cvThumbWatch(host);
 }
 
 function cvRenderDetail() {
@@ -14609,6 +14753,11 @@ function cvRenderDetail() {
     .join("");
   host.innerHTML = `<div class="fm-strip" id="cv-strip"></div><h2 class="sr-only">Its copies</h2>
     <div class="detail-panel fm-detail-body">
+      ${
+        cvPreviewEntry(item)
+          ? `<button type="button" class="cv-preview-btn" data-cv-act="zoom" title="Show it larger">${cvThumbHtml(cvPreviewEntry(item), "cv-preview", 480)}</button>`
+          : ""
+      }
       <div class="fm-ref-head fm-ref-title"><span class="chip">${escapeHtml(formatBytesLocal(Number(item.size ?? 0)))}</span>
         <div class="fm-ref-head-text"><b title="${escapeAttribute(item.path)}">${escapeHtml(ft.name)}</b>
           <small>${escapeHtml(item.path)}${(item.bundle ?? []).length ? ` · + ${pkgCount(item.bundle.length, "file goes", "files go")} with it` : ""}</small></div></div>
@@ -14622,6 +14771,7 @@ function cvRenderDetail() {
       <section class="fm-sources"><h3 class="iz-files-h">Packages with this file <small>${(item.copies ?? []).length}</small></h3><div class="fm-cands">${cards}</div></section>
     </div>`;
   libThumbWatch(host);
+  cvThumbWatch(host);
   cvRenderStrip();
   requestAnimationFrame(cvFitPanel);
 }
@@ -14732,6 +14882,16 @@ function cvOnClick(e) {
     case "show-file":
       invoke("show_in_explorer", { path: CV.target }).catch(() => {});
       break;
+    case "zoom": {
+      // The full image, read when asked for (not kept).
+      const entry = cvPreviewEntry(cvItems().find((i) => i.key === CV.selFile));
+      if (entry) {
+        invoke("get_var_image", { filePath: CV.target, entry })
+          .then((url) => url && openImageZoom(url, entry.split("/").pop()))
+          .catch(() => {});
+      }
+      break;
+    }
     case "plan":
       CV.planOpen = !CV.planOpen;
       cvRenderDetails();
@@ -14739,6 +14899,9 @@ function cvOnClick(e) {
     case "fix-report-close":
       CV.lastFix = null;
       cvRenderDetails();
+      break;
+    case "restore":
+      cvRestore();
       break;
     case "show-backup":
       if (CV.lastFix?.backup_path) invoke("show_in_explorer", { path: CV.lastFix.backup_path }).catch(() => {});
@@ -14801,9 +14964,23 @@ function setupCleanVars() {
     view.addEventListener("click", cvOnClick);
     view.addEventListener("change", cvOnChange);
     view.addEventListener("keydown", (e) => {
-      if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-cv-copy]")) {
+      if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-cv-copy], [data-cv-frow]")) {
         e.preventDefault();
         e.target.click();
+        return;
+      }
+      if ((e.key === "ArrowDown" || e.key === "ArrowUp") && e.target.matches?.("[data-cv-frow]")) {
+        const rows = [...document.querySelectorAll("#cv-list [data-cv-frow]")];
+        const next = rows[rows.indexOf(e.target) + (e.key === "ArrowDown" ? 1 : -1)];
+        if (!next) return;
+        e.preventDefault();
+        const key = next.getAttribute("data-cv-frow");
+        CV.selFile = key;
+        cvRenderList();
+        cvRenderDetail();
+        const row = document.querySelector(`#cv-list [data-cv-frow="${CSS.escape(key)}"]`);
+        row?.focus();
+        row?.scrollIntoView({ block: "nearest" });
       }
     });
   }
