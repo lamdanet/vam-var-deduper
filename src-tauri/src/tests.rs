@@ -7096,6 +7096,84 @@ fn database_log_is_emptied_at_open_and_kept_small() {
 }
 
 #[test]
+fn clean_var_offers_and_uses_packages_only_the_database_knows() {
+    use crate::clean_var::{apply_clean, clean_candidates};
+
+    let dir = repo_root().join("tmp_clean_var_db_test");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+    let vars = dir.join("vars");
+    let scene = br#"{ "img": "SELF:/Custom/a.png", "cloth": "SELF:/Custom/Clothing/x.vam" }"#;
+    let target = vars.join("T.Scene.1.var");
+    write_test_var_with_deps(
+        &target,
+        &[],
+        &[
+            ("Saves/scene/s.json", &scene[..]),
+            ("Custom/a.png", &b"image-a"[..]),
+            ("Custom/Clothing/x.vam", &br#"{ "id": "x" }"#[..]),
+            ("Custom/Clothing/x.vaj", &b"{}"[..]),
+            ("Custom/Clothing/x.vab", &b"unity-x"[..]),
+        ],
+    );
+    let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&target), |_, _| {}).expect("scan");
+    assert!(scanned.duplicate_groups.is_empty(), "no copy in the folders");
+    let own: HashMap<String, (u32, u64)> = scanned.packages["T.Scene.1"]
+        .resource_refs
+        .iter()
+        .map(|r| (r.internal_path.clone(), (r.crc32.expect("crc"), r.size)))
+        .collect();
+
+    // The database knows two packages: one with the image and the whole
+    // clothing item, one with the item but not its .vab.
+    let db = crate::db::open_in_memory().expect("db");
+    {
+        let conn = db.conn.lock().expect("lock");
+        crate::db::upsert_package(&conn, "D.Whole.1", "C:/gone/D.Whole.1.var", 1, 1, None).expect("whole");
+        crate::db::upsert_package(&conn, "D.Part.1", "C:/gone/D.Part.1.var", 1, 1, None).expect("part");
+        let row = |pkg: &str, path: &str| {
+            let (crc, size) = own[path];
+            conn.execute(
+                "INSERT INTO resources (package_id, internal_path, crc32, size, effective_size) VALUES (?1, ?2, ?3, ?4, ?4)",
+                rusqlite::params![pkg, path, crc as i64, size as i64],
+            )
+            .expect("row");
+        };
+        for path in ["Custom/a.png", "Custom/Clothing/x.vam", "Custom/Clothing/x.vaj", "Custom/Clothing/x.vab"] {
+            row("D.Whole.1", path);
+        }
+        row("D.Part.1", "Custom/Clothing/x.vam");
+        row("D.Part.1", "Custom/Clothing/x.vaj");
+    }
+
+    let report = clean_candidates(&target, &scanned, Some(&db)).expect("candidates");
+    let item = |p: &str| report.items.iter().find(|i| i.path == p).unwrap_or_else(|| panic!("{p}"));
+    let a = item("Custom/a.png");
+    assert!(a.key.starts_with("dbfind|"), "{}", a.key);
+    let whole = a.copies.iter().find(|c| c.package_id == "D.Whole.1").expect("offered");
+    assert!(!whole.installed && whole.incomplete.is_empty());
+    let x = item("Custom/Clothing/x.vam");
+    let lacks = |pkg: &str| x.copies.iter().find(|c| c.package_id == pkg).expect(pkg).incomplete.clone();
+    assert!(lacks("D.Whole.1").is_empty());
+    assert_eq!(lacks("D.Part.1"), vec!["Custom/Clothing/x.vab".to_string()], "the database shows what it lacks");
+
+    let mut keep = BTreeMap::new();
+    keep.insert(a.key.clone(), "D.Whole.1:Custom/a.png".to_string());
+    let result = apply_clean(&target, scanned, &keep, None, Some(&db)).expect("clean");
+    assert_eq!(result.removed_files, 1);
+    assert_eq!(result.dependencies, vec!["D.Whole.1".to_string()]);
+    let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
+    let mut text = String::new();
+    zip.by_name("Saves/scene/s.json").expect("scene").read_to_string(&mut text).expect("read");
+    assert!(text.contains("D.Whole.1:/Custom/a.png"), "{text}");
+    let mut meta = String::new();
+    zip.by_name("meta.json").expect("meta").read_to_string(&mut meta).expect("read");
+    assert!(meta.contains("D.Whole.1"), "the dependency is declared: {meta}");
+    fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
 fn clean_var_presets_and_plugins_need_their_files_in_the_copy() {
     use crate::clean_var::{apply_clean, clean_candidates};
 
