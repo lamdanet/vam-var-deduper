@@ -62,8 +62,8 @@
               <span class="material-symbols-outlined" id="sidebar-toggle-icon">menu_open</span>
             </button>
             <nav class="sidebar-nav">
-              <a class="sidebar-link active" href="#" data-sidebar-link="db-find">
-                <span class="material-symbols-outlined">find_in_page</span>
+              <a class="sidebar-link active" href="#" data-sidebar-link="clean-by-file">
+                <span class="material-symbols-outlined">compress</span>
                 <span class="sidebar-label">Clean VARs</span>
               </a>
               <a class="sidebar-link" href="#" data-sidebar-link="build-db">
@@ -98,10 +98,6 @@
                 <span class="material-symbols-outlined">download_for_offline</span>
                 <span class="sidebar-label">Internalize Resources</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="clean-by-file">
-                <span class="material-symbols-outlined">compress</span>
-                <span class="sidebar-label">Clean VARs (new)</span>
-              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="dependency-usage">
                 <span class="material-symbols-outlined">donut_small</span>
                 <span class="sidebar-label">Dependency Usage</span>
@@ -124,280 +120,6 @@
             </nav>
           </div>
         </aside>
-
-      <!-- Clean VARs page — the primary workspace (default landing page). Every id is
-           prefixed `dbf-` (historically cloned from the removed Overview workspace) so render
-           code and CSS selectors can target this page without touching the other views. -->
-      <section id="dbf-page" class="app-main dbf-view">
-        <p class="hero-copy" id="dbf-hero-copy"></p>
-
-        <!-- Top Grid: Source Config + VAR Details -->
-        <section class="dashboard-grid">
-          <!-- Source Configuration -->
-          <article class="card source-card" data-purpose="path-settings">
-            <header class="card-eyebrow">Source Configuration</header>
-            <div class="source-body">
-              <div class="path-grid">
-                <div id="dbf-target-var-row" class="path-row">
-                  <span class="path-label" id="dbf-target-var-label"></span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">description</span>
-                      <input id="dbf-target-var-path" type="text" placeholder="D:\Somewhere\Target.var" />
-                    </div>
-                    <button id="dbf-pick-target-var-button" class="ghost-button" type="button"></button>
-                    <button id="dbf-open-var-details-button" class="ghost-button" type="button" title="Open the target VAR's details" disabled>
-                      <span class="material-symbols-outlined">open_in_new</span>
-                      <span id="dbf-open-var-details-label">Details</span>
-                    </button>
-                  </div>
-                </div>
-                <div class="path-row">
-                  <span class="path-label" id="dbf-input-label"></span>
-                  <div class="vam-source" data-vam-source><span class="vam-source-path is-missing">VaM directory not set</span></div>
-                  <!-- Mirrors Settings → VaM directory\AddonPackages (see applyVamDir). -->
-                  <input id="dbf-input-dir" type="hidden" />
-                </div>
-                <div class="path-row">
-                  <span class="path-label" id="dbf-additional-dirs-label"></span>
-                  <div class="additional-dirs">
-                    <div id="dbf-additional-dirs" class="additional-dirs-list"></div>
-                    <button id="dbf-add-folder-button" class="ghost-button" type="button"></button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="profile-row" id="dbf-mode-row">
-                <span class="profile-row-label" id="dbf-mode-label">Mode</span>
-                <div class="radio-group" role="radiogroup" aria-labelledby="dbf-mode-label">
-                  <label class="radio-pill">
-                    <input type="radio" name="dbf-mode" value="db" checked />
-                    <span>Database</span>
-                  </label>
-                  <label class="radio-pill">
-                    <input type="radio" name="dbf-mode" value="local" />
-                    <span>Local only</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="action-row">
-                <button id="dbf-scan-button" class="primary-button action-button" type="button"></button>
-              </div>
-            </div>
-          </article>
-
-          <!-- VAR Details + Run CTA -->
-          <article class="card details-card">
-            <header class="card-eyebrow">VAR Details</header>
-            <div id="dbf-var-info-panel" class="var-info-panel">
-              <p id="dbf-var-info-empty" class="var-info-empty"></p>
-              <div id="dbf-var-info-body" class="var-info-body hidden">
-                <div class="var-info-text">
-                  <h2 class="var-info-title">
-                    <span id="dbf-var-info-label"></span>
-                  </h2>
-                  <div class="var-info-grid">
-                    <div id="dbf-var-info-size-row" class="var-info-row">
-                      <span class="var-info-key" id="dbf-var-info-size-key"></span>
-                      <span id="dbf-var-info-size-val"></span>
-                    </div>
-                    <div id="dbf-var-info-time-row" class="var-info-row">
-                      <span class="var-info-key" id="dbf-var-info-time-key"></span>
-                      <span id="dbf-var-info-time-val"></span>
-                    </div>
-                    <div id="dbf-var-info-scene-row" class="var-info-row hidden">
-                      <span class="var-info-key" id="dbf-var-info-scene-key"></span>
-                      <span id="dbf-var-info-scene-val" class="var-info-val-mono"></span>
-                    </div>
-                  </div>
-                </div>
-                <div class="var-info-thumb hidden">
-                  <img id="dbf-var-info-scene-img" alt="scene preview" />
-                </div>
-              </div>
-            </div>
-
-            <!-- Run-time settings: output/VAP folders + replace/backup/VAP
-                 toggles belong with the Run button, not the scan controls. -->
-            <div class="dbf-run-settings">
-              <div class="path-grid">
-                <div class="path-row">
-                  <span class="path-label" id="dbf-output-label"></span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">folder_open</span>
-                      <input id="dbf-output-dir" type="text" placeholder="D:\Vars_deduped" />
-                    </div>
-                    <button id="dbf-pick-output-button" class="ghost-button" type="button"></button>
-                    <button id="dbf-open-output-button" class="ghost-button" type="button"></button>
-                  </div>
-                </div>
-                <div class="path-row">
-                  <span class="path-label" id="dbf-vap-label"></span>
-                  <div class="input-with-button">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">tune</span>
-                      <input id="dbf-vap-dir" type="text" placeholder="D:\VAM\Custom\Atom\Person\Appearance" />
-                    </div>
-                    <button id="dbf-pick-vap-button" class="ghost-button" type="button"></button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="toggle-row">
-                <label class="check-row">
-                  <input id="dbf-replace-in-place" type="checkbox" />
-                  <span id="dbf-replace-in-place-label"></span>
-                </label>
-                <label class="check-row">
-                  <input id="dbf-backup-changed" type="checkbox" checked disabled />
-                  <span id="dbf-backup-changed-label"></span>
-                </label>
-                <label class="check-row">
-                  <input id="dbf-process-vap" type="checkbox" />
-                  <span id="dbf-process-vap-label"></span>
-                </label>
-              </div>
-              <div id="dbf-replace-warning" class="replace-warning hidden"></div>
-            </div>
-
-            <div class="run-cta">
-              <div class="run-cta-text">
-                <span class="run-cta-eyebrow">Final Step</span>
-                <span class="run-cta-sub">Execute duplicate resolution</span>
-              </div>
-              <button id="dbf-run-button" class="accent-button action-button" type="button" disabled></button>
-            </div>
-          </article>
-        </section>
-
-        <!-- Progress -->
-        <section id="dbf-progress-card" class="progress-card card hidden">
-          <div class="progress-head">
-            <strong id="dbf-progress-title"></strong>
-            <span id="dbf-progress-percent">0%</span>
-          </div>
-          <div class="progress-track">
-            <div id="dbf-progress-bar" class="progress-bar"></div>
-          </div>
-          <p id="dbf-progress-message" class="panel-subtitle"></p>
-        </section>
-
-        <!-- Groups + Detail -->
-        <section class="content-grid">
-          <!-- Left: Group Overview -->
-          <article class="panel card">
-            <div class="panel-head panel-head-groups">
-              <div class="panel-head-main">
-                <div class="groups-header-row">
-                  <h2 id="dbf-groups-title"></h2>
-                  <div class="group-filter-stack">
-                    <div class="input-with-icon">
-                      <span class="material-symbols-outlined input-leading-icon">search</span>
-                      <input id="dbf-group-filter" type="search" placeholder="Filter by path / package / hash" />
-                    </div>
-                  </div>
-                </div>
-                <p class="panel-subtitle" id="dbf-groups-subtitle"></p>
-                <div id="dbf-overview-stats" class="overview-stats">
-                  <span id="dbf-stat-packages-card" class="overview-stat">
-                    <span id="dbf-stat-packages-label"></span>
-                    <strong id="dbf-stat-packages">0</strong>
-                  </span>
-                  <span id="dbf-stat-groups-card" class="overview-stat">
-                    <span id="dbf-stat-groups-label"></span>
-                    <strong id="dbf-stat-groups">0</strong>
-                  </span>
-                  <span id="dbf-stat-space-card" class="overview-stat overview-stat-accent">
-                    <span id="dbf-stat-space-label"></span>
-                    <strong id="dbf-stat-space">0 B</strong>
-                  </span>
-                  <span id="dbf-stat-filtered-card" class="overview-stat">
-                    <span id="dbf-stat-filtered-label"></span>
-                    <strong id="dbf-stat-filtered">0</strong>
-                  </span>
-                  <span id="dbf-stat-modified-card" class="overview-stat">
-                    <span id="dbf-stat-modified-label"></span>
-                    <strong id="dbf-stat-modified">0</strong>
-                  </span>
-                  <span id="dbf-stat-current-size-card" class="overview-stat hidden">
-                    <span id="dbf-stat-current-size-label"></span>
-                    <strong id="dbf-stat-current-size">0 B</strong>
-                  </span>
-                  <span id="dbf-stat-estimated-size-card" class="overview-stat hidden">
-                    <span id="dbf-stat-estimated-size-label"></span>
-                    <strong id="dbf-stat-estimated-size">0 B</strong>
-                  </span>
-                  <span id="dbf-stat-reclaimed-size-card" class="overview-stat overview-stat-accent">
-                    <span id="dbf-stat-reclaimed-size-label"></span>
-                    <strong id="dbf-stat-reclaimed-size">0 B</strong>
-                  </span>
-                </div>
-              </div>
-            </div>
-            <p class="selection-hint" id="dbf-selection-hint"></p>
-            <div id="dbf-group-list" class="group-list empty"></div>
-            <div id="dbf-group-pagination" class="group-pagination hidden"></div>
-          </article>
-
-          <!-- Right: Detail / Strategy -->
-          <article class="panel card">
-            <div class="panel-head">
-              <div>
-                <h2 id="dbf-detail-title"></h2>
-                <p class="panel-subtitle" id="dbf-detail-subtitle"></p>
-              </div>
-            </div>
-            <div id="dbf-detail-empty" class="detail-empty"></div>
-            <div id="dbf-detail-panel" class="detail-panel hidden">
-              <div class="detail-meta">
-                <div class="detail-block">
-                  <span id="dbf-detail-hash-label"></span>
-                  <code id="dbf-detail-hash"></code>
-                </div>
-                <div class="detail-chip-row">
-                  <span class="chip" id="dbf-detail-file-count"></span>
-                  <span class="chip chip-accent" id="dbf-detail-space"></span>
-                </div>
-              </div>
-
-              <section id="dbf-detail-preview" class="hidden"></section>
-
-              <section class="keep-actions">
-                <h3 id="dbf-keep-source-title"></h3>
-                <div id="dbf-source-info" class="dbf-source-info"></div>
-                <h4 class="dbf-section-title" id="dbf-local-section-title">Local candidates</h4>
-                <div id="dbf-local-candidates" class="keep-options dbf-keep-options"></div>
-                <div class="dbf-db-header">
-                  <h4 class="dbf-section-title" id="dbf-db-section-title">Database candidates</h4>
-                  <input
-                    id="dbf-source-filter"
-                    type="search"
-                    class="dbf-db-search"
-                    placeholder="Filter by package id…"
-                    autocomplete="off"
-                    spellcheck="false"
-                  />
-                </div>
-                <div id="dbf-db-candidates" class="keep-options dbf-keep-options"></div>
-              </section>
-
-              <section class="quick-actions">
-                <h3 id="dbf-quick-actions-title"></h3>
-                <div class="quick-button-row">
-                  <button id="dbf-reset-keep-button" class="ghost-button" type="button" disabled></button>
-                  <button id="dbf-export-resource-button" class="ghost-button" type="button" disabled></button>
-                </div>
-                <button id="dbf-auto-target-button" class="ghost-button apply-filtered-full" type="button" disabled></button>
-                <button id="dbf-fav-source-button" class="ghost-button apply-filtered-full" type="button" disabled></button>
-                <button id="dbf-apply-filtered-button" class="primary-button apply-filtered-full" type="button" disabled></button>
-                <p class="panel-subtitle" id="dbf-quick-actions-hint"></p>
-              </section>
-            </div>
-          </article>
-        </section>
-      </section>
 
       <!-- Build Database View (hidden by default; revealed by sidebar Build Database link) -->
       <section id="build-db-view" class="app-main build-db-view hidden">
@@ -1655,8 +1377,8 @@
            across every package that uses it (rendered by app.js). -->
       <section id="du-view" class="app-main missing-resources-view fm-view du-view hidden"></section>
 
-      <!-- Clean VARs, the new page (by file; rendered by app.js), beside the
-           old one until it's finished. -->
+      <!-- Clean VARs: one package made smaller, or many cleaned against a
+           source (rendered by app.js). -->
       <section id="cvf-view" class="app-main missing-resources-view fm-view cv-view hidden"></section>
 
       <!-- Settings View (hidden by default; revealed by sidebar Settings link) -->
@@ -1848,36 +1570,6 @@
               </div>
 
               <div class="settings-path-card">
-                <label class="settings-path-label" id="settings-path-output-label" for="settings-output-dir"></label>
-                <div class="input-with-button">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">folder_open</span>
-                    <input id="settings-output-dir" type="text" placeholder="D:\Vars_deduped" />
-                  </div>
-                  <button id="settings-pick-output" class="ghost-button" type="button">
-                    <span class="material-symbols-outlined">folder_open</span>
-                    <span id="settings-pick-output-label"></span>
-                  </button>
-                </div>
-                <p class="settings-path-hint" id="settings-path-output-desc"></p>
-              </div>
-
-              <div class="settings-path-card" id="settings-path-vap-row">
-                <label class="settings-path-label" id="settings-path-vap-label" for="settings-vap-dir"></label>
-                <div class="input-with-button">
-                  <div class="input-with-icon">
-                    <span class="material-symbols-outlined input-leading-icon">tune</span>
-                    <input id="settings-vap-dir" type="text" placeholder="D:\VAM\Custom\Atom\Person\Appearance" />
-                  </div>
-                  <button id="settings-pick-vap" class="ghost-button" type="button">
-                    <span class="material-symbols-outlined">folder_open</span>
-                    <span id="settings-pick-vap-label"></span>
-                  </button>
-                </div>
-                <p class="settings-path-hint" id="settings-path-vap-desc"></p>
-              </div>
-
-              <div class="settings-path-card">
                 <label class="settings-path-label" for="settings-downloads-folder">Downloads folder</label>
                 <div class="input-with-button">
                   <div class="input-with-icon">
@@ -2059,49 +1751,6 @@
                   <span class="theme-card-label" id="settings-theme-emerald-pulse-label"></span>
                 </button>
               </div>
-            </div>
-          </section>
-
-          <div class="settings-divider"></div>
-
-          <!-- Process Preferences -->
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h3 class="settings-section-title" id="settings-scan-title"></h3>
-              <p class="settings-section-desc" id="settings-scan-desc"></p>
-              <span class="settings-section-tag" id="settings-scan-eyebrow"></span>
-            </div>
-            <div class="settings-section-body settings-toggle-stack">
-              <label class="settings-toggle-card">
-                <input id="settings-default-backup" type="checkbox" />
-                <span class="settings-toggle-box" aria-hidden="true">
-                  <span class="material-symbols-outlined">check</span>
-                </span>
-                <span class="settings-toggle-text">
-                  <span class="settings-toggle-title" id="settings-default-backup-label"></span>
-                  <span class="settings-toggle-desc">Create a .bak file of any archive before modification.</span>
-                </span>
-              </label>
-              <label class="settings-toggle-card">
-                <input id="settings-default-replace" type="checkbox" />
-                <span class="settings-toggle-box" aria-hidden="true">
-                  <span class="material-symbols-outlined">check</span>
-                </span>
-                <span class="settings-toggle-text">
-                  <span class="settings-toggle-title" id="settings-default-replace-label"></span>
-                  <span class="settings-toggle-desc">Directly modify archives in the source folder. Use with caution.</span>
-                </span>
-              </label>
-              <label class="settings-toggle-card">
-                <input id="settings-default-vap" type="checkbox" />
-                <span class="settings-toggle-box" aria-hidden="true">
-                  <span class="material-symbols-outlined">check</span>
-                </span>
-                <span class="settings-toggle-text">
-                  <span class="settings-toggle-title" id="settings-default-vap-label"></span>
-                  <span class="settings-toggle-desc">Extract and deduplicate resources within preset (.vap) files.</span>
-                </span>
-              </label>
             </div>
           </section>
 
@@ -2679,20 +2328,6 @@
       </div>
     </div>
 
-    <div id="complete-backdrop" class="dialog-backdrop hidden">
-      <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="complete-title">
-        <h3 id="complete-title"></h3>
-        <p id="complete-message"></p>
-        <button id="complete-report" class="ghost-button hidden" type="button"></button>
-        <p id="complete-sizes" class="complete-sizes"></p>
-        <div class="dialog-actions">
-          <button id="complete-open" class="primary-button" type="button"></button>
-          <button id="complete-open-backup" class="ghost-button" type="button"></button>
-          <button id="complete-ok" class="ghost-button" type="button"></button>
-        </div>
-      </div>
-    </div>
-
     <!-- Image zoom lightbox: opened by clicking a scene preview image. Shows the
          full image with a zoom slider; closes on backdrop click, ESC, or the X. -->
     <div id="image-zoom-backdrop" class="image-zoom-backdrop hidden" data-zoom-close="1">
@@ -2757,8 +2392,7 @@
             var reclaim = document.getElementById("reclaim-space-view");
             var uniqueResources = document.getElementById("unique-resources-view");
             var internalizeResources = document.getElementById("internalize-resources-view");
-            var dbfPage = document.getElementById("dbf-page");
-            if (!settings || !buildDb || !varPackages || !resourceList || !reclaim || !uniqueResources || !internalizeResources || !dbfPage) return;
+            if (!settings || !buildDb || !varPackages || !resourceList || !reclaim || !uniqueResources || !internalizeResources) return;
             // Hub (after VaM Backstage's Hub page) is hidden with the rest.
             var hubView = document.getElementById("hub-view");
             if (hubView) hubView.classList.add("hidden");
@@ -2779,7 +2413,6 @@
             reclaim.classList.add("hidden");
             uniqueResources.classList.add("hidden");
             internalizeResources.classList.add("hidden");
-            dbfPage.classList.add("hidden");
             if (route === "hub" && hubView) {
               hubView.classList.remove("hidden");
               if (window.__refreshHubView) window.__refreshHubView();
@@ -2820,11 +2453,6 @@
             } else if (route === "internalize-resources") {
               internalizeResources.classList.remove("hidden");
               if (window.__refreshInternalizeResourcesView) window.__refreshInternalizeResourcesView();
-            } else if (route === "db-find") {
-              // Clean VARs is the sole workspace page (<section id="dbf-page">).
-              // __switchPage handles per-page state restore; we just reveal it.
-              dbfPage.classList.remove("hidden");
-              if (window.__switchPage) window.__switchPage("db-find");
             }
           });
         });
