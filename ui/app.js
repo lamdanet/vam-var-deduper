@@ -10688,6 +10688,7 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
       // Its other copies show on the card once it's chosen, to switch to.
       const open = isChosen && copies.length > 1;
       const notHere = shown.match === "db" && !c.isSelf && !c.installed;
+      const shownChosen = Boolean(pick && pick.replacement_pkg === pkg && pick.replacement_path === shown.internal_path);
       const tags = [
         c.isSelf ? `<span class="chip chip-accent" title="The file is inside the package you're fixing">Already inside</span>` : "",
         !c.isSelf && fmPref(pkg) === 1 ? `<span class="chip fm-chip-pref" title="You prefer it as a replacement source"><span class="material-symbols-outlined">thumb_up</span>Preferred</span>` : "",
@@ -10726,21 +10727,20 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
           </span>`;
       };
       const sub = [
+        shownChosen ? `<span class="chip fm-chip-chosen" title="The copy this file points at"><span class="material-symbols-outlined">check</span>Chosen</span>` : "",
         shown.internal_path !== ref.ref_path && !open ? `<span class="fm-cand-path" title="${escapeAttribute(shown.internal_path)}">${escapeHtml(shown.internal_path)}</span>` : "",
         copies.length > 1 && !open ? `<span class="fm-dim" title="Choose it to pick another copy">${pkgCount(copies.length, "copy", "copies")}</span>` : "",
       ].join("");
-      // A copy in your folders shows its package's picture (one only in
-      // the database has no file to read it from).
+      // A copy in your folders shows its package's picture, nothing on top of
+      // it; one only in the database (no file to read it from) a plain tile.
       const thumbFile = shown.match === "db" ? "" : c.isSelf ? FM.target : c.package_file || "";
       const thumb = thumbFile
-        ? `${libThumbHtml(thumbFile, libGradient(c.isSelf ? fmTargetId() : pkg), "fm-cand-thumb")}<span class="material-symbols-outlined fm-cand-radio fm-cand-thumb-mark">${
-            isChosen && pick.replacement_path === shown.internal_path ? "radio_button_checked" : "radio_button_unchecked"
-          }</span></div>`
-        : "";
-      return `<div class="fm-cand-row${thumb ? " has-thumb" : ""}${isChosen ? " is-selected" : ""}${!c.isSelf && fmPref(pkg) === -1 ? " is-avoided" : ""}" ${pickAttrs(shown)}>
+        ? `${libThumbHtml(thumbFile, libGradient(c.isSelf ? fmTargetId() : pkg), "fm-cand-thumb")}</div>`
+        : `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>`;
+      return `<div class="fm-cand-row has-thumb${isChosen ? " is-selected" : ""}${!c.isSelf && fmPref(pkg) === -1 ? " is-avoided" : ""}" ${pickAttrs(shown)}>
           ${thumb}
           <div class="fm-cand-top">
-            ${radio(shown, false, Boolean(thumb))}
+            ${radio(shown, false, true)}
             <span class="fm-cand-tags">${tags}</span>
             <span class="fm-cand-acts">
               ${
@@ -14791,13 +14791,13 @@ function cvRenderDetail() {
       const others = usable ? p.items.filter(({ item: x }) => x.key !== item.key).length : 0;
       const lacks = c.incomplete ?? [];
       return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}${usable ? "" : " is-disabled"}" role="radio" tabindex="${usable ? 0 : -1}" aria-checked="${chosen}" aria-disabled="${!usable}" data-cv-copy="${escapeAttribute(c.package_id)}">
-          ${p.installed === false || !p.file ? `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(p.file, libGradient(p.pkg), "fm-cand-thumb")}<span class="material-symbols-outlined fm-cand-radio fm-cand-thumb-mark">${chosen ? "radio_button_checked" : "radio_button_unchecked"}</span></div>`}
+          ${p.installed === false || !p.file ? `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(p.file, libGradient(p.pkg), "fm-cand-thumb")}</div>`}
           <div class="fm-cand-top">
             <span class="fm-cand-pick"><span class="fm-cand-name" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}`)}">${fmPkgLabelHtml(c.package_id)}</span></span>
             <span class="fm-cand-tags">${c === suggest && !pick ? `<span class="chip">Suggested</span>` : ""}${cvPkgChips(p)}</span>
             <span class="fm-cand-acts">${others ? `<button type="button" class="ghost-button fm-tiny" data-cv-useall="${escapeAttribute(c.package_id)}" title="It has ${pkgCount(others, "more of your files", "more of your files")}: point them all here">Use for all ${others + 1}</button>` : ""}</span>
           </div>
-          <div class="fm-cand-sub"><span class="fm-dim">${c.internal_path === item.path ? "same path" : escapeHtml(c.internal_path)}</span></div>
+          <div class="fm-cand-sub">${chosen ? `<span class="chip fm-chip-chosen" title="The copy this file points at"><span class="material-symbols-outlined">check</span>Chosen</span>` : ""}<span class="fm-dim">${c.internal_path === item.path ? "same path" : escapeHtml(c.internal_path)}</span></div>
           ${lacks.length ? `<div class="source-incomplete-warning cv-incomplete" title="${escapeAttribute(`Missing or different in this package:\n${lacks.join("\n")}`)}"><span class="material-symbols-outlined source-incomplete-icon" aria-hidden="true">warning</span><span class="source-incomplete-text">${pkgCount(lacks.length, "file", "files")} of the resource missing or different here — can't point at it</span></div>` : ""}
         </div>`;
     })

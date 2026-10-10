@@ -19863,7 +19863,7 @@ button.pkg-stat:focus-visible::after {
 
 .fm-cand-row.has-thumb {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
   align-items: center;
   column-gap: 10px;
   row-gap: 2px;
@@ -19884,8 +19884,8 @@ button.pkg-stat:focus-visible::after {
 
 .fm-cand-thumb {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 56px;
+  height: 56px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -19898,26 +19898,22 @@ button.pkg-stat:focus-visible::after {
   object-fit: cover;
 }
 
-/* Its radio on the picture's corner; the path lines up under the name. */
-.fm-cand-thumb-mark {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
-  font-size: 17px;
-}
-
-.fm-cand-row:hover .fm-cand-thumb-mark {
-  color: var(--primary);
-}
-
+/* Nothing on the picture: the chosen copy says so beside its name, and the
+   card's border and tint show it. The path lines up under the name. */
 .fm-cand-row.has-thumb .fm-cand-sub {
   padding-left: 0;
 }
 
-.fm-cand-row.is-selected .fm-cand-thumb-mark {
+.chip.fm-chip-chosen {
+  gap: 2px;
+  border-color: color-mix(in srgb, var(--accent-success) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent-success) 16%, transparent);
   color: var(--accent-success);
+  font-weight: 600;
+}
+
+.chip.fm-chip-chosen .material-symbols-outlined {
+  font-size: 15px;
 }
 
 /* The picture takes some width: the name may shrink a little more before
