@@ -7104,7 +7104,7 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
         fs::remove_dir_all(&dir).expect("cleanup");
     }
     let vars = dir.join("vars");
-    let scene = br#"{ "img": "SELF:/Custom/a.png", "cloth": "SELF:/Custom/Clothing/x.vam", "skin": "SELF:/Custom/b.png" }"#;
+    let scene = br#"{ "img": "SELF:/Custom/a.png", "cloth": "SELF:/Custom/Clothing/x.vam" }"#;
     let target = vars.join("T.Scene.1.var");
     write_test_var_with_deps(
         &target,
@@ -7112,22 +7112,17 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
         &[
             ("Saves/scene/s.json", &scene[..]),
             ("Custom/a.png", &b"image-a"[..]),
-            ("Custom/b.png", &b"image-b"[..]),
             ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
             ("Custom/Clothing/x.vaj", &b"{}"[..]),
             ("Custom/Clothing/x.vab", &b"unity-x"[..]),
             ("Custom/unused.png", &b"never-used"[..]),
         ],
     );
-    // Another package uses b.png from it by path: b.png can't go.
-    let user_scene = br#"{ "skin": "T.Scene.latest:/Custom/B.png" }"#;
-    write_test_var_with_deps(&vars.join("U.User.1.var"), &["T.Scene.latest"], &[("Saves/scene/u.json", &user_scene[..])]);
     write_test_var_with_deps(
         &vars.join("S.Pack.1.var"),
         &[],
         &[
             ("Custom/a.png", &b"image-a"[..]),
-            ("Custom/b.png", &b"image-b"[..]),
             ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
             ("Custom/Clothing/x.vaj", &b"{}"[..]),
             ("Custom/Clothing/x.vab", &b"unity-x"[..]),
@@ -7146,15 +7141,7 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
     write_test_var_with_deps(&vars.join("D.Dep.1.var"), &[], &[("Other/a-copy.png", &b"image-a"[..])]);
     let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&target), |_, _| {}).expect("scan");
 
-    let refs = std::sync::Mutex::new(crate::dep_usage::RefCache::default());
-    let report = clean_candidates(&target, &scanned, None, &refs).expect("candidates");
-    assert_eq!(report.users_read, 1, "U.User depends on it");
-    let b = report.items.iter().find(|i| i.path == "Custom/b.png").expect("b");
-    assert_eq!(b.used_by, vec!["U.User.1".to_string()], "U uses it by path (another case, .latest)");
-    let mut used = BTreeMap::new();
-    used.insert(b.key.clone(), "S.Pack.1:Custom/b.png".to_string());
-    let err = apply_clean(&target, scanned.clone(), &used, None, None, &refs).expect_err("refused");
-    assert!(err.to_string().contains("U.User.1"), "{err}");
+    let report = clean_candidates(&target, &scanned, None).expect("candidates");
     let paths: Vec<&str> = report.items.iter().map(|i| i.path.as_str()).collect();
     assert!(paths.contains(&"Custom/a.png") && paths.contains(&"Custom/Clothing/x.vam"), "{paths:?}");
     assert!(!paths.contains(&"Custom/Clothing/x.vaj"), "a bundle member comes with its .vam");
@@ -7172,15 +7159,14 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
     assert_eq!(broken.incomplete, vec!["Custom/Clothing/x.vab".to_string()]);
     let mut bad = BTreeMap::new();
     bad.insert(x.key.clone(), "S.Broken.1:Custom/Clothing/x.vam".to_string());
-    let err = apply_clean(&target, scanned.clone(), &bad, None, None, &refs).expect_err("refused");
+    let err = apply_clean(&target, scanned.clone(), &bad, None, None).expect_err("refused");
     assert!(err.to_string().contains("x.vab"), "{err}");
 
     let mut keep = BTreeMap::new();
     keep.insert(a.key.clone(), "D.Dep.1:Other/a-copy.png".to_string());
     keep.insert(x.key.clone(), "S.Pack.1:Custom/Clothing/x.vam".to_string());
     let backups = dir.join("bk");
-    assert!(report.items.iter().filter(|i| i.path != "Custom/b.png").all(|i| i.used_by.is_empty()));
-    let result = apply_clean(&target, scanned, &keep, Some(&backups), None, &refs).expect("clean");
+    let result = apply_clean(&target, scanned, &keep, Some(&backups), None).expect("clean");
     let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
     let names: Vec<String> = zip.file_names().map(str::to_string).collect();
     assert_eq!(result.removed_files, 4, "a.png, x.vam with its .vaj and .vab; left: {names:?}");
