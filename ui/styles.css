@@ -19904,17 +19904,48 @@ button.pkg-stat:focus-visible::after {
   padding-left: 0;
 }
 
-.chip.fm-chip-chosen {
-  gap: 2px;
-  border-color: color-mix(in srgb, var(--accent-success) 55%, var(--line));
-  background: color-mix(in srgb, var(--accent-success) 16%, transparent);
-  color: var(--accent-success);
-  font-weight: 600;
+/* The slot above the lists: what it shows and, invisible in the same place,
+   the box for the other state, so it keeps one height when you choose. */
+.fm-choice-slot {
+  display: grid;
 }
 
-.chip.fm-chip-chosen .material-symbols-outlined {
-  font-size: 15px;
+.fm-choice-slot > * {
+  grid-area: 1 / 1;
+  min-width: 0;
 }
+
+/* The slot takes the place (and margins) the box had in the panel. */
+.fm-detail-body > .fm-choice-slot {
+  margin: 0 20px 14px;
+}
+
+.fm-choice-slot .fm-best,
+.fm-choice-slot .fm-lead,
+.fm-choice-slot .fm-chosen {
+  margin: 0;
+}
+
+.fm-choice-ghost {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Clean VARs: "Points at" before a choice. */
+.fm-chosen.is-empty {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.fm-chosen.is-empty > .fm-chosen-main > .material-symbols-outlined {
+  color: var(--text-dim);
+}
+
+.fm-chosen-none {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
 
 /* The picture takes some width: the name may shrink a little more before
    the (hidden) buttons wrap to a line of their own. */

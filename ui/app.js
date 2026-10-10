@@ -10688,7 +10688,6 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
       // Its other copies show on the card once it's chosen, to switch to.
       const open = isChosen && copies.length > 1;
       const notHere = shown.match === "db" && !c.isSelf && !c.installed;
-      const shownChosen = Boolean(pick && pick.replacement_pkg === pkg && pick.replacement_path === shown.internal_path);
       const tags = [
         c.isSelf ? `<span class="chip chip-accent" title="The file is inside the package you're fixing">Already inside</span>` : "",
         !c.isSelf && fmPref(pkg) === 1 ? `<span class="chip fm-chip-pref" title="You prefer it as a replacement source"><span class="material-symbols-outlined">thumb_up</span>Preferred</span>` : "",
@@ -10727,7 +10726,6 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
           </span>`;
       };
       const sub = [
-        shownChosen ? `<span class="chip fm-chip-chosen" title="The copy this file points at"><span class="material-symbols-outlined">check</span>Chosen</span>` : "",
         shown.internal_path !== ref.ref_path && !open ? `<span class="fm-cand-path" title="${escapeAttribute(shown.internal_path)}">${escapeHtml(shown.internal_path)}</span>` : "",
         copies.length > 1 && !open ? `<span class="fm-dim" title="Choose it to pick another copy">${pkgCount(copies.length, "copy", "copies")}</span>` : "",
       ].join("");
@@ -10740,7 +10738,7 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
       return `<div class="fm-cand-row has-thumb${isChosen ? " is-selected" : ""}${!c.isSelf && fmPref(pkg) === -1 ? " is-avoided" : ""}" ${pickAttrs(shown)}>
           ${thumb}
           <div class="fm-cand-top">
-            ${radio(shown, false, true)}
+            ${radio(shown, false)}
             <span class="fm-cand-tags">${tags}</span>
             <span class="fm-cand-acts">
               ${
@@ -10917,44 +10915,44 @@ function fmRenderDetail() {
   // The choice, at the top: what replaces it, Clear, and Use it for others.
   // How many other missing files each scope would actually switch to the
   // chosen package: ones it has a copy of that don't use it yet.
-  const usePkg = pick?.replacement_pkg;
-  const sameN = usePkg ? fmUseForTargets((FM.refs ?? []).filter((r) => r.ref_pkg === ref.ref_pkg), usePkg, key).length : 0;
-  const shownN = usePkg ? fmUseForTargets(fmFiltered(), usePkg, key).length : 0;
-  const allN = usePkg ? fmUseForTargets(FM.refs ?? [], usePkg, key).length : 0;
-  const applyBtns = [
-    sameN && sameN !== allN
-      ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-same" title="The other missing files from ${escapeAttribute(ref.ref_pkg)} that it has a copy of">Same package (${sameN})</button>`
-      : "",
-    shownN && shownN !== allN && shownN !== sameN
-      ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-filtered" title="The other missing files the list shows that it has a copy of">Shown (${shownN})</button>`
-      : "",
-    allN ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-all" title="Every other missing file it has a copy of">All (${allN})</button>` : "",
-  ].join("");
-  const choice =
-    pick && !fixed
-      ? `<div class="fm-chosen">
-          <div class="fm-chosen-main">
-            <span class="material-symbols-outlined">check_circle</span>
-            <div class="fm-chosen-text"><small>Replaced by</small>
-              ${fmPkgLabelHtml(pick.replacement_pkg, { inside: true })}
-              ${pick.replacement_path && pick.replacement_path !== ref.ref_path ? `<code>${escapeHtml(pick.replacement_path)}</code>` : ""}
+  const choiceHtml = (p) => {
+    const usePkg = p?.replacement_pkg;
+    const sameN = usePkg ? fmUseForTargets((FM.refs ?? []).filter((r) => r.ref_pkg === ref.ref_pkg), usePkg, key).length : 0;
+    const shownN = usePkg ? fmUseForTargets(fmFiltered(), usePkg, key).length : 0;
+    const allN = usePkg ? fmUseForTargets(FM.refs ?? [], usePkg, key).length : 0;
+    const applyBtns = [
+      sameN && sameN !== allN
+        ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-same" title="The other missing files from ${escapeAttribute(ref.ref_pkg)} that it has a copy of">Same package (${sameN})</button>`
+        : "",
+      shownN && shownN !== allN && shownN !== sameN
+        ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-filtered" title="The other missing files the list shows that it has a copy of">Shown (${shownN})</button>`
+        : "",
+      allN ? `<button type="button" class="ghost-button fm-small" data-fm-act="use-all" title="Every other missing file it has a copy of">All (${allN})</button>` : "",
+    ].join("");
+    return `<div class="fm-chosen">
+            <div class="fm-chosen-main">
+              <span class="material-symbols-outlined">check_circle</span>
+              <div class="fm-chosen-text"><small>Replaced by</small>
+                ${fmPkgLabelHtml(p.replacement_pkg, { inside: true })}
+                ${p.replacement_path && p.replacement_path !== ref.ref_path ? `<code>${escapeHtml(p.replacement_path)}</code>` : ""}
+              </div>
+              <button type="button" class="ghost-button fm-small" data-fm-unpick="${escapeAttribute(key)}"><span class="material-symbols-outlined">close</span>Clear</button>
             </div>
-            <button type="button" class="ghost-button fm-small" data-fm-unpick="${escapeAttribute(key)}"><span class="material-symbols-outlined">close</span>Clear</button>
-          </div>
-          ${
-            fmPref(pick.replacement_pkg) === -1
-              ? `<p class="fm-chosen-warn"><span class="material-symbols-outlined">warning</span>You marked this package to avoid as a replacement source.</p>`
-              : ""
-          }
-          ${applyBtns ? `<div class="fm-chosen-apply"><span>Use it for other missing files too:</span>${applyBtns}</div>` : ""}
-        </div>`
-      : "";
+            ${
+              fmPref(p.replacement_pkg) === -1
+                ? `<p class="fm-chosen-warn"><span class="material-symbols-outlined">warning</span>You marked this package to avoid as a replacement source.</p>`
+                : ""
+            }
+            ${applyBtns ? `<div class="fm-chosen-apply"><span>Use it for other missing files too:</span>${applyBtns}</div>` : ""}
+          </div>`;
+  };
+  const choice = pick && !fixed ? choiceHtml(pick) : "";
 
   // The suggestion says why it's the one.
   const bestCov = best ? covOf(best) : 0;
   const bestPref = best && !best.isSelf ? fmPref(best.package_id) : 0;
-  const suggestion =
-    !pick && !fixed && best
+  const suggestionBox =
+    !fixed && best
       ? `<div class="fm-best${best.match !== "crc" ? " is-guess" : bestPref === -1 ? " is-avoid" : ""}">
           <div class="fm-best-text">
             <span class="fm-best-tag">${bestPref === -1 ? "The only exact copy" : bestPref === 1 ? "Suggested · preferred" : "Suggested"}</span>
@@ -10976,6 +10974,17 @@ function fmRenderDetail() {
           }</button>
         </div>`
       : "";
+  const suggestion = pick ? "" : suggestionBox;
+  // What the slot above the lists shows, kept at one height: the box for the
+  // other state (choosing the suggestion; or the suggestion, once something
+  // is chosen) sits in the same place, invisible, so nothing below moves.
+  const shownBox = choice || suggestion || (pick ? "" : fmLeadHtml(ref, dbItems.length));
+  const ghostBox = pick
+    ? suggestionBox
+    : best
+      ? choiceHtml({ replacement_pkg: best.isSelf ? fmTargetId() : best.package_id, replacement_path: best.internal_path })
+      : "";
+  const slot = `<div class="fm-choice-slot">${shownBox}${ghostBox ? `<div class="fm-choice-ghost" aria-hidden="true" inert>${ghostBox}</div>` : ""}</div>`;
 
   // The lists, one at a time.
   const tab = FM.tabs.get(key) ?? (cands.length ? "folders" : ref.ref_path ? "db" : "folders");
@@ -11070,7 +11079,7 @@ function fmRenderDetail() {
       ${
         fixed
           ? `<p class="fm-fixed-note"><span class="material-symbols-outlined">check_circle</span>Fixed in the last run. Check the fixed copy to be sure.</p>`
-          : choice || suggestion || (pick ? "" : fmLeadHtml(ref, dbItems.length))
+          : slot
       }
       ${sources}
     </div>`;
@@ -14793,11 +14802,11 @@ function cvRenderDetail() {
       return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}${usable ? "" : " is-disabled"}" role="radio" tabindex="${usable ? 0 : -1}" aria-checked="${chosen}" aria-disabled="${!usable}" data-cv-copy="${escapeAttribute(c.package_id)}">
           ${p.installed === false || !p.file ? `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(p.file, libGradient(p.pkg), "fm-cand-thumb")}</div>`}
           <div class="fm-cand-top">
-            <span class="fm-cand-pick"><span class="fm-cand-name" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}`)}">${fmPkgLabelHtml(c.package_id)}</span></span>
+            <span class="fm-cand-pick"><span class="material-symbols-outlined fm-cand-radio">${chosen ? "radio_button_checked" : "radio_button_unchecked"}</span><span class="fm-cand-name" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}`)}">${fmPkgLabelHtml(c.package_id)}</span></span>
             <span class="fm-cand-tags">${c === suggest && !pick ? `<span class="chip">Suggested</span>` : ""}${cvPkgChips(p)}</span>
             <span class="fm-cand-acts">${others ? `<button type="button" class="ghost-button fm-tiny" data-cv-useall="${escapeAttribute(c.package_id)}" title="It has ${pkgCount(others, "more of your files", "more of your files")}: point them all here">Use for all ${others + 1}</button>` : ""}</span>
           </div>
-          <div class="fm-cand-sub">${chosen ? `<span class="chip fm-chip-chosen" title="The copy this file points at"><span class="material-symbols-outlined">check</span>Chosen</span>` : ""}<span class="fm-dim">${c.internal_path === item.path ? "same path" : escapeHtml(c.internal_path)}</span></div>
+          <div class="fm-cand-sub"><span class="fm-dim">${c.internal_path === item.path ? "same path" : escapeHtml(c.internal_path)}</span></div>
           ${lacks.length ? `<div class="source-incomplete-warning cv-incomplete" title="${escapeAttribute(`Missing or different in this package:\n${lacks.join("\n")}`)}"><span class="material-symbols-outlined source-incomplete-icon" aria-hidden="true">warning</span><span class="source-incomplete-text">${pkgCount(lacks.length, "file", "files")} of the resource missing or different here — can't point at it</span></div>` : ""}
         </div>`;
     })
@@ -14812,13 +14821,19 @@ function cvRenderDetail() {
       <div class="fm-ref-head fm-ref-title"><span class="chip">${escapeHtml(formatBytesLocal(Number(item.size ?? 0)))}</span>
         <div class="fm-ref-head-text"><b title="${escapeAttribute(item.path)}">${escapeHtml(ft.name)}</b>
           <small>${escapeHtml(item.path)}${(item.bundle ?? []).length ? ` · + ${pkgCount(item.bundle.length, "file goes", "files go")} with it` : ""}</small></div></div>
-      ${
-        pick
-          ? `<div class="fm-chosen"><div class="fm-chosen-main"><span class="material-symbols-outlined">check_circle</span>
-              <div class="fm-chosen-text"><small>Points at</small>${fmPkgLabelHtml(pick.pkg)}</div>
-              <button type="button" class="ghost-button fm-small" data-cv-file-clear="${escapeAttribute(item.key)}"><span class="material-symbols-outlined">close</span>Clear</button></div></div>`
-          : ""
-      }
+      ${(() => {
+        // "Points at", chosen or not, with the other state's box invisible
+        // in the same place: the slot keeps one height, nothing below moves.
+        const chosenBox = (pkg) => `<div class="fm-chosen"><div class="fm-chosen-main"><span class="material-symbols-outlined">check_circle</span>
+              <div class="fm-chosen-text"><small>Points at</small>${fmPkgLabelHtml(pkg)}</div>
+              <button type="button" class="ghost-button fm-small" data-cv-file-clear="${escapeAttribute(item.key)}"><span class="material-symbols-outlined">close</span>Clear</button></div></div>`;
+        const emptyBox = `<div class="fm-chosen is-empty"><div class="fm-chosen-main"><span class="material-symbols-outlined">radio_button_unchecked</span>
+              <div class="fm-chosen-text"><small>Points at</small><span class="fm-chosen-none">Nothing yet: it stays in ${escapeHtml(cvSelfName())}. Choose a copy below.</span></div></div></div>`;
+        if (!cvFree(item) || !(item.copies ?? []).some(cvUsable)) return "";
+        const ghostPkg = suggest?.package_id ?? (item.copies ?? []).find(cvUsable)?.package_id;
+        const [shown, ghost] = pick ? [chosenBox(pick.pkg), emptyBox] : [emptyBox, ghostPkg ? chosenBox(ghostPkg) : ""];
+        return `<div class="fm-choice-slot">${shown}${ghost ? `<div class="fm-choice-ghost" aria-hidden="true" inert>${ghost}</div>` : ""}</div>`;
+      })()}
       ${
         cvFree(item)
           ? ""
