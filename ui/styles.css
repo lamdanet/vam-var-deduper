@@ -19931,6 +19931,17 @@ button.pkg-stat:focus-visible::after {
   pointer-events: none;
 }
 
+/* Clean VARs: the database tab. */
+.cv-view .fm-none-line .fm-spin {
+  vertical-align: -4px;
+  font-size: 18px;
+  animation: pkg-spin 1.6s linear infinite;
+}
+
+.cv-db-more {
+  margin-top: 10px;
+}
+
 /* Clean VARs: "Points at" before a choice. */
 .fm-chosen.is-empty {
   border-color: var(--line);
