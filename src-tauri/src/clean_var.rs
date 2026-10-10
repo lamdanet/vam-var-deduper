@@ -28,7 +28,7 @@ use crate::{
     fix_var::{collect_pkg_refs, free_backup_path, is_text_path},
     models::{AppState, PreparedPackage, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
     naming,
-    scan::{compute_missing_siblings, load_cached_scan_with_target},
+    scan::{compute_missing_siblings, load_cached_scan_shared, load_cached_scan_with_target},
     tasks::{list_target_var_text_refs, new_progress_payload, parse_additional_dirs, set_task_progress},
     utils::{decode_text, normalize_zip_path},
 };
@@ -634,7 +634,8 @@ pub(crate) fn clean_var_candidates(
         return Err(format!("package not found on disk: {}", target_path.display()));
     }
     let additional = parse_additional_dirs(&additional_input_dirs.unwrap_or_default());
-    let scanned = load_cached_scan_with_target(&state.scan_cache, Path::new(&input_dir), &additional, Some(target_path))
+    // Only read: the cached scan itself, not a copy of it.
+    let scanned = load_cached_scan_shared(&state.scan_cache, Path::new(&input_dir), &additional, Some(target_path))
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No folder scan yet: check the package again.".to_string())?;
     clean_candidates(target_path, &scanned, include_db.then_some(&*db)).map_err(|e| e.to_string())

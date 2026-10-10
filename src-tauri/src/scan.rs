@@ -1304,7 +1304,7 @@ pub(crate) fn cache_scan_result(
         key,
         CachedScan {
             files: scanned.files.clone(),
-            scanned: scanned.clone(),
+            scanned: Arc::new(scanned.clone()),
         },
     );
     Ok(())
@@ -1316,16 +1316,30 @@ pub(crate) fn load_cached_scan(
     additional_dirs: &[PathBuf],
     target_var_path: Option<&Path>,
 ) -> Result<Option<ScannedData>> {
+    // The caller's own copy, as before.
+    Ok(load_cached_scan_shared(scan_cache, input_dir, additional_dirs, target_var_path)?.map(Arc::unwrap_or_clone))
+}
+
+/// The cached scan while every package file is as it was, shared rather than
+/// copied: for callers that only read it.
+pub(crate) fn load_cached_scan_shared(
+    scan_cache: &Arc<Mutex<HashMap<String, CachedScan>>>,
+    input_dir: &Path,
+    additional_dirs: &[PathBuf],
+    target_var_path: Option<&Path>,
+) -> Result<Option<Arc<ScannedData>>> {
     let roots = scan_roots(input_dir, additional_dirs);
     let key = scan_cache_key_multi(&root_refs(&roots), target_var_path);
     let cached = {
         let guard = scan_cache
             .lock()
             .map_err(|_| anyhow!("scan cache poisoned"))?;
-        guard.get(&key).cloned()
+        guard
+            .get(&key)
+            .map(|c| (c.files.clone(), Arc::clone(&c.scanned)))
     };
 
-    let Some(cached) = cached else {
+    let Some((files, scanned)) = cached else {
         return Ok(None);
     };
 
@@ -1334,8 +1348,8 @@ pub(crate) fn load_cached_scan(
         .map(|entry| entry.fingerprint)
         .collect::<Vec<_>>();
 
-    if current_files == cached.files {
-        Ok(Some(cached.scanned))
+    if current_files == files {
+        Ok(Some(scanned))
     } else {
         Ok(None)
     }

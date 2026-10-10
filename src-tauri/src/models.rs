@@ -1345,7 +1345,8 @@ pub(crate) struct PagedDbCandidates {
 #[derive(Debug, Clone)]
 pub(crate) struct CachedScan {
     pub(crate) files: Vec<VarFileFingerprint>,
-    pub(crate) scanned: ScannedData,
+    /// Shared: a read-only caller takes it without copying the whole scan.
+    pub(crate) scanned: Arc<ScannedData>,
 }
 
 /// Categorization of a broken dependency reference on the Missing Resources
