@@ -68,6 +68,10 @@ pub(crate) struct CleanItem {
     /// `picture:<the file it is the picture of>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stays: Option<String>,
+    /// What it and its bundle take in the package (compressed): what Clean
+    /// takes off the file on disk.
+    #[serde(default)]
+    pub(crate) disk_size: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -78,6 +82,29 @@ pub(crate) struct CleanReport {
     /// (offered as content, not used): left alone.
     pub(crate) unreferenced_files: u32,
     pub(crate) unreferenced_bytes: u64,
+    /// The package as it is: its size on disk, and its files (count and
+    /// size, uncompressed).
+    #[serde(default)]
+    pub(crate) file_bytes: u64,
+    #[serde(default)]
+    pub(crate) content_bytes: u64,
+    #[serde(default)]
+    pub(crate) content_files: u32,
+    /// `unreferenced_bytes` as they take in the package (compressed).
+    #[serde(default)]
+    pub(crate) unreferenced_disk_bytes: u64,
+}
+
+/// Each file's size in the package (compressed), from the zip's index.
+fn disk_sizes(target_path: &Path) -> Result<HashMap<String, u64>> {
+    let mut archive = ZipArchive::new(fs::File::open(target_path)?)?;
+    let mut out = HashMap::new();
+    for index in 0..archive.len() {
+        if let Ok(entry) = archive.by_index_raw(index) {
+            out.insert(normalize_zip_path(entry.name()), entry.compressed_size());
+        }
+    }
+    Ok(out)
 }
 
 /// One page of a file's copies in packages only the database knows.
@@ -594,9 +621,13 @@ pub(crate) fn clean_candidates_from(
 
     let mut report = CleanReport {
         target_package_id: target_id.clone(),
+        file_bytes: fs::metadata(target_path).map(|m| m.len()).unwrap_or(0),
+        content_bytes: target.resource_refs.iter().map(|r| r.size).sum(),
+        content_files: target.resource_refs.iter().filter(|r| r.internal_path != META_PATH).count() as u32,
         ..CleanReport::default()
     };
     let mut by_path: HashMap<String, usize> = HashMap::new();
+    let disk = disk_sizes(target_path)?;
     let mut whole = Whole::new(scanned, target);
     let own_refs = OwnRefs::read(target_path, target)?;
     for group in &scanned.duplicate_groups {
@@ -613,6 +644,10 @@ pub(crate) fn clean_candidates_from(
         if !used.contains(&path) {
             report.unreferenced_files += 1;
             report.unreferenced_bytes += own.effective_size.max(own.size);
+            report.unreferenced_disk_bytes += std::iter::once(&path)
+                .chain(bundle_in(target, &path).iter())
+                .map(|p| disk.get(p).copied().unwrap_or(0))
+                .sum::<u64>();
             continue;
         }
         let bundle = bundle_in(target, &path);
@@ -652,6 +687,7 @@ pub(crate) fn clean_candidates_from(
             path,
             copies,
             stays: None,
+            disk_size: 0,
         });
     }
 
@@ -685,6 +721,7 @@ pub(crate) fn clean_candidates_from(
                 bundle: bundle_in(target, &r.internal_path),
                 copies,
                 stays: None,
+                disk_size: 0,
             });
         }
     }
@@ -696,6 +733,10 @@ pub(crate) fn clean_candidates_from(
         item.stays = std::iter::once(&item.path)
             .chain(item.bundle.iter())
             .find_map(|p| keeps.reason(p, &|_| false));
+        item.disk_size = std::iter::once(&item.path)
+            .chain(item.bundle.iter())
+            .map(|p| disk.get(p).copied().unwrap_or(0))
+            .sum();
     }
 
     report.items.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));

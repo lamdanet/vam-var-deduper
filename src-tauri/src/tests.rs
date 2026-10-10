@@ -7149,6 +7149,11 @@ fn clean_var_offers_and_uses_packages_only_the_database_knows() {
 
     let report = clean_candidates(&target, &scanned, Some(&db)).expect("candidates");
     let item = |p: &str| report.items.iter().find(|i| i.path == p).unwrap_or_else(|| panic!("{p}"));
+    assert_eq!(report.file_bytes, fs::metadata(&target).expect("meta").len(), "its size on disk");
+    assert_eq!(report.content_files, 5, "its files, meta.json aside");
+    assert!(report.content_bytes > 0);
+    let x_item = report.items.iter().find(|i| i.path == "Custom/Clothing/x.vam").expect("x");
+    assert!(x_item.disk_size > 0, "the item and its bundle, as they take in the package");
     let a = item("Custom/a.png");
     assert!(a.key.starts_with("dbfind|"), "{}", a.key);
     let whole = a.copies.iter().find(|c| c.package_id == "D.Whole.1").expect("offered");
