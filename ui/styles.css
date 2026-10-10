@@ -20034,3 +20034,579 @@ button.pkg-stat:focus-visible::after {
 .fm-best.cv-warn-box {
   border-color: color-mix(in srgb, var(--accent-warn) 45%, var(--line));
 }
+
+/* ---- Clean VARs (new): the two tabs, and Clean many ---- */
+
+/* One package / many packages: what each tab changes, said on the tab. */
+.cv-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.cv-mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cv-mode:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.cv-mode.is-active {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  color: var(--text);
+}
+.cv-mode > .material-symbols-outlined {
+  font-size: 22px;
+}
+.cv-mode.is-active > .material-symbols-outlined {
+  color: var(--primary);
+}
+.cv-mode-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cv-mode-text b {
+  font-size: 13.5px;
+}
+.cv-mode-text small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The kept package says so on itself. */
+.fm-info-chips .chip.cm-keep-chip {
+  border-color: color-mix(in srgb, var(--accent-success) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent-success) 12%, transparent);
+  color: var(--accent-success);
+  font-weight: 600;
+}
+.cm-keep-chip .material-symbols-outlined {
+  font-size: 15px;
+}
+
+.cm-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 20px 14px;
+  list-style: none;
+}
+.cm-step {
+  display: grid;
+  grid-template-columns: 22px 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+.cm-step-n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.cm-step > .material-symbols-outlined {
+  color: var(--primary);
+  font-size: 20px;
+}
+.cm-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.cm-step-text small {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Changed on the left, not changed on the right. */
+.cm-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  margin: 4px 20px 10px;
+}
+.cm-flow-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.cm-flow-box.is-change {
+  border-color: color-mix(in srgb, var(--accent-warn) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent-warn) 9%, transparent);
+}
+.cm-flow-box.is-change > .material-symbols-outlined {
+  color: var(--accent-warn);
+}
+.cm-flow-box.is-keep {
+  border-color: color-mix(in srgb, var(--accent-success) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent-success) 9%, transparent);
+}
+.cm-flow-box.is-keep > .material-symbols-outlined {
+  color: var(--accent-success);
+}
+.cm-flow-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+}
+.cm-flow-text b {
+  overflow-wrap: anywhere;
+}
+.cm-flow-text small {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+.cm-flow-text .cm-flow-tag {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.cm-flow-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  max-width: 96px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.2;
+  text-align: center;
+}
+.cm-note,
+.cm-warn-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px 14px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.cm-note .material-symbols-outlined,
+.cm-warn-line .material-symbols-outlined {
+  font-size: 18px;
+}
+.cm-warn-line {
+  margin: 0 20px 12px;
+}
+.cm-warn-line .material-symbols-outlined {
+  color: var(--accent-warn);
+}
+
+/* The last run: one line per package. */
+.cm-run.has-errors > .material-symbols-outlined:first-child {
+  color: var(--accent-warn);
+}
+.cm-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.cm-run > div {
+  padding-right: 22px;
+}
+.cm-run-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.cm-run-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cm-run-text > small {
+  color: var(--text-dim);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.cm-run-bad .cm-run-text > small {
+  color: var(--text-muted);
+}
+.cm-run-list .material-symbols-outlined {
+  font-size: 16px;
+}
+.cm-run-ok .material-symbols-outlined {
+  color: var(--accent-success);
+}
+.cm-run-bad .material-symbols-outlined {
+  color: var(--accent-danger);
+}
+
+.cm-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cm-bulk:empty {
+  display: none;
+}
+
+/* A row: its tick, picture, name, chips. */
+.cm-tick {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  cursor: pointer;
+}
+.cm-tick input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: inherit;
+}
+.cm-tick input:disabled {
+  cursor: not-allowed;
+}
+.cm-row.is-muted .fm-row-text,
+.cm-row.is-muted .cv-row-thumb {
+  opacity: 0.55;
+}
+.cm-row-meta {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-row-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 220px;
+}
+
+/* The panel: the package, its tick, what comes out and what stays. */
+.cm-pkg-head {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px 12px;
+}
+.cm-pkg-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.cm-pkg-text > small {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.cm-pkg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cm-pkg-chips:empty {
+  display: none;
+}
+.cm-pkg-acts {
+  display: flex;
+  gap: 2px;
+}
+.cm-tick-big {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: calc(100% - 40px);
+  margin: 0 20px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cm-tick-big:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+.cm-tick-big > .material-symbols-outlined {
+  color: var(--text-dim);
+  font-size: 22px;
+}
+.cm-tick-big > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cm-tick-big small {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.cm-tick-big.is-on {
+  border-color: color-mix(in srgb, var(--accent-warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent-warn) 9%, var(--surface));
+}
+.cm-tick-big.is-on > .material-symbols-outlined {
+  color: var(--accent-warn);
+}
+.cm-files-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 20px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.cm-files-h small {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-size: 10.5px;
+  letter-spacing: 0;
+}
+.cm-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 12px 12px;
+  padding: 0;
+  list-style: none;
+}
+.cm-file {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+.cm-file:hover {
+  background: var(--surface-2);
+}
+.cm-file > .material-symbols-outlined {
+  color: var(--accent-warn);
+  font-size: 18px;
+}
+.cm-file.is-stays > .material-symbols-outlined {
+  color: var(--text-dim);
+}
+.cm-file-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cm-file-text b {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-file-text small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-file > .fm-dim {
+  max-width: 180px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-goes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  color: var(--accent-success);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cm-goes .material-symbols-outlined {
+  font-size: 15px;
+}
+.cm-goes small {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+/* The sheet before anything is written. */
+.cm-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, #000 55%, transparent);
+}
+.cm-confirm {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: var(--bg-elev, var(--surface));
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+.cm-confirm h2 {
+  margin: 0;
+  padding: 18px 20px 10px;
+  font-size: 18px;
+}
+.cm-confirm-pkgs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 20px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  list-style: none;
+}
+.cm-confirm-pkgs li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.cm-confirm-pkgs li small {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.cm-confirm-pkgs .cm-more {
+  color: var(--text-dim);
+}
+.cm-confirm-points {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 20px 14px;
+  padding: 0;
+  list-style: none;
+}
+.cm-confirm-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.cm-confirm-points li b {
+  color: var(--text);
+}
+.cm-confirm-points .material-symbols-outlined {
+  color: var(--text-dim);
+  font-size: 19px;
+}
+.cm-confirm-points .is-change .material-symbols-outlined,
+.cm-confirm-points .is-warn .material-symbols-outlined {
+  color: var(--accent-warn);
+}
+.cm-confirm-points .is-keep .material-symbols-outlined {
+  color: var(--accent-success);
+}
+.cm-understood {
+  margin: 0 20px 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.cm-confirm-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px 18px;
+}
+.cm-danger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--accent-danger);
+  border-radius: 10px;
+  background: var(--accent-danger);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cm-danger-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.cm-danger-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cm-danger-btn .material-symbols-outlined {
+  font-size: 18px;
+}
+
+@media (max-width: 720px) {
+  .cv-modes,
+  .cm-flow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cm-flow-arrow {
+    flex-direction: row;
+    gap: 6px;
+    max-width: none;
+  }
+  .cm-flow-arrow .material-symbols-outlined {
+    transform: rotate(90deg);
+  }
+}
