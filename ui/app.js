@@ -13955,6 +13955,10 @@ function cvRecentAdd(path, note) {
 function cvOpen(target, { scan = false } = {}) {
   const fp = typeof target === "string" ? target : target?.file_path;
   if (!fp) return;
+  if (CV.applying && fp !== CV.target) {
+    showToast("Wait until Clean finishes writing the package.", "info");
+    return;
+  }
   if (CV.target !== fp) {
     CV.token += 1;
     Object.assign(CV, {
@@ -13978,7 +13982,7 @@ function cvOpen(target, { scan = false } = {}) {
 // ---- Check -------------------------------------------------------------------------------
 
 async function cvScan() {
-  if (!invoke || !CV.target || CV.scanning) return;
+  if (!invoke || !CV.target || CV.scanning || CV.applying) return;
   const addon = vamAddonPackagesDir();
   if (!addon) {
     showToast("Set your VaM folder in Settings first.", "error");
@@ -14188,6 +14192,7 @@ async function cvApply() {
   const target = CV.target;
   CV.applying = true;
   cvRenderStrip();
+  cvRenderSource();
   let done = null;
   try {
     const p = await fmPoll("start_clean_var_task", {
@@ -14236,6 +14241,7 @@ async function cvRestore() {
   if (!ok) return;
   CV.applying = true;
   cvRenderStrip();
+  cvRenderSource();
   try {
     const size = await invoke("restore_clean_backup", { backupPath: fix.backup_path, targetVarPath: fix.target });
     CV.lastFix = { ...fix, restored: Number(size ?? 0) };
@@ -14339,7 +14345,7 @@ function cvRenderSource() {
   const host = $("cv-source");
   if (!host) return;
   const dbBox = `<label class="check-row cv-db-check" title="Packages only the database knows: not installed, so the package would need them downloaded">
-      <input type="checkbox" id="cv-withdb" ${CV.withDb ? "checked" : ""} /><span>Also offer packages you don't have (from the database)</span></label>`;
+      <input type="checkbox" id="cv-withdb" ${CV.withDb ? "checked" : ""} ${CV.applying ? "disabled" : ""} /><span>Also offer packages you don't have (from the database)</span></label>`;
   if (CV.target && !CV.configOpen) {
     const it = CV.item ?? pkgBareItem(CV.target);
     const facts = [
@@ -14351,7 +14357,7 @@ function cvRenderSource() {
     const tags = fmTypeTags(it);
     host.innerHTML = `
       <header class="card-eyebrow fm-eyebrow">Package
-        <button type="button" class="fm-link" data-cv-act="config" title="Pick another .var">Change</button></header>
+        <button type="button" class="fm-link" data-cv-act="config" title="Pick another .var" ${CV.applying ? "disabled" : ""}>Change</button></header>
       <div class="fm-hero">
         ${libThumbHtml(CV.target, libGradient(it.file_name || it.package_id), "fm-hero-thumb")}</div>
         <div class="fm-hero-main">
@@ -14365,7 +14371,7 @@ function cvRenderSource() {
           <div class="fm-hero-acts">
             <button type="button" class="ghost-button fm-small" data-cv-act="explore"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
             <button type="button" class="ghost-button fm-small" data-cv-act="show-file" title="${escapeAttribute(CV.target)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
-            <button type="button" class="ghost-button fm-small" data-cv-act="scan" ${CV.scanning ? "disabled" : ""}><span class="material-symbols-outlined">refresh</span>${CV.scanning ? "Checking…" : "Check again"}</button>
+            <button type="button" class="ghost-button fm-small" data-cv-act="scan" ${CV.scanning || CV.applying ? "disabled" : ""}><span class="material-symbols-outlined">refresh</span>${CV.scanning ? "Checking…" : "Check again"}</button>
           </div>
         </div>
       </div>`;
@@ -14383,7 +14389,7 @@ function cvRenderSource() {
       </div>
       <div class="path-grid"><div class="path-row">${dbBox}</div></div>
       <div class="action-row">
-        <button type="button" class="primary-button action-button fm-scan-btn" data-cv-act="scan" ${CV.target && !CV.scanning ? "" : "disabled"}>${
+        <button type="button" class="primary-button action-button fm-scan-btn" data-cv-act="scan" ${CV.target && !CV.scanning && !CV.applying ? "" : "disabled"}>${
           CV.scanning ? "Checking…" : CV.report ? "Check again" : "Check it"
         }</button>
       </div>
@@ -14986,6 +14992,10 @@ function cvOnClick(e) {
 
 function cvOnChange(e) {
   if (e.target.id === "cv-withdb") {
+    if (CV.applying) {
+      e.target.checked = CV.withDb;
+      return;
+    }
     CV.withDb = e.target.checked;
     fmStoreSet("cv.withDb", CV.withDb ? "1" : "0");
     if (CV.target && CV.report) cvScan();
