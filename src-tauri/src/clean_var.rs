@@ -25,7 +25,7 @@ use crate::{
     db::{self, Db},
     execute::{prepare_package_changes, rewrite_package, sum_removed_bytes},
     fix_var::free_backup_path,
-    models::{AppState, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
+    models::{AppState, PreparedPackage, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
     naming,
     scan::{compute_missing_siblings, load_cached_scan_with_target},
     tasks::{list_target_var_text_refs, new_progress_payload, parse_additional_dirs, set_task_progress},
@@ -42,8 +42,9 @@ pub(crate) struct CleanSource {
     pub(crate) installed: bool,
     /// The package already lists it as a dependency: no new one.
     pub(crate) already_dependency: bool,
-    /// What its copy of a bundle (.vam with .vaj/.vab, .vmi with .vmb) lacks:
-    /// unsafe to point at, as on the old Clean VARs page.
+    /// What it lacks of the whole resource (a .vam's .vaj/.vab/textures, a
+    /// .vmi's .vmb): missing, or not the same, where the references will
+    /// point. Not empty: it can't be pointed at.
     #[serde(default)]
     pub(crate) incomplete: Vec<String>,
 }
@@ -89,6 +90,72 @@ fn is_scene(path: &str) -> bool {
     lower.starts_with("saves/scene/") || lower.contains("/saves/scene/")
 }
 
+/// What goes with `path` in the package (a .vam's .vaj/.vab/textures, a
+/// .vmi's .vmb): the members it actually has.
+fn bundle_in(package: &PreparedPackage, path: &str) -> Vec<String> {
+    let inside: HashSet<&str> = package.resource_refs.iter().map(|r| r.internal_path.as_str()).collect();
+    package
+        .support_paths
+        .get(path)
+        .map(|s| s.iter().filter(|m| inside.contains(m.as_str())).cloned().collect())
+        .unwrap_or_default()
+}
+
+type FileMap<'a> = HashMap<&'a str, (Option<u32>, u64)>;
+
+fn file_map(package: &PreparedPackage) -> FileMap<'_> {
+    package
+        .resource_refs
+        .iter()
+        .map(|r| (r.internal_path.as_str(), (r.crc32, r.size)))
+        .collect()
+}
+
+/// Whether another package holds the whole resource, worked out once per
+/// package.
+struct Whole<'a> {
+    scanned: &'a ScannedData,
+    target_files: FileMap<'a>,
+    missing: HashMap<String, BTreeMap<String, BTreeSet<String>>>,
+    files: HashMap<String, FileMap<'a>>,
+}
+
+impl<'a> Whole<'a> {
+    fn new(scanned: &'a ScannedData, target: &'a PreparedPackage) -> Self {
+        Self {
+            scanned,
+            target_files: file_map(target),
+            missing: HashMap::new(),
+            files: HashMap::new(),
+        }
+    }
+
+    /// What `src`'s copy at `src_path` lacks to stand in for the target's
+    /// file with its `bundle`: each member the same, at the member's own path
+    /// (where Clean points references to it), and the copy's own bundle whole
+    /// (the old page's rule). Empty: the whole resource is there.
+    fn lacks(&mut self, bundle: &[String], src_id: &str, src_path: &str) -> Vec<String> {
+        let Some(src) = self.scanned.packages.get(src_id) else {
+            return bundle.to_vec();
+        };
+        let mut out: BTreeSet<String> = self
+            .missing
+            .entry(src_id.to_string())
+            .or_insert_with(|| compute_missing_siblings(src))
+            .get(src_path)
+            .cloned()
+            .unwrap_or_default();
+        let files = self.files.entry(src_id.to_string()).or_insert_with(|| file_map(src));
+        for m in bundle {
+            let want = self.target_files.get(m.as_str());
+            if want.is_none() || files.get(m.as_str()) != want {
+                out.insert(m.clone());
+            }
+        }
+        out.into_iter().collect()
+    }
+}
+
 /// What the target uses itself that has exact copies elsewhere.
 pub(crate) fn clean_candidates(
     target_path: &Path,
@@ -115,24 +182,13 @@ pub(crate) fn clean_candidates(
         .map(|m| m.keys().map(|k| naming::package_base(k).to_ascii_lowercase()).collect())
         .unwrap_or_default();
     let is_dep = |pkg: &str| deps.contains(&naming::package_base(pkg).to_ascii_lowercase());
-    // The members actually in the package (the map also lists the ones a
-    // bundle may have).
-    let inside: HashSet<&str> = target.resource_refs.iter().map(|r| r.internal_path.as_str()).collect();
-    let bundle_of = |path: &str| -> Vec<String> {
-        target
-            .support_paths
-            .get(path)
-            .map(|s| s.iter().filter(|m| inside.contains(m.as_str())).cloned().collect())
-            .unwrap_or_default()
-    };
 
     let mut report = CleanReport {
         target_package_id: target_id.clone(),
         ..CleanReport::default()
     };
     let mut by_path: HashMap<String, usize> = HashMap::new();
-    // Each package's bundles that lack a member, worked out once per package.
-    let mut missing: HashMap<&str, BTreeMap<String, BTreeSet<String>>> = HashMap::new();
+    let mut whole = Whole::new(scanned, target);
     for group in &scanned.duplicate_groups {
         let Some(own) = group.refs.iter().find(|r| r.package_id == target_id) else {
             continue;
@@ -146,24 +202,14 @@ pub(crate) fn clean_candidates(
             report.unreferenced_bytes += own.effective_size.max(own.size);
             continue;
         }
+        let bundle = bundle_in(target, &path);
         let mut seen: HashSet<&str> = HashSet::new();
         let mut copies: Vec<CleanSource> = Vec::new();
         for r in &group.refs {
             if r.package_id == target_id || !seen.insert(r.package_id.as_str()) {
                 continue;
             }
-            let lacks = missing
-                .entry(r.package_id.as_str())
-                .or_insert_with(|| {
-                    scanned
-                        .packages
-                        .get(&r.package_id)
-                        .map(compute_missing_siblings)
-                        .unwrap_or_default()
-                })
-                .get(&r.internal_path)
-                .map(|m| m.iter().cloned().collect())
-                .unwrap_or_default();
+            let lacks = whole.lacks(&bundle, &r.package_id, &r.internal_path);
             copies.push(CleanSource {
                 package_id: r.package_id.clone(),
                 file_path: r.package_file.clone(),
@@ -180,7 +226,7 @@ pub(crate) fn clean_candidates(
         report.items.push(CleanItem {
             key: group.key.clone(),
             size: own.effective_size.max(own.size),
-            bundle: bundle_of(&path),
+            bundle,
             path,
             copies,
         });
@@ -201,7 +247,21 @@ pub(crate) fn clean_candidates(
                     && used.contains(&r.internal_path)
             })
             .collect();
-        let crcs: Vec<u32> = wanted.iter().filter_map(|r| r.crc32).collect::<BTreeSet<_>>().into_iter().collect();
+        let target_files = file_map(target);
+        let crcs: Vec<u32> = wanted
+            .iter()
+            .flat_map(|r| {
+                std::iter::once(r.crc32).chain(
+                    bundle_in(target, &r.internal_path)
+                        .iter()
+                        .map(|m| target_files.get(m.as_str()).and_then(|(crc, _)| *crc))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let exclude: HashSet<String> = std::iter::once(target_id.clone()).collect();
         let conn = db.read()?;
         let found = db::find_crc_matches_bulk(&conn, &crcs, &exclude, |_, _| {})?;
@@ -209,6 +269,15 @@ pub(crate) fn clean_candidates(
         for r in wanted {
             let Some(hits) = r.crc32.and_then(|crc| found.get(&crc)) else {
                 continue;
+            };
+            let bundle = bundle_in(target, &r.internal_path);
+            // A member is there when the database has the same file (crc,
+            // size) in that package at the member's path.
+            let has = |pkg: &str, m: &String| {
+                target_files.get(m.as_str()).is_some_and(|(crc, size)| {
+                    crc.and_then(|c| found.get(&c))
+                        .is_some_and(|hs| hs.iter().any(|h| h.package_id == pkg && &h.internal_path == m && h.size as u64 == *size))
+                })
             };
             let mut seen: HashSet<&str> = HashSet::new();
             let extra: Vec<CleanSource> = hits
@@ -221,7 +290,7 @@ pub(crate) fn clean_candidates(
                     internal_path: h.internal_path.clone(),
                     installed: false,
                     already_dependency: is_dep(&h.package_id),
-                    incomplete: Vec::new(),
+                    incomplete: bundle.iter().filter(|m| !has(&h.package_id, m)).cloned().collect(),
                 })
                 .collect();
             if extra.is_empty() {
@@ -235,7 +304,7 @@ pub(crate) fn clean_candidates(
                         key: format!("dbfind|{}|{}", target_id, r.internal_path),
                         path: r.internal_path.clone(),
                         size: r.effective_size.max(r.size),
-                        bundle: bundle_of(&r.internal_path),
+                        bundle,
                         copies: extra,
                     });
                 }
@@ -298,14 +367,37 @@ pub(crate) fn apply_clean(
     // Only what was chosen changes: every other duplicate group stays as it
     // is (the engine would otherwise fall back to a group's first copy,
     // whichever package that is).
-    // Never point at a bundle that lacks a member (the page doesn't offer one).
-    for value in keep_map.values() {
-        let Some((pkg, path)) = value.split_once(':') else {
-            continue;
-        };
-        if let Some(lacks) = scanned.packages.get(pkg).and_then(|p| compute_missing_siblings(p).remove(path)) {
-            let list: Vec<String> = lacks.into_iter().collect();
-            bail!("{pkg} lacks part of {path} ({}): choose another copy", list.join(", "));
+    // Never point at a copy without the whole resource (the page doesn't
+    // offer one).
+    {
+        let target = scanned
+            .packages
+            .get(&target_id)
+            .ok_or_else(|| anyhow!("the package isn't in the scan"))?;
+        let own_path: HashMap<&str, &str> = scanned
+            .duplicate_groups
+            .iter()
+            .filter_map(|g| g.refs.iter().find(|r| r.package_id == target_id).map(|r| (g.key.as_str(), r.internal_path.as_str())))
+            .collect();
+        let mut whole = Whole::new(&scanned, target);
+        for (key, value) in keep_map {
+            let Some((pkg, path)) = value.split_once(':') else {
+                continue;
+            };
+            if !scanned.packages.contains_key(pkg) {
+                continue;
+            }
+            let own = own_path
+                .get(key.as_str())
+                .copied()
+                .or_else(|| key.strip_prefix("dbfind|").and_then(|k| k.split_once('|')).map(|(_, p)| p));
+            let Some(own) = own else {
+                continue;
+            };
+            let lacks = whole.lacks(&bundle_in(target, own), pkg, path);
+            if !lacks.is_empty() {
+                bail!("{pkg} doesn't have all of {own} ({}): choose another copy", lacks.join(", "));
+            }
         }
     }
     let mut keep_map = keep_map.clone();

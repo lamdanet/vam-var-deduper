@@ -7138,6 +7138,27 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
             ("Custom/Clothing/x.vaj", &b"{}"[..]),
         ],
     );
+    // The same .vam with another .vaj (another look): not the whole resource.
+    write_test_var_with_deps(
+        &vars.join("S.Other.1.var"),
+        &[],
+        &[
+            ("Custom/Clothing/x.vam", &b"{ \"id\": \"x\" }"[..]),
+            ("Custom/Clothing/x.vaj", &b"{ \"other\": 1 }"[..]),
+            ("Custom/Clothing/x.vab", &b"unity-x"[..]),
+        ],
+    );
+    // The whole set, at another path: references to its members would point
+    // where nothing is.
+    write_test_var_with_deps(
+        &vars.join("S.Moved.1.var"),
+        &[],
+        &[
+            ("Custom/Clothing/Moved/x.vam", &b"{ \"id\": \"x\" }"[..]),
+            ("Custom/Clothing/Moved/x.vaj", &b"{}"[..]),
+            ("Custom/Clothing/Moved/x.vab", &b"unity-x"[..]),
+        ],
+    );
     write_test_var_with_deps(&vars.join("D.Dep.1.var"), &[], &[("Other/a-copy.png", &b"image-a"[..])]);
     let scanned = scan_directory_with_target_with_progress(&vars, &[], Some(&target), |_, _| {}).expect("scan");
 
@@ -7157,6 +7178,12 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
     assert!(whole.incomplete.is_empty(), "{:?}", whole.incomplete);
     let broken = x.copies.iter().find(|c| c.package_id == "S.Broken.1").expect("listed");
     assert_eq!(broken.incomplete, vec!["Custom/Clothing/x.vab".to_string()]);
+    let lacks = |pkg: &str| x.copies.iter().find(|c| c.package_id == pkg).expect(pkg).incomplete.clone();
+    assert_eq!(lacks("S.Other.1"), vec!["Custom/Clothing/x.vaj".to_string()], "another .vaj");
+    assert_eq!(lacks("S.Moved.1"), vec!["Custom/Clothing/x.vab".to_string(), "Custom/Clothing/x.vaj".to_string()], "not at the paths");
+    let mut moved = BTreeMap::new();
+    moved.insert(x.key.clone(), "S.Moved.1:Custom/Clothing/Moved/x.vam".to_string());
+    apply_clean(&target, scanned.clone(), &moved, None, None).expect_err("refused");
     let mut bad = BTreeMap::new();
     bad.insert(x.key.clone(), "S.Broken.1:Custom/Clothing/x.vam".to_string());
     let err = apply_clean(&target, scanned.clone(), &bad, None, None).expect_err("refused");
