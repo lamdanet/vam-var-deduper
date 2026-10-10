@@ -8751,7 +8751,8 @@ function pkgMoreMenu(event) {
     {
       label: "Send to",
       submenu: [
-        { label: "Clean VARs", action: () => sendVarToTargetPage("db-find", item.file_path) },
+        { label: "Clean VARs", action: () => sendVarToTargetPage("clean-vars", item.file_path) },
+        { label: "Clean VARs, as the source", action: () => sendVarToTargetPage("clean-many", item.file_path) },
         { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", item.file_path) },
         { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", item.file_path) },
         { label: "Dependency Usage", action: () => sendVarToTargetPage("dependency-usage", item.file_path) },
@@ -8813,7 +8814,8 @@ function pkgRunAction(act, event) {
       pkgScrollTo("files");
       return;
     case "clean-vars":
-      if (PKG.item) sendVarToTargetPage("db-find", PKG.item.file_path);
+      // "Clean against it": the package is the source the others use.
+      if (PKG.item) sendVarToTargetPage("clean-many", PKG.item.file_path);
       return;
     case "more":
       // The page-wide click handler closes menus: keep this click from it.
@@ -18652,7 +18654,8 @@ function libContextMenu(event, item) {
         {
           label: "Send to",
           submenu: [
-            { label: "Clean VARs", action: () => sendVarToTargetPage("db-find", filePath) },
+            { label: "Clean VARs", action: () => sendVarToTargetPage("clean-vars", filePath) },
+            { label: "Clean VARs, as the source", action: () => sendVarToTargetPage("clean-many", filePath) },
             { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", filePath) },
             { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", filePath) },
             { label: "Dependency Usage", action: () => sendVarToTargetPage("dependency-usage", filePath) },
@@ -22159,21 +22162,13 @@ async function blockCreatorByPackageId(packageId) {
   }
 }
 
-// Send a VAR (by path) to another page as its Target VAR and navigate there.
-// Shared by the VAR Details "Send as Target VAR" tile and the VAR Packages
-// grid right-click menu. `page`: "db-find" | "fix-missing" | "internalize-resources".
+// Send a VAR (by path) to another page and open it there. Shared by
+// Package Explorer and the VAR Packages right-click menu. `page`:
+// "clean-vars" (made smaller) | "clean-many" (the source others use) |
+// "fix-missing" | "internalize-resources" | "dependency-usage".
 function sendVarToTargetPage(page, path) {
   const target = String(path || "").trim();
   if (!target) return;
-  const parentDir = () => {
-    const idx = Math.max(target.lastIndexOf("\\"), target.lastIndexOf("/"));
-    return idx > 0 ? target.slice(0, idx) : "";
-  };
-  const goto = (route) => {
-    const link = document.querySelector(`[data-sidebar-link="${route}"]`);
-    if (link) link.click();
-    else if (window.__switchPage) window.__switchPage(route);
-  };
 
   if (page === "fix-missing" || page === "missing-resources") {
     fmOpen(target, { scan: true });
@@ -22193,14 +22188,16 @@ function sendVarToTargetPage(page, path) {
     return;
   }
 
-  // Default hand-off target is Clean VARs (db-find), the sole workspace page.
-  goto("db-find");
-  const dbfInput = $("dbf-target-var-path");
-  if (dbfInput) {
-    dbfInput.value = target;
-    dbfInput.dispatchEvent(new Event("input", { bubbles: true }));
+  // Clean VARs: one package made smaller, or the source of Clean many.
+  if (CV.applying || CM.applying) {
+    showToast("Wait until Clean finishes writing.", "info");
+    return;
   }
-  addLog(`Sent target VAR to Clean VARs: ${target}`);
+  const many = page === "clean-many";
+  fmStoreSet(CV_MODE, many ? "many" : "one");
+  if (many) cmOpen(target, { scan: true });
+  else cvOpen(target, { scan: true });
+  addLog(`Sent to Clean VARs${many ? " as the source" : ""}: ${target}`);
 }
 
 // Image zoom lightbox: opens the given image source full-size with a zoom
