@@ -104,6 +104,17 @@ release time, it fills it with the commit messages since the last release.
   free once each user has its own copy of what it uses. A big package its
   users barely touch can go; a shared library should stay, and is a good
   replacement source to prefer in Fix Missing
+- **Clean VARs (new)**, beside the old Clean VARs page while it's finished:
+  make one package smaller by pointing its files at exact copies in other
+  packages, which become its dependencies. It shows each file the package
+  uses with a copy elsewhere, a preview, and the packages that have it; a
+  copy counts only if that package has the whole resource (a clothing
+  item's .vaj and .vab, the files a preset loads, a plugin's scripts).
+  Files the package itself needs in place stay: one a plugin script in it
+  loads by path, or a preset's picture. Choose per file, use one package for
+  all its files, or take the suggested copy for all. Clean writes the
+  original after a backup, shows the real size before and after, and
+  Restore puts the original back
 
 ### Changed
 - Package Explorer replaces the VAR Details page, which is gone: everything
