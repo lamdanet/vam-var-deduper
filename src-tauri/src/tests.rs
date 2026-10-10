@@ -7097,7 +7097,7 @@ fn database_log_is_emptied_at_open_and_kept_small() {
 
 #[test]
 fn clean_var_offers_and_uses_packages_only_the_database_knows() {
-    use crate::clean_var::{apply_clean, clean_candidates};
+    use crate::clean_var::{apply_clean, clean_candidates, db_copies_page};
 
     let dir = repo_root().join("tmp_clean_var_db_test");
     if dir.exists() {
@@ -7157,6 +7157,15 @@ fn clean_var_offers_and_uses_packages_only_the_database_knows() {
     let lacks = |pkg: &str| x.copies.iter().find(|c| c.package_id == pkg).expect(pkg).incomplete.clone();
     assert!(lacks("D.Whole.1").is_empty());
     assert_eq!(lacks("D.Part.1"), vec!["Custom/Clothing/x.vab".to_string()], "the database shows what it lacks");
+
+    // The panel's tab: one file's copies, whole ones first, a page at a time.
+    let page = db_copies_page(&target, &scanned, &db, "Custom/Clothing/x.vam", 0, 1).expect("page");
+    assert_eq!(page.total, 2);
+    assert_eq!(page.copies.len(), 1);
+    assert_eq!(page.copies[0].package_id, "D.Whole.1", "the whole copy first");
+    let next = db_copies_page(&target, &scanned, &db, "Custom/Clothing/x.vam", 1, 20).expect("next");
+    assert_eq!(next.copies.iter().map(|c| c.package_id.as_str()).collect::<Vec<_>>(), vec!["D.Part.1"]);
+    assert!(!next.copies[0].incomplete.is_empty());
 
     let mut keep = BTreeMap::new();
     keep.insert(a.key.clone(), "D.Whole.1:Custom/a.png".to_string());

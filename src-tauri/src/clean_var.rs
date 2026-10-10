@@ -26,7 +26,7 @@ use crate::{
     db::{self, Db},
     execute::{prepare_package_changes, rewrite_package, sum_removed_bytes},
     fix_var::{collect_pkg_refs, free_backup_path, is_text_path},
-    models::{AppState, PreparedPackage, ProgressPayload, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
+    models::{AppState, PreparedPackage, ProgressPayload, ResourceRef, ScannedData, TaskHandle, KEEP_ALL_VALUE, META_PATH},
     naming,
     scan::{compute_missing_siblings, load_cached_scan_shared, load_cached_scan_with_target},
     tasks::{list_target_var_text_refs, new_progress_payload, parse_additional_dirs, set_task_progress},
@@ -78,6 +78,13 @@ pub(crate) struct CleanReport {
     /// (offered as content, not used): left alone.
     pub(crate) unreferenced_files: u32,
     pub(crate) unreferenced_bytes: u64,
+}
+
+/// One page of a file's copies in packages only the database knows.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct CleanDbPage {
+    pub(crate) copies: Vec<CleanSource>,
+    pub(crate) total: u32,
 }
 
 /// The same file, however its path is spelled (a package outside the
@@ -439,6 +446,122 @@ impl<'a> Whole<'a> {
     }
 }
 
+/// The package families the target already depends on.
+fn dep_families(target: &PreparedPackage) -> HashSet<String> {
+    target
+        .dependencies
+        .as_object()
+        .map(|m| m.keys().map(|k| naming::package_base(k).to_ascii_lowercase()).collect())
+        .unwrap_or_default()
+}
+
+/// What the database has of each of `rs` (with what goes with it), by crc:
+/// one copy per package not in the folders, each marked with what it lacks
+/// of the whole resource. Path -> copies.
+fn db_copies(
+    db: &Db,
+    target: &PreparedPackage,
+    own_refs: &OwnRefs,
+    scanned: &ScannedData,
+    rs: &[&ResourceRef],
+    is_dep: &dyn Fn(&str) -> bool,
+) -> Result<HashMap<String, Vec<CleanSource>>> {
+    let target_files = file_map(target);
+    let crcs: Vec<u32> = rs
+        .iter()
+        .flat_map(|r| {
+            let needs = own_refs.needs(&r.internal_path);
+            std::iter::once(r.crc32).chain(
+                bundle_in(target, &r.internal_path)
+                    .iter()
+                    .chain(&needs.same)
+                    .chain(&needs.beside)
+                    .map(|m| target_files.get(m.as_str()).and_then(|(crc, _)| *crc))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let exclude: HashSet<String> = std::iter::once(target.package_id.clone()).collect();
+    let conn = db.read()?;
+    let found = db::find_crc_matches_bulk(&conn, &crcs, &exclude, |_, _| {})?;
+    drop(conn);
+    let mut out = HashMap::new();
+    for r in rs {
+        let Some(hits) = r.crc32.and_then(|crc| found.get(&crc)) else {
+            continue;
+        };
+        let bundle = bundle_in(target, &r.internal_path);
+        let needs = own_refs.needs(&r.internal_path);
+        // A member is there when the database has the same file (crc, size)
+        // in that package where it must be.
+        let has = |pkg: &str, m: &String, at: &str| {
+            target_files.get(m.as_str()).is_some_and(|(crc, size)| {
+                crc.and_then(|c| found.get(&c))
+                    .is_some_and(|hs| hs.iter().any(|h| h.package_id == pkg && h.internal_path == at && h.size as u64 == *size))
+            })
+        };
+        let lacks = |pkg: &str, copy: &str| -> Vec<String> {
+            let same = bundle.iter().chain(&needs.same).filter(|m| !has(pkg, m, m));
+            let beside = needs.beside.iter().filter(|m| !has(pkg, m, &beside_at(&r.internal_path, copy, m)));
+            same.chain(beside).cloned().collect()
+        };
+        let mut seen: HashSet<&str> = HashSet::new();
+        let copies: Vec<CleanSource> = hits
+            .iter()
+            .filter(|h| h.size as u64 == r.size && !scanned.packages.contains_key(&h.package_id))
+            .filter(|h| seen.insert(h.package_id.as_str()))
+            .map(|h| CleanSource {
+                package_id: h.package_id.clone(),
+                file_path: String::new(),
+                internal_path: h.internal_path.clone(),
+                installed: false,
+                already_dependency: is_dep(&h.package_id),
+                incomplete: lacks(&h.package_id, &h.internal_path),
+            })
+            .collect();
+        if !copies.is_empty() {
+            out.insert(r.internal_path.clone(), copies);
+        }
+    }
+    Ok(out)
+}
+
+/// One page of a file's copies in the database (the panel's tab): whole ones
+/// first, then ones in packages it already depends on, then by name.
+pub(crate) fn db_copies_page(
+    target_path: &Path,
+    scanned: &ScannedData,
+    db: &Db,
+    path: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<CleanDbPage> {
+    let target = find_target(scanned, target_path).ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
+    let r = target
+        .resource_refs
+        .iter()
+        .find(|r| r.internal_path == path)
+        .ok_or_else(|| anyhow!("{path} isn't in the package"))?;
+    let deps = dep_families(target);
+    let is_dep = |pkg: &str| deps.contains(&naming::package_base(pkg).to_ascii_lowercase());
+    let own_refs = OwnRefs::read(target_path, target)?;
+    let mut copies = db_copies(db, target, &own_refs, scanned, &[r], &is_dep)?.remove(path).unwrap_or_default();
+    copies.sort_by(|a, b| {
+        b.incomplete
+            .is_empty()
+            .cmp(&a.incomplete.is_empty())
+            .then(b.already_dependency.cmp(&a.already_dependency))
+            .then_with(|| a.package_id.to_lowercase().cmp(&b.package_id.to_lowercase()))
+    });
+    Ok(CleanDbPage {
+        total: copies.len() as u32,
+        copies: copies.into_iter().skip(offset).take(limit).collect(),
+    })
+}
+
 /// What the target uses itself that has exact copies elsewhere.
 pub(crate) fn clean_candidates(
     target_path: &Path,
@@ -455,11 +578,7 @@ pub(crate) fn clean_candidates(
         .into_iter()
         .collect();
     let members: HashSet<&String> = target.support_paths.values().flatten().collect();
-    let deps: HashSet<String> = target
-        .dependencies
-        .as_object()
-        .map(|m| m.keys().map(|k| naming::package_base(k).to_ascii_lowercase()).collect())
-        .unwrap_or_default();
+    let deps = dep_families(target);
     let is_dep = |pkg: &str| deps.contains(&naming::package_base(pkg).to_ascii_lowercase());
 
     let mut report = CleanReport {
@@ -514,10 +633,11 @@ pub(crate) fn clean_candidates(
         });
     }
 
-    // Packages only the database knows, by the files' contents (the crc32
-    // index): not installed, so choosing one means downloading it.
+    // Files whose copies only the database knows (packages not installed:
+    // choosing one means downloading it). The files with a copy in the folders
+    // have the database's in the panel's tab, looked up when opened.
     if let Some(db) = db {
-        let wanted: Vec<&crate::models::ResourceRef> = target
+        let wanted: Vec<&ResourceRef> = target
             .resource_refs
             .iter()
             .filter(|r| {
@@ -527,80 +647,23 @@ pub(crate) fn clean_candidates(
                     && !is_scene(&r.internal_path)
                     && !members.contains(&r.internal_path)
                     && used.contains(&r.internal_path)
+                    && !by_path.contains_key(&r.internal_path)
             })
             .collect();
-        let target_files = file_map(target);
-        let crcs: Vec<u32> = wanted
-            .iter()
-            .flat_map(|r| {
-                let needs = own_refs.needs(&r.internal_path);
-                std::iter::once(r.crc32).chain(
-                    bundle_in(target, &r.internal_path)
-                        .iter()
-                        .chain(&needs.same)
-                        .chain(&needs.beside)
-                        .map(|m| target_files.get(m.as_str()).and_then(|(crc, _)| *crc))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .flatten()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let exclude: HashSet<String> = std::iter::once(target_id.clone()).collect();
-        let conn = db.read()?;
-        let found = db::find_crc_matches_bulk(&conn, &crcs, &exclude, |_, _| {})?;
-        drop(conn);
+        let mut found = db_copies(db, target, &own_refs, scanned, &wanted, &is_dep)?;
         for r in wanted {
-            let Some(hits) = r.crc32.and_then(|crc| found.get(&crc)) else {
+            let Some(copies) = found.remove(&r.internal_path) else {
                 continue;
             };
-            let bundle = bundle_in(target, &r.internal_path);
-            let needs = own_refs.needs(&r.internal_path);
-            // A member is there when the database has the same file (crc,
-            // size) in that package where it must be.
-            let has = |pkg: &str, m: &String, at: &str| {
-                target_files.get(m.as_str()).is_some_and(|(crc, size)| {
-                    crc.and_then(|c| found.get(&c))
-                        .is_some_and(|hs| hs.iter().any(|h| h.package_id == pkg && h.internal_path == at && h.size as u64 == *size))
-                })
-            };
-            let lacks = |pkg: &str, copy: &str| -> Vec<String> {
-                let same = bundle.iter().chain(&needs.same).filter(|m| !has(pkg, m, m));
-                let beside = needs.beside.iter().filter(|m| !has(pkg, m, &beside_at(&r.internal_path, copy, m)));
-                same.chain(beside).cloned().collect()
-            };
-            let mut seen: HashSet<&str> = HashSet::new();
-            let extra: Vec<CleanSource> = hits
-                .iter()
-                .filter(|h| h.size as u64 == r.size && !scanned.packages.contains_key(&h.package_id))
-                .filter(|h| seen.insert(h.package_id.as_str()))
-                .map(|h| CleanSource {
-                    package_id: h.package_id.clone(),
-                    file_path: String::new(),
-                    internal_path: h.internal_path.clone(),
-                    installed: false,
-                    already_dependency: is_dep(&h.package_id),
-                    incomplete: lacks(&h.package_id, &h.internal_path),
-                })
-                .collect();
-            if extra.is_empty() {
-                continue;
-            }
-            match by_path.get(&r.internal_path) {
-                Some(&i) => report.items[i].copies.extend(extra),
-                None => {
-                    by_path.insert(r.internal_path.clone(), report.items.len());
-                    report.items.push(CleanItem {
-                        key: format!("dbfind|{}|{}", target_id, r.internal_path),
-                        path: r.internal_path.clone(),
-                        size: r.effective_size.max(r.size),
-                        bundle,
-                        copies: extra,
-                        stays: None,
-                    });
-                }
-            }
+            by_path.insert(r.internal_path.clone(), report.items.len());
+            report.items.push(CleanItem {
+                key: format!("dbfind|{}|{}", target_id, r.internal_path),
+                path: r.internal_path.clone(),
+                size: r.effective_size.max(r.size),
+                bundle: bundle_in(target, &r.internal_path),
+                copies,
+                stays: None,
+            });
         }
     }
 
@@ -639,6 +702,28 @@ pub(crate) fn clean_var_candidates(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No folder scan yet: check the package again.".to_string())?;
     clean_candidates(target_path, &scanned, include_db.then_some(&*db)).map_err(|e| e.to_string())
+}
+
+/// A page of one file's copies in packages only the database knows (the
+/// panel's "In the database" tab).
+#[allow(clippy::too_many_arguments)] // a Tauri command: one argument per field the UI sends
+#[tauri::command(async)]
+pub(crate) fn clean_var_db_copies(
+    input_dir: String,
+    additional_input_dirs: Option<Vec<String>>,
+    target_var_path: String,
+    path: String,
+    offset: usize,
+    limit: usize,
+    state: State<'_, AppState>,
+    db: State<'_, Db>,
+) -> Result<CleanDbPage, String> {
+    let target_path = Path::new(&target_var_path);
+    let additional = parse_additional_dirs(&additional_input_dirs.unwrap_or_default());
+    let scanned = load_cached_scan_shared(&state.scan_cache, Path::new(&input_dir), &additional, Some(target_path))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No folder scan yet: check the package again.".to_string())?;
+    db_copies_page(target_path, &scanned, &db, &path, offset, limit.clamp(1, 200)).map_err(|e| e.to_string())
 }
 
 /// What Clean did to the package.

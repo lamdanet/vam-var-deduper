@@ -181,6 +181,7 @@ fn main() {
             start_apply_internalize_task,
             dep_usage::start_package_usage_task,
             clean_var::clean_var_candidates,
+            clean_var::clean_var_db_copies,
             clean_var::start_clean_var_task,
             clean_var::restore_clean_backup,
             start_plan_clean_duplicates_task,
