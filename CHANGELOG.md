@@ -119,6 +119,14 @@ release time, it fills it with the commit messages since the last release.
   copies in your folders, how much is chosen and how much is left to choose,
   its estimated size after Clean, and what more the database offers, what
   stays and what it doesn't use
+- **VAR Packages: Explore**, a second tab beside Library: browse your
+  packages one folder at a time. A folder tree on the left shows every folder
+  in AddonPackages and the offload folder with its package count; the open
+  folder's path and its subfolders sit above the same cards, details panel
+  and tools as the Library tab. Include subfolders lists everything under
+  it. Open a folder… browses a folder outside your library (a downloads
+  folder, say) without adding it. Right-click a package, Show its folder, to
+  open where it lives
 - **Clean many packages**, the second tab of Clean VARs: pick a source
   package, and every other package that carries copies of its files is
   listed. Tick the ones to clean: their copies of the files they use come
