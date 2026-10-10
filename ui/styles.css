@@ -20119,3 +20119,327 @@ button.pkg-stat:focus-visible::after {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---- VAR Packages: Library / Explore tabs, and Explore's folders ---- */
+.lib-seg.vp-tabs {
+  flex: 0 0 auto;
+}
+.vp-tabs .lib-seg-btn {
+  flex: 0 0 auto;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.vp-tabs .lib-seg-btn.active {
+  background: var(--lib-accent);
+  color: var(--lib-accent-fg);
+}
+
+/* The folder tree, left of the grid (Explore only). */
+.lib-folders {
+  width: 250px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--lib-surface);
+  border-right: 1px solid var(--lib-border);
+}
+.lib-folders.hidden {
+  display: none;
+}
+.vpx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--lib-border);
+  color: var(--lib-text-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.vpx-find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 10px 4px;
+  padding: 0 8px;
+  border: 1px solid var(--lib-border);
+  border-radius: 6px;
+  background: var(--lib-base);
+}
+.vpx-find .material-symbols-outlined {
+  color: var(--lib-text-aside);
+  font-size: 16px;
+}
+.vpx-find input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--lib-text);
+  font: inherit;
+  font-size: 12px;
+}
+.vpx-find input::placeholder {
+  color: var(--lib-placeholder);
+}
+.vpx-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 6px 8px;
+  overflow: auto;
+}
+.vpx-empty {
+  margin: 12px 8px;
+  color: var(--lib-text-aside);
+  font-size: 12px;
+}
+.vpx-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-left: calc(var(--vpx-depth, 0) * 14px);
+  border-radius: 6px;
+}
+.vpx-row:hover {
+  background: var(--lib-hover);
+}
+.vpx-row.is-current {
+  background: color-mix(in srgb, var(--lib-accent) 18%, transparent);
+}
+.vpx-row.is-current .vpx-name {
+  color: var(--lib-text);
+  font-weight: 600;
+}
+.vpx-caret {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--lib-text-aside);
+  cursor: pointer;
+}
+.vpx-caret.is-leaf {
+  cursor: default;
+}
+.vpx-caret .material-symbols-outlined {
+  font-size: 18px;
+}
+.vpx-name {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px 0 2px;
+  border: 0;
+  background: none;
+  color: var(--lib-text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.vpx-name .material-symbols-outlined {
+  flex: 0 0 auto;
+  color: var(--lib-text-aside);
+  font-size: 17px;
+}
+.vpx-row.is-current .vpx-name .material-symbols-outlined {
+  color: var(--lib-accent);
+}
+.vpx-row.is-root .vpx-name {
+  color: var(--lib-text);
+  font-weight: 600;
+}
+.vpx-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vpx-count {
+  flex: 0 0 auto;
+  color: var(--lib-text-aside);
+  font-family: var(--lib-mono, inherit);
+  font-size: 10.5px;
+}
+.vpx-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--lib-text-aside);
+  cursor: pointer;
+}
+.vpx-close:hover {
+  background: var(--lib-elevated);
+  color: var(--lib-text);
+}
+.vpx-close .material-symbols-outlined {
+  font-size: 15px;
+}
+.vpx-foot {
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--lib-border);
+}
+.vpx-outside-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+.vpx-outside-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+/* The open folder and its subfolders, above the grid (Explore only). */
+.lib-crumbs {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--lib-border);
+}
+.lib-crumbs.hidden {
+  display: none;
+}
+.vpx-crumbs-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.vpx-path {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.vpx-seg {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--lib-text-2);
+  font: inherit;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+/* The root and the open folder keep their names; the ones between shrink. */
+.vpx-path > .vpx-seg:first-child {
+  flex-shrink: 0;
+}
+button.vpx-seg:hover {
+  background: var(--lib-hover);
+  color: var(--lib-text);
+}
+.vpx-seg.is-current {
+  flex: 0 0 auto;
+  max-width: 420px;
+  color: var(--lib-text);
+  font-weight: 700;
+  cursor: default;
+}
+.vpx-sep {
+  flex: 0 0 auto;
+  color: var(--lib-text-aside);
+  font-size: 16px;
+}
+.vpx-facts {
+  flex: 0 0 auto;
+  color: var(--lib-text-aside);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.vpx-deep {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--lib-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.vpx-deep input {
+  margin: 0;
+  accent-color: var(--lib-accent);
+}
+.vpx-deep:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+.vpx-subs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.vpx-sub {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--lib-border);
+  border-radius: 6px;
+  background: var(--lib-elevated);
+  color: var(--lib-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.vpx-sub:hover {
+  border-color: var(--lib-border-bright);
+  color: var(--lib-text);
+}
+.vpx-sub .material-symbols-outlined {
+  color: var(--lib-text-aside);
+  font-size: 16px;
+}
+.vpx-sub-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A narrow window: the tree gets narrower, the counts and the facts go. */
+@media (max-width: 1100px) {
+  .lib-folders {
+    width: 200px;
+  }
+  .vpx-facts {
+    display: none;
+  }
+}
