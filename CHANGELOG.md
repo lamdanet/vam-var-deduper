@@ -114,7 +114,11 @@ release time, it fills it with the commit messages since the last release.
   loads by path, or a preset's picture. Choose per file, use one package for
   all its files, or take the suggested copy for all. Clean writes the
   original after a backup, shows the real size before and after, and
-  Restore puts the original back
+  Restore puts the original back. Its Clean card shows the package in
+  numbers, as the old page did: its size now, how much is reclaimable with
+  copies in your folders, how much is chosen and how much is left to choose,
+  its estimated size after Clean, and what more the database offers, what
+  stays and what it doesn't use
 - **Clean many packages**, the second tab of Clean VARs (new): pick a source
   package, and every other package that carries copies of its files is
   listed. Tick the ones to clean: their copies of the files they use come
