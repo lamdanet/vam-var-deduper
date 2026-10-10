@@ -21035,3 +21035,113 @@ button.pkg-stat:focus-visible::after {
     flex-wrap: wrap;
   }
 }
+
+/* ---- Clean one package: the package in numbers (as the old page's stats) ---- */
+.cv-figs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 2px 20px 10px;
+}
+.cv-fig {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.cv-fig small {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.cv-fig b {
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.cv-fig span {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.cv-fig.is-good b {
+  color: var(--accent-success);
+}
+.cv-fig.is-after {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-2));
+}
+.cv-fig-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 20px 10px;
+}
+.cv-fig-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.cv-fig-track > div {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 160ms ease;
+}
+.cv-fig-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.cv-fig-legend b {
+  color: var(--text);
+}
+.cv-fig-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  vertical-align: 0;
+}
+.cv-fig-legend i.is-chosen {
+  background: var(--primary);
+}
+.cv-fig-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 20px 12px;
+  padding: 0;
+  list-style: none;
+}
+.cv-fig-lines li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.cv-fig-lines b {
+  color: var(--text);
+}
+.cv-fig-lines .material-symbols-outlined {
+  color: var(--text-dim);
+  font-size: 17px;
+}
+@media (max-width: 1000px) {
+  .cv-figs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
