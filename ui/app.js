@@ -14169,11 +14169,17 @@ function cvFlash(text) {
 async function cvApply() {
   if (!invoke || CV.applying || !CV.picks.size) return;
   const backup = cvBackup();
-  const backupDir = cvBackupDir();
+  let backupDir = cvBackupDir();
   if (backup && !backupDir) {
-    cvFlash("Choose a folder for the backups first.");
-    cvRenderStrip();
-    return;
+    // The first Clean: choose where backups go, then carry on.
+    backupDir = await invoke("pick_folder").catch(() => null);
+    if (!backupDir) {
+      cvFlash("Choose a folder for the backups first.");
+      cvRenderStrip();
+      return;
+    }
+    fmStoreSet(CV_BACKUP_DIR, backupDir);
+    cvRenderDetails();
   }
   const t = cvTotals();
   const name = libTitle(CV.item);
@@ -14194,6 +14200,7 @@ async function cvApply() {
   cvRenderStrip();
   cvRenderSource();
   let done = null;
+  let stale = false;
   try {
     const p = await fmPoll("start_clean_var_task", {
       inputDir: vamAddonPackagesDir(),
@@ -14206,10 +14213,19 @@ async function cvApply() {
     done = { ...(p.clean_result ?? {}), name, target, points: [...t.points] };
     vpRefreshAfterMutation().catch(() => {});
   } catch (e) {
-    showToast(`Clean failed: ${String(e?.message || e)}`, "error", 8000);
+    const msg = String(e?.message || e);
+    // A package in the folders changed since the check: nothing was written.
+    stale = /check (the package|it) again/i.test(msg);
+    if (!stale) showToast(`Clean failed: ${msg}`, "error", 8000);
   } finally {
     CV.applying = false;
     cvRender();
+  }
+  if (stale && token === CV.token) {
+    await cvScan();
+    cvFlash("Your folders changed since the check: checked again, your choices kept where they still fit. Press Clean again.");
+    cvRenderStrip();
+    return;
   }
   if (done && token !== CV.token) {
     // Another package was opened meanwhile: say so, don't show it there.
@@ -14424,7 +14440,7 @@ function cvPlanHtml() {
   const dir = cvBackupDir();
   const where = `${cvSelfName()} itself${!cvBackup() ? ", without a backup" : dir ? `, after backing it up to …\\${dir.split(/[\\/]/).filter(Boolean).slice(-2).join("\\")}` : " (choose a folder for the backup)"}`;
   const line = (icon, label, body) => `<div class="fm-plan-line"><span class="material-symbols-outlined">${icon}</span><span class="fm-plan-label">${label}</span><span class="fm-plan-body">${body}</span></div>`;
-  const summary = `${pkgCount(t.chosen, "file", "files")} · ${formatBytesLocal(t.chosenBytes)} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`;
+  const summary = `${pkgCount(t.chosen, "file", "files")} · about ${formatBytesLocal(t.chosenBytes)} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`;
   const open = CV.planOpen;
   return `<div class="fm-plan${open ? "" : " is-folded"}">
       <button type="button" class="fm-plan-toggle" data-cv-act="plan" aria-expanded="${open}">
@@ -14433,7 +14449,7 @@ function cvPlanHtml() {
       </button>
       ${
         open
-          ? `${line("delete_sweep", "Remove", `${pkgCount(t.chosen, "file", "files")} with what goes with them, about ${escapeHtml(formatBytesLocal(t.chosenBytes))}`)}
+          ? `${line("delete_sweep", "Remove", `${pkgCount(t.chosen, "file", "files")} with what goes with them: ${escapeHtml(formatBytesLocal(t.chosenBytes))} of files. The package shrinks a little less (it's compressed); the result shows the real size.`)}
              ${line("link", "Point at", few([...t.points], (pkg) => fmPkgLabelHtml(pkg)))}
              ${t.newDeps.size ? line("add_link", "New dependencies", few([...t.newDeps], (pkg) => fmPkgLabelHtml(pkg))) : ""}
              ${t.absent.size ? line("warning", "Not installed", `${few([...t.absent], (pkg) => fmPkgLabelHtml(pkg))}<small class="fm-plan-more">${cvSelfName()} won't work until ${t.absent.size === 1 ? "it's" : "they're"} downloaded</small>`) : ""}
@@ -14567,7 +14583,7 @@ function cvRenderStrip() {
   const note = CV.flash
     ? escapeHtml(CV.flash)
     : t.chosen
-      ? `${escapeHtml(formatBytesLocal(t.chosenBytes))} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`
+      ? `about ${escapeHtml(formatBytesLocal(t.chosenBytes))} smaller · ${t.newDeps.size ? pkgCount(t.newDeps.size, "new dependency", "new dependencies") : "no new dependency"}`
       : "Each file you choose points at its copy instead.";
   host.innerHTML = `<span class="fm-ring" title="${escapeAttribute(of)}">${pkgRing(t.files ? t.chosen / t.files : 0, t.chosen && t.chosen === t.files ? "var(--accent-success)" : "var(--primary)", { size: 38, track: "var(--line)" })}<b>${t.chosen}</b></span>
      <span class="fm-strip-text"><b>${of}</b><small>${note}</small></span>
