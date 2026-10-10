@@ -888,7 +888,7 @@ pub(crate) fn friendly_io_error(err: &std::io::Error, verb: &str) -> String {
 /// `trash::Error` is its own enum with no `raw_os_error()` and no `io::Error`
 /// conversion, and the crate does not guarantee which variant an IFileOperation
 /// failure lands in — so check the structured code *and* the description.
-fn friendly_trash_error(err: &trash::Error) -> String {
+pub(crate) fn friendly_trash_error(err: &trash::Error) -> String {
     if let trash::Error::Os { code, .. } = err {
         if matches!(
             *code,
@@ -1355,7 +1355,7 @@ fn finish_task(
 /// Probe result for this path's volume, computed once per volume per session.
 /// Takes the cache handle rather than `AppState` so a worker thread can use it
 /// after the `State` guard is gone.
-fn recycle_support_for(
+pub(crate) fn recycle_support_for(
     cache: &Arc<Mutex<HashMap<PathBuf, RecycleSupport>>>,
     path: &Path,
 ) -> RecycleSupport {

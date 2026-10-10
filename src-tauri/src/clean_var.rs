@@ -100,7 +100,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// The scanned package that is this file: by its path as written first (one
 /// pass over strings), else by the real file (a package outside the folders
 /// is kept under its canonical form).
-fn find_target<'a>(scanned: &'a ScannedData, target_path: &Path) -> Option<&'a PreparedPackage> {
+pub(crate) fn find_target<'a>(scanned: &'a ScannedData, target_path: &Path) -> Option<&'a PreparedPackage> {
     let plain = |p: &Path| {
         let s = p.to_string_lossy().replace('\\', "/");
         s.strip_prefix("//?/").unwrap_or(&s).to_lowercase()
@@ -447,7 +447,7 @@ impl<'a> Whole<'a> {
 }
 
 /// The package families the target already depends on.
-fn dep_families(target: &PreparedPackage) -> HashSet<String> {
+pub(crate) fn dep_families(target: &PreparedPackage) -> HashSet<String> {
     target
         .dependencies
         .as_object()
@@ -568,6 +568,17 @@ pub(crate) fn clean_candidates(
     scanned: &ScannedData,
     db: Option<&Db>,
 ) -> Result<CleanReport> {
+    clean_candidates_from(target_path, scanned, db, None)
+}
+
+/// `clean_candidates`, with `only`: just the copies in that package (Clean
+/// many: the package the others point at), the whole one first.
+pub(crate) fn clean_candidates_from(
+    target_path: &Path,
+    scanned: &ScannedData,
+    db: Option<&Db>,
+    only: Option<&str>,
+) -> Result<CleanReport> {
     let target_str = target_path.to_string_lossy().to_string();
     let target = find_target(scanned, target_path).ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
     let target_id = target.package_id.clone();
@@ -592,6 +603,9 @@ pub(crate) fn clean_candidates(
         let Some(own) = group.refs.iter().find(|r| r.package_id == target_id) else {
             continue;
         };
+        if only.is_some_and(|o| !group.refs.iter().any(|r| r.package_id == o)) {
+            continue;
+        }
         let path = own.internal_path.clone();
         if path == META_PATH || is_scene(&path) || members.contains(&path) {
             continue;
@@ -606,7 +620,11 @@ pub(crate) fn clean_candidates(
         let mut seen: HashSet<&str> = HashSet::new();
         let mut copies: Vec<CleanSource> = Vec::new();
         for r in &group.refs {
-            if r.package_id == target_id || !seen.insert(r.package_id.as_str()) {
+            if r.package_id == target_id || only.is_some_and(|o| r.package_id != o) {
+                continue;
+            }
+            // That package has it at several paths: the one it has whole.
+            if only.is_none() && !seen.insert(r.package_id.as_str()) {
                 continue;
             }
             let lacks = whole.lacks(&path, &bundle, &needs, &r.package_id, &r.internal_path);
@@ -618,6 +636,10 @@ pub(crate) fn clean_candidates(
                 already_dependency: is_dep(&r.package_id),
                 incomplete: lacks,
             });
+        }
+        if only.is_some() {
+            copies.sort_by_key(|c| c.incomplete.len());
+            copies.truncate(1);
         }
         if copies.is_empty() {
             continue;
@@ -738,15 +760,42 @@ pub(crate) struct CleanResult {
     /// uncompressed).
     pub(crate) size_before: u64,
     pub(crate) size_after: u64,
+    /// The original went to the Recycle Bin.
+    #[serde(default)]
+    pub(crate) recycled: bool,
+}
+
+/// What happens to the package as it was when Clean writes over it.
+#[derive(Clone, Copy)]
+pub(crate) enum Original<'a> {
+    /// Nothing is kept.
+    Drop,
+    /// Copied into this folder first.
+    Backup(&'a Path),
+    /// Sent away by this (to the Recycle Bin) once the new one is written,
+    /// just before it takes the package's place.
+    Recycle(&'a dyn Fn(&Path) -> Result<(), String>),
 }
 
 /// Applies `keep_map` (item key → `package:path` of the copy to point at)
 /// to the package itself, backing it up first when asked.
 pub(crate) fn apply_clean(
     target_path: &Path,
-    mut scanned: ScannedData,
+    scanned: ScannedData,
     keep_map: &BTreeMap<String, String>,
     backup_dir: Option<&Path>,
+    db: Option<&Db>,
+) -> Result<CleanResult> {
+    let original = backup_dir.map_or(Original::Drop, Original::Backup);
+    apply_clean_with(target_path, scanned, keep_map, original, db)
+}
+
+/// `apply_clean`, with what happens to the original.
+pub(crate) fn apply_clean_with(
+    target_path: &Path,
+    mut scanned: ScannedData,
+    keep_map: &BTreeMap<String, String>,
+    original: Original<'_>,
     db: Option<&Db>,
 ) -> Result<CleanResult> {
     let target_id = find_target(&scanned, target_path)
@@ -822,8 +871,9 @@ pub(crate) fn apply_clean(
         backup_path: None,
         size_before: fs::metadata(target_path).map(|m| m.len()).unwrap_or(0),
         size_after: 0,
+        recycled: false,
     };
-    if let Some(dir) = backup_dir {
+    if let Original::Backup(dir) = original {
         fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
         let name = target_path
             .file_name()
@@ -841,11 +891,28 @@ pub(crate) fn apply_clean(
         .and_then(|n| n.to_str())
         .ok_or_else(|| anyhow!("invalid file name"))?;
     let staging = package.file_path.with_file_name(format!("{file_name}.clean-tmp"));
-    let written = rewrite_package(&scanned, package, &staging)
-        .and_then(|()| fs::rename(&staging, &package.file_path).map_err(anyhow::Error::from));
-    if let Err(err) = written {
+    if let Err(err) = rewrite_package(&scanned, package, &staging) {
         let _ = fs::remove_file(&staging);
         return Err(err).with_context(|| format!("couldn't write {} (is VaM using it?)", package.file_path.display()));
+    }
+    // The original goes to the Recycle Bin only once the new one is whole;
+    // if it can't, nothing changes.
+    if let Original::Recycle(recycle) = original {
+        if let Err(err) = recycle(&package.file_path) {
+            let _ = fs::remove_file(&staging);
+            bail!("{err}: {file_name} wasn't changed");
+        }
+        result.recycled = true;
+    }
+    if let Err(err) = fs::rename(&staging, &package.file_path) {
+        if result.recycled {
+            bail!(
+                "the original is in the Recycle Bin, but the cleaned one couldn't take its place ({err}): it's at {}",
+                staging.display()
+            );
+        }
+        let _ = fs::remove_file(&staging);
+        return Err(anyhow::Error::from(err)).with_context(|| format!("couldn't write {} (is VaM using it?)", package.file_path.display()));
     }
     result.size_after = fs::metadata(target_path).map(|m| m.len()).unwrap_or(0);
     Ok(result)
