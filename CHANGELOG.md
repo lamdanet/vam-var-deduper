@@ -10,6 +10,17 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Changed
+- **Clean and Fix show their progress**: while Run Fixes or Clean writes a
+  package, the bar says what it's doing (backing up, writing, putting it in
+  place), how much is done, how long it has run and about how long is left.
+  Clean many shows the same for each package as well as the whole
+
+### Fixed
+- A `.var` that isn't a package (often a Hub login page saved by a download
+  that ran while logged out) no longer stops a check: it's skipped and listed
+  in the warnings, which say what it is so you can download it again
+
 ## [0.2.0] - 2026-10-10
 
 ### Added
