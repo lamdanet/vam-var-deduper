@@ -8354,6 +8354,43 @@ function fmOpen(target, { scan = false } = {}) {
 
 // ---- Check -------------------------------------------------------------------------------
 
+// ---- A write that's running: what it's doing, how far, how long -----------------------
+
+// "12 s", "3 min 05 s", "1 h 02 min".
+function runDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ${String(s % 60).padStart(2, "0")} s`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+// How long it has run, and about how long it has left at its pace so far,
+// once it's far enough along for a fair guess.
+function runTimeText(run) {
+  const elapsed = (Date.now() - run.startedAt) / 1000;
+  const parts = [`${runDuration(elapsed)} so far`];
+  if (run.progress >= 0.03 && elapsed >= 2) {
+    const left = (elapsed * (1 - run.progress)) / run.progress;
+    parts.push(left < 5 ? "almost done" : `about ${runDuration(left)} left`);
+  }
+  return parts.join(" · ");
+}
+
+function runStart(message) {
+  return { progress: 0, message, startedAt: Date.now() };
+}
+
+// Shown in place of a page's action strip while its write runs. `note` is HTML.
+function runProgressHtml(run, note = "") {
+  const pct = Math.floor(run.progress * 100);
+  return `<div class="run-progress">
+      <div class="progress-head"><strong>${escapeHtml(run.message || "Working…")}</strong><span>${pct}%</span></div>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="progress-bar" style="width:${pct}%"></div></div>
+      <small>${escapeHtml(runTimeText(run))}${note ? ` · ${note}` : ""}</small>
+    </div>`;
+}
+
 async function fmPoll(command, args, onProgress) {
   const handle = await invoke(command, args);
   const taskId = handle?.id;
@@ -8689,8 +8726,8 @@ async function fmApply() {
     if (!ok) return;
   }
   FM.applying = true;
-  FM.message = "Fixing the package…";
-  fmRenderBar();
+  FM.run = runStart(`Fixing ${name}`);
+  fmRenderStrip();
   let done = null;
   try {
     const p = await fmPoll(
@@ -8705,25 +8742,26 @@ async function fmApply() {
         backup,
         backupDir: backup ? backupDir : null,
       },
-      (_f, message) => {
-        if (message) {
-          FM.message = message;
-          fmRenderBar();
-        }
+      (f, message) => {
+        if (!FM.run) return;
+        FM.run.progress = f;
+        if (message) FM.run.message = message;
+        fmRenderStrip();
       },
     );
-    done = { ...(p.fix_report ?? {}), count: fixes.length, name };
+    done = { ...(p.fix_report ?? {}), count: fixes.length, name, took: Date.now() - FM.run.startedAt };
     vpRefreshAfterMutation().catch(() => {});
   } catch (e) {
     showToast(`The fix failed: ${String(e?.message || e)}`, "error", 8000);
   } finally {
     FM.applying = false;
+    FM.run = null;
     fmRender();
   }
   // Checked again right away, so what's still missing (if anything) shows.
   if (done) {
     FM.lastFix = done;
-    fmFlash(`Fixed ${pkgCount(Number(done.fixes_applied ?? done.count), "missing file", "missing files")}. Checking it again…`);
+    fmFlash(`Fixed ${pkgCount(Number(done.fixes_applied ?? done.count), "missing file", "missing files")} in ${runDuration(done.took / 1000)}. Checking it again…`);
     await fmScan();
   }
 }
@@ -9854,6 +9892,10 @@ function fmRenderStrip() {
     return;
   }
   host.classList.remove("hidden");
+  if (FM.applying && FM.run) {
+    host.innerHTML = runProgressHtml(FM.run);
+    return;
+  }
   const sheet = `<button type="button" class="fm-icon-btn fm-sheet-toggle" data-fm-act="sheet" aria-expanded="${FM.sheetOpen}" title="${
     FM.sheetOpen ? "Fold Replacement Sources" : "Open Replacement Sources"
   }"><span class="material-symbols-outlined">${FM.sheetOpen ? "expand_more" : "expand_less"}</span></button>`;
@@ -13343,20 +13385,30 @@ async function cvApply() {
   const token = CV.token;
   const target = CV.target;
   CV.applying = true;
+  CV.run = runStart(`Cleaning ${name}`);
   cvRenderStrip();
   cvRenderSource();
   let done = null;
   let stale = false;
   try {
-    const p = await fmPoll("start_clean_var_task", {
-      inputDir: vamAddonPackagesDir(),
-      additionalInputDirs: cvExtraDirs(),
-      targetVarPath: CV.target,
-      keepMap,
-      backup,
-      backupDir: backup ? backupDir : null,
-    });
-    done = { ...(p.clean_result ?? {}), name, target, points: [...t.points] };
+    const p = await fmPoll(
+      "start_clean_var_task",
+      {
+        inputDir: vamAddonPackagesDir(),
+        additionalInputDirs: cvExtraDirs(),
+        targetVarPath: CV.target,
+        keepMap,
+        backup,
+        backupDir: backup ? backupDir : null,
+      },
+      (f, message) => {
+        if (!CV.run) return;
+        CV.run.progress = f;
+        if (message) CV.run.message = message;
+        cvRenderStrip();
+      },
+    );
+    done = { ...(p.clean_result ?? {}), name, target, points: [...t.points], took: Date.now() - CV.run.startedAt };
     vpRefreshAfterMutation().catch(() => {});
   } catch (e) {
     const msg = String(e?.message || e);
@@ -13365,6 +13417,7 @@ async function cvApply() {
     if (!stale) showToast(`Clean failed: ${msg}`, "error", 8000);
   } finally {
     CV.applying = false;
+    CV.run = null;
     cvRender();
   }
   if (stale && token === CV.token) {
@@ -13375,14 +13428,14 @@ async function cvApply() {
   }
   if (done && token !== CV.token) {
     // Another package was opened meanwhile: say so, don't show it there.
-    showToast(`Cleaned ${name}: ${formatBytesLocal(cvSaved(done))} smaller.`, "success", 8000);
+    showToast(`Cleaned ${name} in ${runDuration(done.took / 1000)}: ${formatBytesLocal(cvSaved(done))} smaller.`, "success", 8000);
     cvRecentAdd(target, "cleaned");
     return;
   }
   if (done) {
     CV.lastFix = done;
     CV.picks = new Map();
-    cvFlash(`Cleaned: ${formatBytesLocal(cvSaved(done))} smaller. Checking it again…`);
+    cvFlash(`Cleaned in ${runDuration(done.took / 1000)}: ${formatBytesLocal(cvSaved(done))} smaller. Checking it again…`);
     await cvScan();
   }
 }
@@ -13723,6 +13776,10 @@ function cvRenderStrip() {
     return;
   }
   host.classList.remove("hidden");
+  if (CV.applying && CV.run) {
+    host.innerHTML = runProgressHtml(CV.run);
+    return;
+  }
   const t = cvTotals();
   const of = `${t.chosen} of ${pkgCount(t.files, "file", "files")} chosen`;
   const note = CV.flash
@@ -14624,7 +14681,7 @@ async function cmApply() {
   if (!invoke || !t.ticked.length || cmBusy() || !CM.understood) return;
   const token = CM.token;
   const name = cmName();
-  Object.assign(CM, { confirming: false, applying: true, progress: 0, message: "Loading the folder scan…", lastRun: null });
+  Object.assign(CM, { confirming: false, applying: true, progress: 0, message: "Loading the folder scan…", startedAt: Date.now(), lastRun: null });
   cmRender();
   let done = null;
   let stale = false;
@@ -15147,12 +15204,8 @@ function cmRenderBar() {
   }
   const src = `<span class="cm-src-ok"><span class="material-symbols-outlined">lock</span>${escapeHtml(cmName())} isn't changed</span>`;
   if (CM.applying) {
-    const pct = Math.round(CM.progress * 100);
-    host.innerHTML = `<div class="cm-bar-progress">
-        <div class="progress-head"><strong>${escapeHtml(CM.message || "Cleaning…")}</strong><span>${pct}%</span></div>
-        <div class="progress-track"><div class="progress-bar" style="width:${pct}%"></div></div>
-        <small>Each original goes to the Recycle Bin. ${src}</small>
-      </div>`;
+    const run = { progress: CM.progress, message: CM.message || "Cleaning…", startedAt: CM.startedAt ?? Date.now() };
+    host.innerHTML = runProgressHtml(run, `Each original goes to the Recycle Bin. ${src}`);
     return;
   }
   const t = cmTotals();
