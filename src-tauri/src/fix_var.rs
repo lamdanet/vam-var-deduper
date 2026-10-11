@@ -17,7 +17,7 @@ use crate::{
         BrokenKind, BrokenRef, BrokenRefCandidate, FixDirective, FixReport, PreparedPackage,
         ResourceRef, ScannedData, META_PATH, TEXT_EXTENSIONS,
     },
-    utils::{decode_text, dump_json_bytes, normalize_zip_path, read_json_bytes},
+    utils::{decode_text, dump_json_bytes, normalize_zip_path, open_var_archive, read_json_bytes},
 };
 
 /// Cap on how many local candidates we surface per broken ref. Keeps the
@@ -40,10 +40,7 @@ pub(crate) fn scan_target_var_for_broken_refs(
     scan: &ScannedData,
     db: &Db,
 ) -> Result<Vec<BrokenRef>> {
-    let file = fs::File::open(target_path)
-        .with_context(|| format!("failed to open {}", target_path.display()))?;
-    let mut archive = ZipArchive::new(file)
-        .with_context(|| format!("failed to open zip archive {}", target_path.display()))?;
+    let mut archive = open_var_archive(target_path)?;
 
     let target_pkg_id = target_path
         .file_stem()

@@ -16,6 +16,53 @@ pub(crate) fn normalize_zip_path(path: &str) -> String {
     path.replace('\\', "/").trim_matches('/').to_string()
 }
 
+/// A `.var` that isn't a zip at all. `what` is a short description of what
+/// the file looks like instead, for scan warnings.
+#[derive(Debug)]
+pub(crate) struct NotAnArchive {
+    pub(crate) what: &'static str,
+    message: String,
+}
+
+impl std::fmt::Display for NotAnArchive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for NotAnArchive {}
+
+/// Opens a VAR as a zip. When the file isn't one, the error is a
+/// `NotAnArchive` that says what it looks like instead — most often a Hub
+/// login page that a logged-out download saved under the package's name.
+pub(crate) fn open_var_archive(path: &Path) -> Result<zip::ZipArchive<fs::File>> {
+    let file = fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    zip::ZipArchive::new(file).map_err(|err| {
+        let what = sniff_non_archive(path);
+        anyhow::Error::new(NotAnArchive {
+            what,
+            message: format!("{} is not a VAR archive ({what}): {err}", path.display()),
+        })
+    })
+}
+
+fn sniff_non_archive(path: &Path) -> &'static str {
+    use std::io::Read;
+    let mut head = [0u8; 256];
+    let read = fs::File::open(path)
+        .and_then(|mut file| file.read(&mut head))
+        .unwrap_or(0);
+    if read == 0 {
+        return "empty file";
+    }
+    let text = String::from_utf8_lossy(&head[..read]).trim_start().to_ascii_lowercase();
+    if text.starts_with("<!doctype html") || text.starts_with("<html") {
+        "a web page, likely a failed Hub download — re-download it"
+    } else {
+        "not a zip — damaged or incomplete"
+    }
+}
+
 /// Cache key for a scan spanning one or more roots. The roots are canonicalized
 /// and sorted so the key is independent of the order they were supplied in —
 /// the scan and execute paths must produce byte-identical keys for the cache to

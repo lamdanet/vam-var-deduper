@@ -9,7 +9,6 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
-use zip::ZipArchive;
 
 use crate::{
     db::{self, Db},
@@ -21,7 +20,8 @@ use crate::{
     },
     naming,
     utils::{
-        collect_var_files_with_targets, normalize_zip_path, read_json_bytes, scan_cache_key_multi,
+        collect_var_files_with_targets, normalize_zip_path, open_var_archive, read_json_bytes,
+        scan_cache_key_multi, NotAnArchive,
     },
 };
 
@@ -35,7 +35,7 @@ struct ScanWorkerEvent {
 #[allow(clippy::large_enum_variant)]
 enum ScanOutcome {
     Loaded(PreparedPackage),
-    Skipped { file_name: String, reason: String },
+    Skipped { file_name: String, label: String, reason: String },
 }
 
 pub(crate) fn is_skippable_meta_error(err: &anyhow::Error) -> bool {
@@ -385,6 +385,15 @@ where
             Err(err) if is_skippable_meta_error(&err) => {
                 outcomes.push(ScanOutcome::Skipped {
                     file_name: file_name.clone(),
+                    label: "invalid meta.json".to_string(),
+                    reason: err.to_string(),
+                });
+            }
+            Err(err) if err.is::<NotAnArchive>() => {
+                let label = err.downcast_ref::<NotAnArchive>().map_or("", |e| e.what).to_string();
+                outcomes.push(ScanOutcome::Skipped {
+                    file_name: file_name.clone(),
+                    label,
                     reason: err.to_string(),
                 });
             }
@@ -422,6 +431,7 @@ where
     // share content with the target.
     let canonical_target = target_var_path.and_then(|p| fs::canonicalize(p).ok());
     let mut warnings = pre_skipped_blocked;
+    let mut skipped_reasons: HashMap<String, String> = HashMap::new();
     for outcome in outcomes {
         match outcome {
             ScanOutcome::Loaded(package) => {
@@ -456,9 +466,12 @@ where
                 }
                 packages.insert(package_id, package);
             }
-            ScanOutcome::Skipped { file_name, reason } => {
-                warnings.push(format!("{file_name} (invalid meta.json)"));
+            ScanOutcome::Skipped { file_name, label, reason } => {
+                warnings.push(format!("{file_name} ({label})"));
                 eprintln!("Skipped {file_name}: {reason}");
+                if let Some(stem) = Path::new(&file_name).file_stem().and_then(|s| s.to_str()) {
+                    skipped_reasons.insert(stem.to_string(), reason);
+                }
             }
         }
     }
@@ -469,6 +482,9 @@ where
 
     if let Some(target_package_id) = target_package_id.as_deref() {
         if !packages.contains_key(target_package_id) {
+            if let Some(reason) = skipped_reasons.get(target_package_id) {
+                bail!("The target can't be read: {reason}");
+            }
             bail!("Target package was not found in scan result: {target_package_id}");
         }
     }
@@ -975,10 +991,7 @@ fn scan_package(file_path: &Path) -> Result<PreparedPackage> {
         .to_string();
     let package_file = file_path.display().to_string();
 
-    let file = fs::File::open(file_path)
-        .with_context(|| format!("failed to open {}", file_path.display()))?;
-    let mut archive = ZipArchive::new(file)
-        .with_context(|| format!("failed to open zip archive {}", file_path.display()))?;
+    let mut archive = open_var_archive(file_path)?;
 
     let mut name_map = HashMap::new();
     for index in 0..archive.len() {

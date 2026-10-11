@@ -36,7 +36,7 @@ use crate::{
         InternalizeSelection, RefFill, ScannedData, META_PATH,
     },
     scan::{extract_vaj_self_paths, extract_vaj_support_paths},
-    utils::{decode_text, dump_json_bytes, normalize_zip_path, read_json_bytes},
+    utils::{decode_text, dump_json_bytes, normalize_zip_path, open_var_archive, read_json_bytes},
 };
 
 /// Walks the target's text payloads, harvests every external `Pkg:/path` ref,
@@ -72,10 +72,7 @@ impl TargetRefs {
 }
 
 pub(crate) fn read_target_refs(target_path: &Path, scan: &ScannedData) -> Result<TargetRefs> {
-    let file = fs::File::open(target_path)
-        .with_context(|| format!("failed to open {}", target_path.display()))?;
-    let mut archive = ZipArchive::new(file)
-        .with_context(|| format!("failed to open zip archive {}", target_path.display()))?;
+    let mut archive = open_var_archive(target_path)?;
 
     let target_pkg_id = target_path
         .file_stem()

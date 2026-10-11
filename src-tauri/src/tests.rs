@@ -7637,3 +7637,33 @@ fn var_packages_folders_count_and_filter() {
     assert_eq!(only(r"D:\VaM\AddonPackages\Sub", true), 2, "with its subfolders");
     assert_eq!(only(r"D:\VaM\AddonPackages\Su", true), 0, "not a prefix of a name");
 }
+
+/// A `.var` that is really a web page (a logged-out Hub download) is skipped
+/// with a warning instead of failing the whole scan; picked as the target,
+/// the error says what it is.
+#[test]
+fn scan_skips_a_var_that_is_not_an_archive() {
+    let temp_root = repo_root().join("tmp_scan_not_an_archive");
+    let _ = fs::remove_dir_all(&temp_root);
+    let input_dir = temp_root.join("input");
+    fs::create_dir_all(&input_dir).expect("create input dir");
+    let good = input_dir.join("Good.Pkg.1.var");
+    write_test_var(&good, &[("Custom/Hair/res.vam", b"vam-bytes")]);
+    let page = input_dir.join("Bad.Page.1.var");
+    fs::write(&page, b"<!DOCTYPE html>\n<html><title>Log in | Virt-A-Mate Hub</title></html>\n").unwrap();
+    let empty = input_dir.join("Bad.Empty.1.var");
+    fs::write(&empty, b"").unwrap();
+
+    let scanned = scan_directory_with_target_with_progress(&input_dir, &[], Some(&good), |_, _| {})
+        .expect("scan should skip the broken files");
+    assert!(scanned.packages.contains_key("Good.Pkg.1"));
+    assert!(scanned.warnings.iter().any(|w| w.starts_with("Bad.Page.1.var (a web page")), "{:?}", scanned.warnings);
+    assert!(scanned.warnings.iter().any(|w| w == "Bad.Empty.1.var (empty file)"), "{:?}", scanned.warnings);
+
+    let err = scan_directory_with_target_with_progress(&input_dir, &[], Some(&page), |_, _| {})
+        .expect_err("a web page can't be the target");
+    let message = format!("{err:#}");
+    assert!(message.contains("can't be read") && message.contains("a web page"), "{message}");
+
+    fs::remove_dir_all(&temp_root).expect("cleanup");
+}
