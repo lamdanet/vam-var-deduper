@@ -666,13 +666,17 @@ fn rewrite_vap_directory(
     Ok(())
 }
 
+/// `progress` gets the bytes of the package read so far, out of its size.
 pub(crate) fn rewrite_package(
     scanned: &ScannedData,
     package: &PreparedPackage,
     target_path: &Path,
+    progress: &dyn Fn(u64, u64),
 ) -> Result<()> {
     let reader = fs::File::open(&package.file_path)?;
+    let total = reader.metadata().map(|m| m.len()).unwrap_or(0);
     let mut source = ZipArchive::new(reader)?;
+    let mut done = 0u64;
     let staging_path = if target_path == package.file_path {
         let file_name = target_path
             .file_name()
@@ -692,7 +696,10 @@ pub(crate) fn rewrite_package(
         .system(System::Unix);
 
     for index in 0..source.len() {
+        // The entries before this one are written.
+        progress(done, total);
         let mut entry = source.by_index(index)?;
+        done += entry.compressed_size();
         if entry.is_dir() {
             continue;
         }
@@ -774,6 +781,7 @@ pub(crate) fn rewrite_package(
 
     target.finish()?;
     drop(source);
+    progress(total, total);
 
     if let Some(staging_path) = staging_path {
         fs::remove_file(target_path)?;
@@ -934,6 +942,7 @@ where
                         target_path
                             .as_deref()
                             .ok_or_else(|| anyhow!("missing target path for changed package"))?,
+                        &|_, _| {},
                     )?;
                 }
 

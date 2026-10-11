@@ -19,7 +19,7 @@ use crate::{
         scan_directory_with_target_with_progress,
     },
     tasks::{export_vam_bundle, list_target_var_text_refs},
-    utils::read_json_bytes,
+    utils::{no_progress, read_json_bytes},
 };
 
 fn repo_root() -> PathBuf {
@@ -7174,7 +7174,7 @@ fn clean_var_offers_and_uses_packages_only_the_database_knows() {
 
     let mut keep = BTreeMap::new();
     keep.insert(a.key.clone(), "D.Whole.1:Custom/a.png".to_string());
-    let result = apply_clean(&target, scanned, &keep, None, Some(&db)).expect("clean");
+    let result = apply_clean(&target, scanned, &keep, None, Some(&db), &no_progress).expect("clean");
     assert_eq!(result.removed_files, 1);
     assert_eq!(result.dependencies, vec!["D.Whole.1".to_string()]);
     let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
@@ -7261,11 +7261,11 @@ fn clean_var_presets_and_plugins_need_their_files_in_the_copy() {
     let key = |path: &str| report.items.iter().find(|i| i.path == path).expect("item").key.clone();
     let mut bad = BTreeMap::new();
     bad.insert(key("Custom/P/Preset_A.vap"), "S.Bad.1:Custom/P/Preset_A.vap".to_string());
-    assert!(apply_clean(&target, scanned.clone(), &bad, None, None).is_err(), "refused");
+    assert!(apply_clean(&target, scanned.clone(), &bad, None, None, &no_progress).is_err(), "refused");
     let mut good = BTreeMap::new();
     good.insert(key("Custom/P/Preset_A.vap"), "S.Good.1:Custom/P/Preset_A.vap".to_string());
     good.insert(key(list_path), "S.Good.1:Custom/Scripts/Other/Plug/p.cslist".to_string());
-    let result = apply_clean(&target, scanned, &good, None, None).expect("clean");
+    let result = apply_clean(&target, scanned, &good, None, None, &no_progress).expect("clean");
     assert_eq!(result.removed_files, 2, "the preset and the list; their files stay");
     assert!(!vars.join("T.Scene.1.var.clean-tmp").exists(), "nothing left beside it");
     let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
@@ -7316,13 +7316,13 @@ fn clean_var_keeps_what_the_package_itself_needs() {
         keep.insert(item(p).key.clone(), format!("S.Pack.1:{p}"));
         keep
     };
-    let err = apply_clean(&target, scanned.clone(), &pick("Custom/Assets/lut.png"), None, None).expect_err("refused");
+    let err = apply_clean(&target, scanned.clone(), &pick("Custom/Assets/lut.png"), None, None, &no_progress).expect_err("refused");
     assert!(err.to_string().contains("plugin script"), "{err}");
-    let err = apply_clean(&target, scanned.clone(), &pick("Custom/Presets/Preset_A.jpg"), None, None).expect_err("refused");
+    let err = apply_clean(&target, scanned.clone(), &pick("Custom/Presets/Preset_A.jpg"), None, None, &no_progress).expect_err("refused");
     assert!(err.to_string().contains("picture of Custom/Presets/Preset_A.vap"), "{err}");
     let mut keep = pick("Custom/tex.png");
     keep.extend(pick("Custom/Clothing/x.vam"));
-    let result = apply_clean(&target, scanned, &keep, None, None).expect("clean");
+    let result = apply_clean(&target, scanned, &keep, None, None, &no_progress).expect("clean");
     assert_eq!(result.removed_files, 5, "tex.png, and x.vam with its .vaj, .vab and picture");
     let zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
     let names: Vec<&str> = zip.file_names().collect();
@@ -7353,7 +7353,15 @@ fn clean_var_rewrites_older_self_versions_and_restores() {
     keep.insert(a.key.clone(), "S.Pack.1:Custom/a.png".to_string());
     let backups = dir.join("bk");
     let original = fs::read(&target).expect("read");
-    let result = apply_clean(&target, scanned, &keep, Some(&backups), None).expect("clean");
+    // It says what it's doing, and only ever moves forward.
+    let steps = std::cell::RefCell::new(Vec::<(f64, String)>::new());
+    let result = apply_clean(&target, scanned, &keep, Some(&backups), None, &|f, m| steps.borrow_mut().push((f, m.to_string())))
+        .expect("clean");
+    let steps = steps.into_inner();
+    assert!(steps.windows(2).all(|w| w[0].0 <= w[1].0), "{steps:?}");
+    let said = |what: &str| steps.iter().any(|(_, m)| m.starts_with(what));
+    assert!(said("Backing up the original: ") && said("Writing the cleaned package: ") && said("Putting the cleaned package in place"), "{steps:?}");
+    assert!(steps.last().is_some_and(|(f, _)| *f >= 0.99), "{steps:?}");
     assert_eq!(result.size_before, original.len() as u64);
     assert_eq!(result.size_after, fs::metadata(&target).expect("meta").len());
     let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
@@ -7465,17 +7473,17 @@ fn clean_var_points_used_files_at_copies_elsewhere() {
     assert_eq!(lacks("S.Moved.1"), vec!["Custom/Clothing/x.vab".to_string(), "Custom/Clothing/x.vaj".to_string()], "not at the paths");
     let mut moved = BTreeMap::new();
     moved.insert(x.key.clone(), "S.Moved.1:Custom/Clothing/Moved/x.vam".to_string());
-    apply_clean(&target, scanned.clone(), &moved, None, None).expect_err("refused");
+    apply_clean(&target, scanned.clone(), &moved, None, None, &no_progress).expect_err("refused");
     let mut bad = BTreeMap::new();
     bad.insert(x.key.clone(), "S.Broken.1:Custom/Clothing/x.vam".to_string());
-    let err = apply_clean(&target, scanned.clone(), &bad, None, None).expect_err("refused");
+    let err = apply_clean(&target, scanned.clone(), &bad, None, None, &no_progress).expect_err("refused");
     assert!(err.to_string().contains("x.vab"), "{err}");
 
     let mut keep = BTreeMap::new();
     keep.insert(a.key.clone(), "D.Dep.1:Other/a-copy.png".to_string());
     keep.insert(x.key.clone(), "S.Pack.1:Custom/Clothing/x.vam".to_string());
     let backups = dir.join("bk");
-    let result = apply_clean(&target, scanned, &keep, Some(&backups), None).expect("clean");
+    let result = apply_clean(&target, scanned, &keep, Some(&backups), None, &no_progress).expect("clean");
     let mut zip = zip::ZipArchive::new(fs::File::open(&target).expect("open")).expect("zip");
     let names: Vec<String> = zip.file_names().map(str::to_string).collect();
     assert_eq!(result.removed_files, 4, "a.png, x.vam with its .vaj and .vab; left: {names:?}");
@@ -7572,10 +7580,10 @@ fn clean_many_points_the_ticked_packages_at_the_source() {
     };
     let recycle_ok = |p: &Path| !p.ends_with("T.Four.1.var");
     assert!(
-        clean_many(&source, std::slice::from_ref(&source), &scanned, &recycle_ok, &recycle, None, &|_, _, _| {}).is_err(),
+        clean_many(&source, std::slice::from_ref(&source), &scanned, &recycle_ok, &recycle, None, &no_progress).is_err(),
         "the source is never cleaned"
     );
-    let result = clean_many(&source, &[one.clone(), two.clone(), four.clone()], &scanned, &recycle_ok, &recycle, None, &|_, _, _| {})
+    let result = clean_many(&source, &[one.clone(), two.clone(), four.clone()], &scanned, &recycle_ok, &recycle, None, &no_progress)
         .expect("clean many");
     let done = |id: &str| result.done.iter().find(|d| d.package_id == id).unwrap_or_else(|| panic!("{id}"));
     let r = done("T.One.1").result.clone().expect("cleaned");

@@ -427,3 +427,52 @@ pub(crate) fn format_bytes(size: u64) -> String {
     }
     format!("{size} B")
 }
+
+/// How far a long job has got: the fraction done (0..1), and what it's doing.
+pub(crate) type Progress<'a> = &'a dyn Fn(f64, &str);
+
+#[cfg(test)]
+pub(crate) fn no_progress(_: f64, _: &str) {}
+
+/// One byte-counted step of a job (a copy, a rewrite): its bytes move the
+/// job from `from` to `to`, and the message says how many are done.
+pub(crate) fn byte_step<'a>(progress: Progress<'a>, from: f64, to: f64, what: &'a str) -> impl Fn(u64, u64) + 'a {
+    move |done, total| {
+        let done = done.min(total);
+        let f = if total == 0 { 1.0 } else { done as f64 / total as f64 };
+        progress(from + (to - from) * f, &format!("{what}: {} of {}", format_bytes(done), format_bytes(total)));
+    }
+}
+
+/// `fs::copy`, reporting the bytes copied so far out of the file's size.
+/// Keeps the file's modified time, as `fs::copy` does; a copy that fails
+/// part way is removed.
+pub(crate) fn copy_with_progress(from: &Path, to: &Path, progress: &dyn Fn(u64, u64)) -> std::io::Result<u64> {
+    use std::io::{Read, Write};
+    let mut reader = fs::File::open(from)?;
+    let meta = reader.metadata()?;
+    let total = meta.len();
+    let result = (|| {
+        let mut writer = fs::File::create(to)?;
+        let mut buf = vec![0u8; 8 << 20];
+        let mut done = 0u64;
+        progress(0, total);
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            writer.write_all(&buf[..n])?;
+            done += n as u64;
+            progress(done, total);
+        }
+        if let Ok(modified) = meta.modified() {
+            let _ = writer.set_modified(modified);
+        }
+        Ok(done)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(to);
+    }
+    result
+}

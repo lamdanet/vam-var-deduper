@@ -17,7 +17,10 @@ use crate::{
         BrokenKind, BrokenRef, BrokenRefCandidate, FixDirective, FixReport, PreparedPackage,
         ResourceRef, ScannedData, META_PATH, TEXT_EXTENSIONS,
     },
-    utils::{decode_text, dump_json_bytes, normalize_zip_path, open_var_archive, read_json_bytes},
+    utils::{
+        byte_step, copy_with_progress, decode_text, dump_json_bytes, normalize_zip_path, open_var_archive,
+        read_json_bytes, Progress,
+    },
 };
 
 /// Cap on how many local candidates we surface per broken ref. Keeps the
@@ -574,6 +577,7 @@ pub(crate) fn apply_fix_var(
     scan: &ScannedData,
     db: &Db,
     backup_root: Option<&Path>,
+    progress: Progress<'_>,
 ) -> Result<FixReport> {
     let mut report = FixReport::default();
     if fixes.is_empty() {
@@ -622,7 +626,7 @@ pub(crate) fn apply_fix_var(
             .ok_or_else(|| anyhow!("invalid target file name"))?;
         // Never over an earlier backup of the same package.
         let backup_path = free_backup_path(backup_root, &file_name.to_string_lossy());
-        fs::copy(target_path, &backup_path).with_context(|| {
+        copy_with_progress(target_path, &backup_path, &byte_step(progress, 0.0, 0.5, "Backing up the original")).with_context(|| {
             format!(
                 "failed to back up {} → {}",
                 target_path.display(),
@@ -634,6 +638,10 @@ pub(crate) fn apply_fix_var(
 
     let reader = fs::File::open(target_path)
         .with_context(|| format!("failed to open {}", target_path.display()))?;
+    let total = reader.metadata().map(|m| m.len()).unwrap_or(0);
+    // The backup and the rewrite each read the whole package: half each.
+    let written = byte_step(progress, if backup_root.is_some() { 0.5 } else { 0.0 }, 0.97, "Writing the fixed package");
+    let mut done = 0u64;
     let mut source = ZipArchive::new(reader)
         .with_context(|| format!("failed to read zip archive {}", target_path.display()))?;
 
@@ -677,7 +685,10 @@ pub(crate) fn apply_fix_var(
             .system(System::Unix);
 
         for index in 0..source.len() {
+            // The entries before this one are written.
+            written(done, total);
             let mut entry = source.by_index(index)?;
+            done += entry.compressed_size();
             if entry.is_dir() {
                 continue;
             }
@@ -771,8 +782,10 @@ pub(crate) fn apply_fix_var(
         target.finish()?;
     }
     drop(source);
+    written(total, total);
 
     let final_path = if let Some(final_target) = atomic_rename_target {
+        progress(0.99, "Putting the fixed package in place");
         if final_target.exists() {
             fs::remove_file(&final_target).with_context(|| {
                 format!("failed to remove old {}", final_target.display())

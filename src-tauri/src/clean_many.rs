@@ -30,6 +30,7 @@ use crate::{
     packages::{friendly_trash_error, recycle_support_for},
     scan::load_cached_scan_shared,
     tasks::{new_progress_payload, parse_additional_dirs, set_task_progress},
+    utils::Progress,
 };
 
 /// A file a package carries that the source has too.
@@ -183,6 +184,7 @@ pub(crate) fn clean_one_from(
     scanned: ScannedData,
     recycle: &dyn Fn(&Path) -> Result<(), String>,
     db: Option<&Db>,
+    progress: Progress<'_>,
 ) -> Result<CleanResult> {
     let found = clean_candidates_from(package_path, &scanned, None, Some(source_id))?;
     let keep: BTreeMap<String, String> = found
@@ -197,7 +199,7 @@ pub(crate) fn clean_one_from(
     if keep.is_empty() {
         bail!("nothing in it can point at {source_id} now: check again");
     }
-    apply_clean_with(package_path, scanned, &keep, Original::Recycle(recycle), db)
+    apply_clean_with(package_path, scanned, &keep, Original::Recycle(recycle), db, progress)
 }
 
 /// One package's outcome.
@@ -227,7 +229,7 @@ pub(crate) fn clean_many(
     recycle_ok: &dyn Fn(&Path) -> bool,
     recycle: &dyn Fn(&Path) -> Result<(), String>,
     db: Option<&Db>,
-    progress: &dyn Fn(usize, usize, &str),
+    progress: Progress<'_>,
 ) -> Result<CleanManyResult> {
     let source = find_target(scanned, source_path).ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
     let source_id = source.package_id.clone();
@@ -249,12 +251,15 @@ pub(crate) fn clean_many(
         source_package_id: source_id.clone(),
         done: Vec::new(),
     };
+    let n = todo.len();
     for (i, (id, path)) in todo.iter().enumerate() {
-        progress(i, todo.len(), id);
+        // Each package is an equal share of the whole.
+        let step = |f: f64, what: &str| progress((i as f64 + f) / n as f64, &format!("{id} ({} of {n}) · {what}", i + 1));
+        step(0.0, "Starting");
         let outcome = if !recycle_ok(path) {
             Err("its drive has no Recycle Bin, so it wasn't changed".to_string())
         } else {
-            clean_one_from(&source_id, path, scanned.clone(), recycle, db).map_err(|e| e.to_string())
+            clean_one_from(&source_id, path, scanned.clone(), recycle, db, &step).map_err(|e| e.to_string())
         };
         let (result, error) = match outcome {
             Ok(r) => (Some(r), None),
@@ -351,9 +356,8 @@ pub(crate) fn start_clean_many_task(
             let paths: Vec<PathBuf> = package_paths.iter().map(PathBuf::from).collect();
             let recycle_ok = |p: &Path| recycle_support_for(&recycle_cache, p) == RecycleSupport::Supported;
             let recycle = |p: &Path| trash::delete(p).map_err(|e| friendly_trash_error(&e));
-            clean_many(source_path, &paths, &scanned, &recycle_ok, &recycle, Some(&db), &|i, n, id| {
-                let f = 0.05 + 0.95 * (i as f64 / n.max(1) as f64);
-                set_task_progress(&tasks, task_id, "clean_many_writing", f, format!("Cleaning {id} ({} of {n})", i + 1));
+            clean_many(source_path, &paths, &scanned, &recycle_ok, &recycle, Some(&db), &|f, message| {
+                set_task_progress(&tasks, task_id, "clean_many_writing", 0.05 + 0.95 * f, message);
             })
             .map_err(|e| e.to_string())
         })();

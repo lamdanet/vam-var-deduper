@@ -30,7 +30,7 @@ use crate::{
     naming,
     scan::{compute_missing_siblings, load_cached_scan_shared, load_cached_scan_with_target},
     tasks::{list_target_var_text_refs, new_progress_payload, parse_additional_dirs, set_task_progress},
-    utils::{decode_text, normalize_zip_path},
+    utils::{byte_step, copy_with_progress, decode_text, normalize_zip_path, Progress},
 };
 use zip::ZipArchive;
 
@@ -826,9 +826,10 @@ pub(crate) fn apply_clean(
     keep_map: &BTreeMap<String, String>,
     backup_dir: Option<&Path>,
     db: Option<&Db>,
+    progress: Progress<'_>,
 ) -> Result<CleanResult> {
     let original = backup_dir.map_or(Original::Drop, Original::Backup);
-    apply_clean_with(target_path, scanned, keep_map, original, db)
+    apply_clean_with(target_path, scanned, keep_map, original, db, progress)
 }
 
 /// `apply_clean`, with what happens to the original.
@@ -838,7 +839,9 @@ pub(crate) fn apply_clean_with(
     keep_map: &BTreeMap<String, String>,
     original: Original<'_>,
     db: Option<&Db>,
+    progress: Progress<'_>,
 ) -> Result<CleanResult> {
+    progress(0.0, "Working out the changes");
     let target_id = find_target(&scanned, target_path)
         .map(|p| p.package_id.clone())
         .ok_or_else(|| anyhow!("the package isn't in the scan: check it again"))?;
@@ -914,6 +917,8 @@ pub(crate) fn apply_clean_with(
         size_after: 0,
         recycled: false,
     };
+    // The backup and the rewrite each read the whole package: half each.
+    let write_from = if matches!(original, Original::Backup(_)) { 0.5 } else { 0.05 };
     if let Original::Backup(dir) = original {
         fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
         let name = target_path
@@ -921,7 +926,8 @@ pub(crate) fn apply_clean_with(
             .and_then(|n| n.to_str())
             .ok_or_else(|| anyhow!("invalid file name"))?;
         let backup = free_backup_path(dir, name);
-        fs::copy(target_path, &backup).with_context(|| format!("failed to back up to {}", backup.display()))?;
+        copy_with_progress(target_path, &backup, &byte_step(progress, 0.05, 0.5, "Backing up the original"))
+            .with_context(|| format!("failed to back up to {}", backup.display()))?;
         result.backup_path = Some(backup.to_string_lossy().to_string());
     }
     // Written beside the package, then moved over it in one step: the package
@@ -932,19 +938,22 @@ pub(crate) fn apply_clean_with(
         .and_then(|n| n.to_str())
         .ok_or_else(|| anyhow!("invalid file name"))?;
     let staging = package.file_path.with_file_name(format!("{file_name}.clean-tmp"));
-    if let Err(err) = rewrite_package(&scanned, package, &staging) {
+    let written = byte_step(progress, write_from, 0.97, "Writing the cleaned package");
+    if let Err(err) = rewrite_package(&scanned, package, &staging, &written) {
         let _ = fs::remove_file(&staging);
         return Err(err).with_context(|| format!("couldn't write {} (is VaM using it?)", package.file_path.display()));
     }
     // The original goes to the Recycle Bin only once the new one is whole;
     // if it can't, nothing changes.
     if let Original::Recycle(recycle) = original {
+        progress(0.97, "Moving the original to the Recycle Bin");
         if let Err(err) = recycle(&package.file_path) {
             let _ = fs::remove_file(&staging);
             bail!("{err}: {file_name} wasn't changed");
         }
         result.recycled = true;
     }
+    progress(0.99, "Putting the cleaned package in place");
     if let Err(err) = fs::rename(&staging, &package.file_path) {
         if result.recycled {
             bail!(
@@ -1030,17 +1039,17 @@ pub(crate) fn start_clean_var_task(
             if backup && backup_dir.is_none() {
                 return Err("Choose a folder for the backups first.".to_string());
             }
-            set_task_progress(&tasks, task_id, "clean_loading", 0.1, "Loading the folder scan");
+            set_task_progress(&tasks, task_id, "clean_loading", 0.02, "Loading the folder scan");
             let scanned = load_cached_scan_with_target(&scan_cache, Path::new(&input_dir), &additional, Some(target_path))
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "No folder scan yet: check the package again.".to_string())?;
-            set_task_progress(&tasks, task_id, "clean_writing", 0.3, "Rewriting the package");
             apply_clean(
                 target_path,
                 scanned,
                 &keep_map,
                 if backup { backup_dir.map(Path::new) } else { None },
                 Some(&db),
+                &|f, message| set_task_progress(&tasks, task_id, "clean_writing", 0.05 + 0.95 * f, message),
             )
             .map_err(|e| e.to_string())
         })();

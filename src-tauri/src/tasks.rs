@@ -6365,7 +6365,7 @@ pub(crate) fn start_apply_missing_resources_fix_task(
                     target_path.display()
                 ));
             }
-            set_task_progress(&tasks, task_id, "apply_fix_loading", 0.05, "Loading scan cache");
+            set_task_progress(&tasks, task_id, "apply_fix_loading", 0.02, "Loading the folder scan");
             let scanned =
                 load_cached_scan_with_target(&scan_cache, input_path, &additional, Some(target_path))
                     .map_err(|err| err.to_string())?
@@ -6423,13 +6423,6 @@ pub(crate) fn start_apply_missing_resources_fix_task(
                 None
             };
 
-            set_task_progress(
-                &tasks,
-                task_id,
-                "apply_fix_rewriting",
-                0.15,
-                "Rewriting target VAR",
-            );
             apply_fix_var(
                 target_path,
                 output_path_owned.as_deref(),
@@ -6437,6 +6430,7 @@ pub(crate) fn start_apply_missing_resources_fix_task(
                 &scanned,
                 &db,
                 backup_root_owned.as_deref(),
+                &|f, message| set_task_progress(&tasks, task_id, "apply_fix_rewriting", 0.05 + 0.95 * f, message),
             )
             .map_err(|err| err.to_string())
         })();
