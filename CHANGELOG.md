@@ -62,6 +62,8 @@ release time, it fills it with the commit messages since the last release.
   or to a zip holding the .var, are added once downloaded
 
 ### Changed
+- **Explore's subfolders wrap onto two lines** instead of one line with a
+  sideways scrollbar; "Show all N folders" opens the rest
 - **VAR Packages filters clear in one click**: a set filter (Status, Type,
   Location, Author) shows an x beside it, and **Clear all** resets the search,
   the Status and every filter. The Size and Scene image filters are gone
