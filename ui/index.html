@@ -1413,11 +1413,18 @@
           <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="about">
             <span class="material-symbols-outlined">info</span><span class="cv-mode-text"><b>About</b><small>Version and release notes</small></span></button>
         </nav>
+        <div class="settings-autosave">
+          <span class="material-symbols-outlined">cloud_done</span>
+          <span id="settings-autosave-text">Changes save as you make them.</span>
+          <button id="settings-reset-all" class="ghost-button fm-small" type="button">
+            <span class="material-symbols-outlined">settings_backup_restore</span>Reset all settings to default…
+          </button>
+        </div>
 
         <div class="settings-pane" data-settings-pane="folders">
         <section class="settings-grid">
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">hard_drive</span>VaM directory</header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">hard_drive</span>VaM directory<button type="button" class="fm-link settings-reset" data-settings-reset="folders">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card" id="settings-vam-card">
                 <div class="input-with-button">
@@ -1450,7 +1457,7 @@
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">archive</span>Offload folder</header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">archive</span>Offload folder<button type="button" class="fm-link settings-reset" data-settings-reset="offload">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card" id="settings-offload-card">
                 <div class="input-with-button">
@@ -1481,7 +1488,7 @@
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">download</span><label for="settings-downloads-folder">Downloads folder</label></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">download</span><label for="settings-downloads-folder">Downloads folder</label><button type="button" class="fm-link settings-reset" data-settings-reset="downloads">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card">
                 <div class="input-with-button">
@@ -1509,7 +1516,7 @@
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">visibility_off</span>VaM's content browser</header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">visibility_off</span>VaM's content browser<button type="button" class="fm-link settings-reset" data-settings-reset="browser">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card">
                 <label class="check-row" for="settings-auto-hide-deps">
@@ -1527,7 +1534,7 @@
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">file_download</span>Dropping .var files on the window</header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">file_download</span>Dropping .var files on the window<button type="button" class="fm-link settings-reset" data-settings-reset="dropping">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card">
                 <label class="check-row" for="settings-drop-move">
@@ -1547,7 +1554,7 @@
         <div class="settings-pane hidden" data-settings-pane="appearance">
         <section class="settings-grid is-one">
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">palette</span><span id="settings-appearance-eyebrow"></span></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">palette</span><span id="settings-appearance-eyebrow"></span><button type="button" class="fm-link settings-reset" data-settings-reset="theme">Reset to default</button></header>
             <div class="settings-card-body">
               <p class="settings-path-hint" id="settings-theme-desc"></p><div class="theme-grid">
                 <button id="settings-theme-light" class="theme-card" type="button">
@@ -1921,19 +1928,6 @@
         </section>
         </div>
 
-        <div class="settings-footer cm-bar settings-bar">
-          <p class="settings-feedback settings-footer-feedback" id="settings-save-feedback"></p>
-          <div class="settings-footer-actions">
-            <button id="settings-reset-button" class="ghost-button" type="button">
-              <span class="material-symbols-outlined">restart_alt</span>
-              <span id="settings-reset-label"></span>
-            </button>
-            <button id="settings-save-button" class="primary-button" type="button">
-              <span class="material-symbols-outlined">save</span>
-              <span id="settings-save-label"></span>
-            </button>
-          </div>
-        </div>
       </section>
       </div>
     </div>

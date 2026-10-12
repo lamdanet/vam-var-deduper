@@ -2288,6 +2288,11 @@ input[type="text"]:disabled {
   line-height: 1.55;
 }
 
+/* A confirm that lists things keeps its lines. */
+#dialog-message {
+  white-space: pre-line;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -3027,8 +3032,37 @@ input[type="text"]:disabled {
   background: transparent;
 }
 
-.settings-v2:not([data-tab="folders"]) .settings-bar {
-  display: none;
+/* Changes save themselves: a line says so, with Reset all. */
+.settings-autosave {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.settings-autosave > .material-symbols-outlined {
+  color: var(--accent-success);
+  font-size: 18px;
+}
+
+.settings-autosave .ghost-button {
+  margin-left: auto;
+}
+
+/* A card's Reset to default, at the end of its heading. */
+.settings-card-head .settings-reset {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.settings-card-head .settings-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
+  text-decoration: none;
 }
 
 .settings-v2 .settings-stats-grid {

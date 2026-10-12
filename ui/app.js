@@ -380,14 +380,6 @@ const I18N = {
     settingsClearing: "Clearing database…",
     settingsLoadFailed: "Failed to load database stats: ",
     settingsClearFailed: "Failed to clear database: ",
-    settingsSave: "Save Preferences",
-    settingsReset: "Discard Changes",
-    settingsConfirmReset:
-      "Discard the unsaved changes and revert to the last saved settings?",
-    settingsSaved: "Settings saved.",
-    settingsResetDone: "Reverted to last saved settings.",
-    settingsSaveFailed: "Failed to save settings: ",
-    settingsResetFailed: "Failed to load saved settings: ",
     scanStarted: "Started scanning the folder.",
     scanWarning: (message) => `Skipped: ${message}`,
     quickActionsIntraHint: "When duplicates are inside the same package, keep choices must be made by exact path, so package-level bulk apply is disabled.",
@@ -2192,8 +2184,6 @@ function applySettingsCopy() {
   setText("settings-clear-db-button-label", t("settingsClearDbButton"));
   renderSettingsClearDb();
 
-  setText("settings-save-label", t("settingsSave"));
-  setText("settings-reset-label", t("settingsReset"));
 
   syncSettingsControlState();
 }
@@ -2366,9 +2356,158 @@ function setupDbLocation() {
   });
 }
 
+// ---- Settings: saved as they change; back to the defaults -------------------------
+// Every control saves itself when it changes (no Save button). Each card can
+// go back to its default, or all of them at once. The VaM directory has no
+// default and stays; the database's location has its own "Move back to the
+// default" (it restarts the app), so Reset all leaves it alone.
+
+const SETTINGS_RESETS = {
+  folders: {
+    what: "Additional VAR folders: none (the VaM directory stays)",
+    isDefault: () => !getUserAdditionalDirs("downloadVars").length,
+    apply: async () => {
+      additionalDirsState("downloadVars").length = 0;
+      renderAllAdditionalDirs();
+      await persistAllConfig();
+    },
+  },
+  offload: {
+    what: "Offload folder: AddonPackages_offload beside AddonPackages, sorted into creator folders",
+    isDefault: () => !state.offloadDirSetting && state.offloadByCreator !== false,
+    apply: async () => {
+      state.offloadByCreator = true;
+      const box = $("settings-offload-by-creator");
+      if (box) box.checked = true;
+      await setOffloadDir("");
+    },
+  },
+  downloads: {
+    what: "Downloads folder: AddonPackages, no creator subfolders",
+    isDefault: () => !($("settings-downloads-folder")?.value || "").trim() && !$("settings-organize-by-creator")?.checked,
+    apply: async () => {
+      const field = $("settings-downloads-folder");
+      if (field) field.value = "";
+      const box = $("settings-organize-by-creator");
+      if (box) box.checked = false;
+      await persistAllConfig();
+    },
+  },
+  browser: {
+    what: "Hide dependency content in VaM: off (what it hid comes back)",
+    isDefault: () => !$("settings-auto-hide-deps")?.checked,
+    apply: async () => {
+      const box = $("settings-auto-hide-deps");
+      if (!box?.checked) return;
+      box.checked = false;
+      box.dispatchEvent(new Event("change"));
+    },
+  },
+  dropping: {
+    what: "Dropping .var files on the window: copy them",
+    isDefault: () => !$("settings-drop-move")?.checked,
+    apply: async () => {
+      const box = $("settings-drop-move");
+      if (!box?.checked) return;
+      box.checked = false;
+      box.dispatchEvent(new Event("change"));
+    },
+  },
+  theme: {
+    what: "Theme: Light",
+    isDefault: () => state.theme === "light",
+    apply: async () => {
+      state.theme = "light";
+      updateStaticCopy();
+      if (typeof syncSettingsControlState === "function") syncSettingsControlState();
+      await persistAllConfig();
+    },
+  },
+};
+
+// Each card's Reset to default: off when it's already the default.
+function settingsSyncResets() {
+  document.querySelectorAll("[data-settings-reset]").forEach((btn) => {
+    const r = SETTINGS_RESETS[btn.getAttribute("data-settings-reset")];
+    const at = Boolean(r?.isDefault());
+    btn.disabled = at;
+    btn.title = at ? "Already the default" : `Back to: ${r?.what ?? ""}`;
+  });
+  const all = $("settings-reset-all");
+  if (all) all.disabled = Object.values(SETTINGS_RESETS).every((r) => r.isDefault());
+}
+
+function settingsSaved() {
+  const text = $("settings-autosave-text");
+  if (!text) return;
+  text.textContent = "Saved.";
+  clearTimeout(settingsSaved.timer);
+  settingsSaved.timer = setTimeout(() => {
+    text.textContent = "Changes save as you make them.";
+  }, 2000);
+}
+
+async function settingsResetOne(key) {
+  const r = SETTINGS_RESETS[key];
+  if (!r || r.isDefault()) return;
+  if (!(await showAppConfirm(`Back to the default? ${r.what}.`))) return;
+  try {
+    await r.apply();
+    settingsSaved();
+  } catch (e) {
+    showToast(String(e?.message || e), "error", 6000);
+  }
+  settingsSyncResets();
+}
+
+async function settingsResetAll() {
+  const keys = Object.keys(SETTINGS_RESETS).filter((k) => !SETTINGS_RESETS[k].isDefault());
+  if (!keys.length) {
+    showToast("Every setting is already at its default.", "info");
+    return;
+  }
+  const list = keys.map((k) => `• ${SETTINGS_RESETS[k].what}`).join("\n");
+  if (!(await showAppConfirm(`Put these settings back to their defaults?\n\n${list}\n\nThe VaM directory and the database's location stay as they are.`))) return;
+  for (const k of keys) {
+    try {
+      await SETTINGS_RESETS[k].apply();
+    } catch (e) {
+      addLog(`Settings: resetting ${k} failed: ${String(e?.message || e)}`);
+    }
+  }
+  settingsSaved();
+  settingsSyncResets();
+  showToast(`${pkgCount(keys.length, "setting", "settings")} back to the default`, "success");
+}
+
+function setupSettingsAutosave() {
+  const view = $("settings-view");
+  if (!view) return;
+  view.addEventListener("click", (e) => {
+    const btn = e.target.closest?.("[data-settings-reset]");
+    if (btn) {
+      e.preventDefault();
+      settingsResetOne(btn.getAttribute("data-settings-reset"));
+    }
+  });
+  $("settings-reset-all")?.addEventListener("click", settingsResetAll);
+  // Every change saves itself (each control's own listener): say so, and
+  // re-check which cards are at their default.
+  view.addEventListener("change", () => {
+    settingsSaved();
+    setTimeout(settingsSyncResets, 300);
+  });
+  view.addEventListener("click", (e) => {
+    if (e.target.closest?.(".theme-card, .additional-dir-row button, #settings-library-add-folder-button, #settings-pick-offload, #settings-reset-offload, #settings-pick-downloads, #settings-pick-vam-dir")) {
+      setTimeout(settingsSyncResets, 600);
+    }
+  });
+}
+
 window.__loadSettingsView = () => {
   loadSettingsView();
   settingsShowTab(fmStoreGet(SETTINGS_TAB, "folders"));
+  settingsSyncResets();
 };
 window.__refreshBuildDbStats = () => {
   refreshBuildDbStats();
@@ -25126,24 +25265,6 @@ function buildCurrentConfig() {
   };
 }
 
-async function saveAllSettings() {
-  if (!invoke) throw new Error("Tauri runtime unavailable");
-  await invoke("save_config", { config: buildCurrentConfig() });
-}
-
-async function resetSettingsFromDisk() {
-  if (!invoke) throw new Error("Tauri runtime unavailable");
-  const config = await invoke("load_config");
-  if (config?.language) state.language = config.language;
-  const savedTheme = RETIRED_THEMES[config?.theme] ?? config?.theme;
-  if (typeof savedTheme === "string" && THEMES.includes(savedTheme)) {
-    state.theme = savedTheme;
-  }
-  applyConfigToInputs(config);
-  updateStaticCopy();
-  syncSettingsControlState();
-}
-
 // =====================================================================
 // VaM directory — set once in Settings, as in VaM Backstage.
 //
@@ -27975,6 +28096,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDownloadsManager();
   setupSettingsTabs();
   setupDbLocation();
+  setupSettingsAutosave();
 
   setupVamDir();
   setupOffload();
@@ -28202,55 +28324,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (organizeByCreator) {
     organizeByCreator.addEventListener("change", () => {
       persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
-    });
-  }
-
-  const showSaveFeedback = (text, kind) => {
-    const node = $("settings-save-feedback");
-    if (!node) return;
-    node.textContent = text;
-    node.classList.remove("success", "error");
-    if (kind) node.classList.add(kind);
-    if (kind === "success") {
-      window.clearTimeout(showSaveFeedback._timer);
-      showSaveFeedback._timer = window.setTimeout(() => {
-        if (node.textContent === text) {
-          node.textContent = "";
-          node.classList.remove("success", "error");
-        }
-      }, 2400);
-    }
-  };
-
-  if ($("settings-save-button")) {
-    $("settings-save-button").addEventListener("click", async () => {
-      const btn = $("settings-save-button");
-      btn.disabled = true;
-      try {
-        await saveAllSettings();
-        showSaveFeedback(t("settingsSaved"), "success");
-      } catch (error) {
-        showSaveFeedback(`${t("settingsSaveFailed")}${String(error)}`, "error");
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  }
-
-  if ($("settings-reset-button")) {
-    $("settings-reset-button").addEventListener("click", async () => {
-      const confirmed = await showAppConfirm(t("settingsConfirmReset"));
-      if (!confirmed) return;
-      const btn = $("settings-reset-button");
-      btn.disabled = true;
-      try {
-        await resetSettingsFromDisk();
-        showSaveFeedback(t("settingsResetDone"), "success");
-      } catch (error) {
-        showSaveFeedback(`${t("settingsResetFailed")}${String(error)}`, "error");
-      } finally {
-        btn.disabled = false;
-      }
     });
   }
 
