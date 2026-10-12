@@ -16644,6 +16644,42 @@ function setupExtract() {
   });
 }
 
+// ---- New packages from saved sources ----------------------------------------------
+// Saving a source also adds its package to the database when it's new: the
+// .var's file list (paths, CRCs, sizes), read through the link's central
+// directory without downloading it (start_index_sources_task). In the
+// background, one run at a time; a toast says how it went.
+
+const SOURCE_INDEX = { chain: Promise.resolve() };
+
+function sourcesIndexNew(filenames) {
+  const names = [...new Set((filenames ?? []).filter(Boolean))];
+  if (!names.length || !invoke) return;
+  SOURCE_INDEX.chain = SOURCE_INDEX.chain.then(async () => {
+    try {
+      const p = await fmPoll("start_index_sources_task", { filenames: names });
+      const r = p?.source_index_result;
+      if (!r) return;
+      for (const [id, why] of r.skipped ?? []) addLog(`Sources: ${id} wasn't added to the database — ${why}`);
+      const added = r.added?.length ?? 0;
+      const skipped = r.skipped?.length ?? 0;
+      if (added) {
+        showToast(
+          `Added ${pkgCount(added, "new package", "new packages")} to the database, read from ${added === 1 ? "its link" : "their links"}${
+            skipped ? ` · ${skipped} couldn't be read, see Console` : ""
+          }`,
+          "success",
+          5000,
+        );
+      } else if (skipped) {
+        showToast(`${pkgCount(skipped, "new package", "new packages")} couldn't be read into the database — see Console`, "info", 5000);
+      }
+    } catch (e) {
+      addLog(`Sources: adding new packages to the database failed — ${String(e?.message || e)}`);
+    }
+  });
+}
+
 // ---- Download sources ------------------------------------------------------------
 // A Pixeldrain (or MediaFire, or direct) link the user found for a package,
 // saved with the imported mirror links, so Scan Dependencies, Find
@@ -16760,6 +16796,7 @@ async function srcSaveAllFolder() {
     }
   }
   for (const msg of failed) addLog(`Download sources: ${msg}`);
+  sourcesIndexNew(files.map((f) => f.name));
   showToast(
     `Saved ${saved} MEGA source${saved === 1 ? "" : "s"}${known ? ` · ${known} already saved` : ""}${
       failed.length ? ` — ${failed.length} skipped, see Console` : ""
@@ -17044,6 +17081,7 @@ async function sourceSave() {
     const { row, added } = await invoke("add_download_link", { filename, url });
     const size = picked ? picked.size : SRC.info?.size;
     if (size && !row.size) row.size = size;
+    sourcesIndexNew([row.filename]);
     showToast(
       added
         ? `Saved a ${srcHostLabel(row.host)} source for ${row.filename}`
@@ -18164,6 +18202,7 @@ async function sourcesSave(rows) {
   }
   // Saved files leave the list; what is left is still to do.
   if (saved.length) {
+    sourcesIndexNew(saved.map((r) => r.filename));
     for (const r of saved) SOURCES.links.delete(r.key);
     SOURCES.rows = SOURCES.rows.filter((r) => !saved.includes(r));
     SOURCES.savedCount += saved.length;
