@@ -2198,8 +2198,8 @@ async function loadSettingsView() {
   }
   try {
     const stats = await invoke("get_database_stats");
-    $("settings-db-packages-value").textContent = String(stats?.package_count ?? 0);
-    $("settings-db-resources-value").textContent = String(stats?.resource_count ?? 0);
+    $("settings-db-packages-value").textContent = Number(stats?.package_count ?? 0).toLocaleString();
+    $("settings-db-resources-value").textContent = Number(stats?.resource_count ?? 0).toLocaleString();
     $("settings-db-size-value").textContent = formatBytesLocal(
       stats?.db_size_bytes ?? 0
     );
@@ -2211,7 +2211,141 @@ async function loadSettingsView() {
   }
 }
 
-window.__loadSettingsView = loadSettingsView;
+// ---- Settings: tabs, like the other pages ----------------------------------------
+
+const SETTINGS_TAB = "settings.tab";
+
+function settingsShowTab(key) {
+  const tabs = [...document.querySelectorAll("[data-settings-tab]")];
+  const want = tabs.some((t) => t.getAttribute("data-settings-tab") === key) ? key : "folders";
+  for (const t of tabs) {
+    const on = t.getAttribute("data-settings-tab") === want;
+    t.classList.toggle("is-active", on);
+    t.setAttribute("aria-selected", String(on));
+  }
+  document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.getAttribute("data-settings-pane") !== want);
+  });
+  fmStoreSet(SETTINGS_TAB, want);
+  // Save and Discard belong to the folders; the other tabs act at once.
+  $("settings-view")?.setAttribute("data-tab", want);
+  if (want === "database") dblocRefresh();
+}
+
+function setupSettingsTabs() {
+  document.querySelectorAll("[data-settings-tab]").forEach((t) =>
+    t.addEventListener("click", () => settingsShowTab(t.getAttribute("data-settings-tab"))),
+  );
+  settingsShowTab(fmStoreGet(SETTINGS_TAB, "folders"));
+}
+
+// ---- Settings: where the database lives ------------------------------------------
+// The app's data folder by default; it can be moved to another folder and
+// back (db_location.rs). A move copies the database there, checks the copy
+// and restarts the app.
+
+const DBLOC = { info: null, moving: false };
+
+async function dblocRefresh() {
+  if (!invoke) return;
+  try {
+    DBLOC.info = await invoke("db_location_info");
+  } catch (e) {
+    addLog(`Database location: ${String(e)}`);
+    return;
+  }
+  dblocRender();
+}
+
+function dblocRender() {
+  const i = DBLOC.info;
+  if (!i) return;
+  vpSetText("settings-dbloc-path", i.path);
+  const chip = $("settings-dbloc-chip");
+  if (chip) {
+    chip.textContent = i.testing ? "Test copy" : i.is_default ? "Default" : "Custom folder";
+    chip.classList.toggle("fm-chip-good", i.is_default && !i.testing);
+  }
+  const status = [
+    formatBytesLocal(Number(i.size_bytes || 0)),
+    i.is_default ? "in the app's data folder" : `the default is ${i.default_dir}`,
+  ];
+  if (i.missing) status.push(`your chosen folder ${i.missing} wasn't there at start, so the default was used`);
+  if (i.testing) status.push("VVD_DB_PATH is set: moving is off");
+  vpSetText("settings-dbloc-status", status.join(" · "));
+  const move = $("settings-dbloc-move");
+  const back = $("settings-dbloc-default");
+  if (move) move.disabled = DBLOC.moving || i.testing;
+  if (back) back.disabled = DBLOC.moving || i.testing || (i.is_default && !i.missing);
+}
+
+function dblocProgress(fraction, message) {
+  $("settings-dbloc-progress")?.classList.toggle("hidden", fraction == null);
+  if (fraction == null) return;
+  const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
+  const fill = $("settings-dbloc-progress-fill");
+  if (fill) fill.style.width = `${pct}%`;
+  vpSetText("settings-dbloc-progress-pct", `${pct}%`);
+  if (message) vpSetText("settings-dbloc-progress-label", message);
+}
+
+// Moves the database to `dir` (null: back to the default folder).
+async function dblocMove(dir) {
+  const i = DBLOC.info;
+  if (!invoke || !i || DBLOC.moving) return;
+  const where = dir || i.default_dir;
+  const ok = await showAppConfirm(
+    `Move the database (${formatBytesLocal(Number(i.size_bytes || 0))}) to ${where}? It's copied there and checked, then the app restarts to use it; the old file is removed after the restart.`,
+  );
+  if (!ok) return;
+  let useExisting = null;
+  for (;;) {
+    DBLOC.moving = true;
+    dblocRender();
+    dblocProgress(0, "Preparing");
+    try {
+      await fmPoll("start_move_database_task", { targetDir: dir, useExisting }, (f, msg) => dblocProgress(f, msg));
+      dblocProgress(1, "Moved: the app restarts…");
+      showToast("Database moved. The app restarts to use it…", "success", 6000);
+      return;
+    } catch (e) {
+      const msg = String(e?.message || e);
+      DBLOC.moving = false;
+      dblocProgress(null);
+      dblocRender();
+      if (msg.startsWith("EXISTS:") && useExisting == null) {
+        const there = msg.slice(7);
+        if (await showAppConfirm(`${there} already has a database. Use that one instead of yours? (Yours stays where it is.)`)) {
+          useExisting = true;
+        } else if (await showAppConfirm(`Replace the database in ${where} with yours? The one there is deleted.`)) {
+          useExisting = false;
+        } else {
+          return;
+        }
+        continue;
+      }
+      showToast(msg, "error", 8000);
+      return;
+    }
+  }
+}
+
+function setupDbLocation() {
+  $("settings-dbloc-move")?.addEventListener("click", async () => {
+    if (!invoke) return;
+    const picked = await invoke("pick_folder").catch(() => null);
+    if (picked) dblocMove(String(picked).trim());
+  });
+  $("settings-dbloc-default")?.addEventListener("click", () => dblocMove(null));
+  $("settings-dbloc-show")?.addEventListener("click", () => {
+    if (DBLOC.info?.path) invoke("show_in_explorer", { path: DBLOC.info.path }).catch((e) => addLog(String(e)));
+  });
+}
+
+window.__loadSettingsView = () => {
+  loadSettingsView();
+  settingsShowTab(fmStoreGet(SETTINGS_TAB, "folders"));
+};
 window.__refreshBuildDbStats = () => {
   refreshBuildDbStats();
   refreshDownloadLinksCount();
@@ -27815,6 +27949,8 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   setupDownloadLinksImport();
   setupDownloadsManager();
+  setupSettingsTabs();
+  setupDbLocation();
 
   setupVamDir();
   setupOffload();

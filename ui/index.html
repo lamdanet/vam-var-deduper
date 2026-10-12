@@ -1400,25 +1400,26 @@
       <section id="sources-view" class="app-main missing-resources-view fm-view sources-view hidden"></section>
 
       <!-- Settings View (hidden by default; revealed by sidebar Settings link) -->
-      <section id="settings-view" class="app-main settings-view hidden">
-        <header class="settings-header">
-          <span class="settings-eyebrow">Configuration</span>
-          <h1 class="settings-title" id="settings-title"></h1>
-          <p class="settings-subtitle" id="settings-subtitle"></p>
-        </header>
+      <!-- Settings: tabs and cards, like the other pages (setupSettingsTabs in
+           app.js). Every control keeps its id; the copy comes from applySettingsCopy. -->
+      <section id="settings-view" class="app-main missing-resources-view fm-view settings-view settings-v2 hidden">
+        <nav class="cv-modes settings-tabs" role="tablist" aria-label="Settings">
+          <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="folders">
+            <span class="material-symbols-outlined">folder_open</span><span class="cv-mode-text"><b>Folders</b><small>VaM, offload and downloads</small></span></button>
+          <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="appearance">
+            <span class="material-symbols-outlined">palette</span><span class="cv-mode-text"><b>Appearance</b><small>Themes</small></span></button>
+          <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="database">
+            <span class="material-symbols-outlined">database</span><span class="cv-mode-text"><b>Database</b><small>Where it lives, what it holds</small></span></button>
+          <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="about">
+            <span class="material-symbols-outlined">info</span><span class="cv-mode-text"><b>About</b><small>Version and release notes</small></span></button>
+        </nav>
 
-        <div class="settings-sections">
-          <!-- Environment Paths -->
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h3 class="settings-section-title" id="settings-paths-title"></h3>
-              <p class="settings-section-desc" id="settings-paths-desc"></p>
-            </div>
-            <div class="settings-section-body settings-paths-stack">
-              <!-- VaM directory, as in VaM Backstage: AddonPackages inside it is the
-                   VAR folder every page scans. -->
+        <div class="settings-pane" data-settings-pane="folders">
+        <section class="settings-grid">
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">hard_drive</span>VaM directory</header>
+            <div class="settings-card-body">
               <div class="settings-path-card" id="settings-vam-card">
-                <span class="settings-path-label">VaM directory</span>
                 <div class="input-with-button">
                   <div class="vam-dir-display" id="settings-vam-dir-display">
                     <span class="material-symbols-outlined input-leading-icon">hard_drive</span>
@@ -1446,11 +1447,12 @@
                 <input id="settings-input-dir" type="hidden" />
                 <input id="settings-library-folder" type="hidden" />
               </div>
-
-              <!-- Offload folder: where Offload moves packages so VaM stops
-                   loading them. Every scan includes it. -->
+            </div>
+          </article>
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">archive</span>Offload folder</header>
+            <div class="settings-card-body">
               <div class="settings-path-card" id="settings-offload-card">
-                <span class="settings-path-label">Offload folder</span>
                 <div class="input-with-button">
                   <div class="vam-dir-display">
                     <span class="material-symbols-outlined input-leading-icon">archive</span>
@@ -1476,36 +1478,12 @@
                   VAR Packages, Clean Duplicates, Fix Missing, Internalize and the other scans include this folder.
                 </p>
               </div>
-
+            </div>
+          </article>
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">download</span><label for="settings-downloads-folder">Downloads folder</label></header>
+            <div class="settings-card-body">
               <div class="settings-path-card">
-                <span class="settings-path-label">VaM's content browser</span>
-                <label class="check-row" for="settings-auto-hide-deps">
-                  <input id="settings-auto-hide-deps" type="checkbox" />
-                  <span>Hide dependency content in VaM</span>
-                </label>
-                <p class="settings-path-hint">
-                  Hides the scenes, looks, poses, clothing and hair inside packages that are only dependencies, so
-                  VaM's browser shows the packages you chose. It uses VaM's own hide flags (AddonPackagesFilePrefs);
-                  nothing is deleted. Turning it off brings back only what it hid — never what you hid yourself.
-                  Hide or favorite single items from a package's content list in VAR Packages.
-                </p>
-                <p class="settings-path-hint" id="settings-auto-hide-status"></p>
-              </div>
-
-              <div class="settings-path-card">
-                <span class="settings-path-label">Dropping .var files on the window</span>
-                <label class="check-row" for="settings-drop-move">
-                  <input id="settings-drop-move" type="checkbox" />
-                  <span>Move them into AddonPackages instead of copying</span>
-                </label>
-                <p class="settings-path-hint">
-                  Drop .var files or folders anywhere (except Package Explorer, Fix Missing and Internalize, which take
-                  one .var) to add them to your library. Each is checked first; ones already in the library are skipped.
-                </p>
-              </div>
-
-              <div class="settings-path-card">
-                <label class="settings-path-label" for="settings-downloads-folder">Downloads folder</label>
                 <div class="input-with-button">
                   <div class="input-with-icon">
                     <span class="material-symbols-outlined input-leading-icon">download</span>
@@ -1529,18 +1507,49 @@
                 </p>
               </div>
             </div>
-          </section>
-
-          <div class="settings-divider"></div>
-
-          <!-- Appearance -->
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h3 class="settings-section-title" id="settings-appearance-eyebrow"></h3>
-              <p class="settings-section-desc" id="settings-theme-desc"></p>
+          </article>
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">visibility_off</span>VaM's content browser</header>
+            <div class="settings-card-body">
+              <div class="settings-path-card">
+                <label class="check-row" for="settings-auto-hide-deps">
+                  <input id="settings-auto-hide-deps" type="checkbox" />
+                  <span>Hide dependency content in VaM</span>
+                </label>
+                <p class="settings-path-hint">
+                  Hides the scenes, looks, poses, clothing and hair inside packages that are only dependencies, so
+                  VaM's browser shows the packages you chose. It uses VaM's own hide flags (AddonPackagesFilePrefs);
+                  nothing is deleted. Turning it off brings back only what it hid — never what you hid yourself.
+                  Hide or favorite single items from a package's content list in VAR Packages.
+                </p>
+                <p class="settings-path-hint" id="settings-auto-hide-status"></p>
+              </div>
             </div>
-            <div class="settings-section-body">
-              <div class="theme-grid">
+          </article>
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">file_download</span>Dropping .var files on the window</header>
+            <div class="settings-card-body">
+              <div class="settings-path-card">
+                <label class="check-row" for="settings-drop-move">
+                  <input id="settings-drop-move" type="checkbox" />
+                  <span>Move them into AddonPackages instead of copying</span>
+                </label>
+                <p class="settings-path-hint">
+                  Drop .var files or folders anywhere (except Package Explorer, Fix Missing and Internalize, which take
+                  one .var) to add them to your library. Each is checked first; ones already in the library are skipped.
+                </p>
+              </div>
+            </div>
+          </article>
+        </section>
+        </div>
+
+        <div class="settings-pane hidden" data-settings-pane="appearance">
+        <section class="settings-grid is-one">
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">palette</span><span id="settings-appearance-eyebrow"></span></header>
+            <div class="settings-card-body">
+              <p class="settings-path-hint" id="settings-theme-desc"></p><div class="theme-grid">
                 <button id="settings-theme-light" class="theme-card" type="button">
                   <span class="theme-card-check material-symbols-outlined">check</span>
                   <div class="theme-preview theme-preview-light">
@@ -1687,19 +1696,54 @@
                 </button>
               </div>
             </div>
-          </section>
+          </article>
+        </section>
+        </div>
 
-          <div class="settings-divider"></div>
-
-          <!-- Database -->
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h3 class="settings-section-title" id="settings-db-title"></h3>
-              <p class="settings-section-desc" id="settings-db-desc"></p>
-              <span class="settings-section-tag" id="settings-db-eyebrow"></span>
+        <div class="settings-pane hidden" data-settings-pane="database">
+        <section class="settings-grid">
+          <article class="card settings-card" id="settings-dbloc-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">folder_special</span>Location</header>
+            <div class="settings-card-body">
+              <div class="input-with-button">
+                <div class="vam-dir-display">
+                  <span class="material-symbols-outlined input-leading-icon">database</span>
+                  <span id="settings-dbloc-path" class="vam-dir-text">…</span>
+                </div>
+                <span class="chip" id="settings-dbloc-chip">Default</span>
+              </div>
+              <p class="settings-path-hint" id="settings-dbloc-status"></p>
+              <div class="settings-card-actions">
+                <button id="settings-dbloc-move" class="ghost-button" type="button">
+                  <span class="material-symbols-outlined">drive_file_move</span><span>Move to another folder…</span>
+                </button>
+                <button id="settings-dbloc-default" class="ghost-button" type="button">
+                  <span class="material-symbols-outlined">settings_backup_restore</span><span>Move back to the default</span>
+                </button>
+                <button id="settings-dbloc-show" class="ghost-button" type="button" title="Show the file in Explorer">
+                  <span class="material-symbols-outlined">folder_open</span><span>Show</span>
+                </button>
+              </div>
+              <div id="settings-dbloc-progress" class="settings-advanced-progress hidden">
+                <div class="settings-advanced-progress-row">
+                  <span id="settings-dbloc-progress-label">Moving</span>
+                  <span id="settings-dbloc-progress-pct">0%</span>
+                </div>
+                <div class="settings-advanced-progress-track">
+                  <div id="settings-dbloc-progress-fill" class="settings-advanced-progress-fill"></div>
+                </div>
+              </div>
+              <p class="settings-path-hint">
+                Moving copies the database to the folder you pick (compacted on the way), checks the copy, then
+                restarts the app there; the old file is removed after the restart. The default is the app's data
+                folder.
+              </p>
             </div>
-            <div class="settings-section-body">
-              <div class="settings-stats-grid">
+          </article>
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">analytics</span><span id="settings-db-title"></span></header>
+            <div class="settings-card-body">
+              <p class="settings-path-hint" id="settings-db-desc"></p><div class="settings-stats-grid">
                 <div class="settings-stat">
                   <span class="material-symbols-outlined settings-stat-icon">inventory_2</span>
                   <span class="settings-stat-label" id="settings-db-packages-label"></span>
@@ -1724,22 +1768,10 @@
               </div>
               <p class="settings-feedback" id="settings-feedback"></p>
             </div>
-          </section>
-
-
-          <div class="settings-divider"></div>
-
-          <!-- Advanced -->
-          <section class="settings-section">
-            <div class="settings-section-head">
-              <h3 class="settings-section-title" id="settings-advanced-title">Advanced</h3>
-              <p class="settings-section-desc" id="settings-advanced-desc">
-                Optional power-user features. These touch how the local database is
-                indexed; only enable if you understand the trade-offs.
-              </p>
-              <span class="settings-section-tag" id="settings-advanced-eyebrow">Optional</span>
-            </div>
-            <div class="settings-section-body">
+          </article>
+          <article class="card settings-card is-wide is-danger">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">delete_forever</span>Clear the database</header>
+            <div class="settings-card-body">
               <div class="settings-advanced-feature">
                 <div class="settings-advanced-feature-head">
                   <div class="settings-advanced-feature-text">
@@ -1800,18 +1832,16 @@
                 <p class="settings-feedback" id="settings-clear-db-status"></p>
               </div>
             </div>
-          </section>
+          </article>
+        </section>
+        </div>
 
-          <div class="settings-divider"></div>
-
-          <!-- About -->
-          <section class="settings-section settings-section-about">
-            <div class="settings-section-head">
-              <h3 class="settings-section-title" id="settings-about-eyebrow"></h3>
-              <p class="settings-section-desc" id="settings-about-desc"></p>
-            </div>
-            <div class="settings-section-body">
-              <div class="settings-about-card">
+        <div class="settings-pane hidden" data-settings-pane="about">
+        <section class="settings-grid is-one">
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">info</span><span id="settings-about-eyebrow"></span></header>
+            <div class="settings-card-body">
+              <p class="settings-path-hint" id="settings-about-desc"></p><div class="settings-about-card">
                 <div class="settings-about-row">
                   <div class="settings-about-mark" aria-hidden="true">
                     <span class="material-symbols-outlined">terminal</span>
@@ -1833,10 +1863,11 @@
                 </div>
               </div>
             </div>
-          </section>
+          </article>
+        </section>
         </div>
 
-        <div class="settings-footer">
+        <div class="settings-footer cm-bar settings-bar">
           <p class="settings-feedback settings-footer-feedback" id="settings-save-feedback"></p>
           <div class="settings-footer-actions">
             <button id="settings-reset-button" class="ghost-button" type="button">

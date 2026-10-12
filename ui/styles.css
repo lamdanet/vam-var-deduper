@@ -2787,6 +2787,148 @@ input[type="text"]:disabled {
   flex: 0 0 auto;
 }
 
+/* =========================================================
+   Settings, laid out like the other pages: tabs, cards, and
+   the bar at the bottom (settingsShowTab in app.js).
+   ========================================================= */
+.settings-view.settings-v2 {
+  max-width: none;
+  gap: 16px;
+}
+
+.settings-v2 .settings-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.settings-pane.hidden {
+  display: none;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.settings-grid.is-one {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-card.is-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-card-head .material-symbols-outlined {
+  color: var(--primary);
+  font-size: 18px;
+}
+
+.settings-card-head label {
+  cursor: inherit;
+}
+
+.settings-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 20px 20px;
+}
+
+/* The old path cards sit inside a card now: no box of their own. */
+.settings-v2 .settings-path-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.settings-v2 .settings-path-hint {
+  margin: 0;
+}
+
+.settings-card.is-danger {
+  border-color: color-mix(in srgb, var(--accent-danger) 35%, var(--line));
+}
+
+.settings-card.is-danger .settings-card-head .material-symbols-outlined {
+  color: var(--accent-danger);
+}
+
+/* The card's heading names it already, and the card is its box. */
+.settings-v2 .settings-advanced-feature-title {
+  display: none;
+}
+
+.settings-v2 .settings-advanced-feature {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.settings-v2:not([data-tab="folders"]) .settings-bar {
+  display: none;
+}
+
+.settings-v2 .settings-stats-grid {
+  margin-bottom: 0;
+}
+
+.settings-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-card-actions .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.settings-card-actions .material-symbols-outlined {
+  font-size: 18px;
+}
+
+#settings-dbloc-card .input-with-button {
+  align-items: center;
+}
+
+#settings-dbloc-card .vam-dir-text {
+  overflow-wrap: anywhere;
+}
+
+/* Save and Discard: the sticky bar every page has. */
+.settings-v2 .settings-footer.settings-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 25;
+  margin-top: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--bg-elev, var(--surface));
+  box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 1000px) {
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-v2 .settings-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .settings-footer-actions .ghost-button,
 .settings-footer-actions .primary-button {
   height: 36px;
