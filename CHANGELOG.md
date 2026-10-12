@@ -51,6 +51,9 @@ release time, it fills it with the commit messages since the last release.
   or to a zip holding the .var, are added once downloaded
 
 ### Changed
+- **VAR Packages filters clear in one click**: a set filter (Status, Type,
+  Location, Author) shows an x beside it, and **Clear all** resets the search,
+  the Status and every filter. The Size and Scene image filters are gone
 - **The app opens on VAR Packages**, your library, and the sidebar is in two
   groups: your library (VAR Packages, Package Explorer, Hub, Sources), then
   keeping it in shape (Fix Missing, Clean VARs, Internalize Resources,
