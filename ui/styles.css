@@ -21708,3 +21708,52 @@ button.vpx-seg:hover {
 .lib-clear-all .material-symbols-outlined {
   font-size: 17px;
 }
+
+/* View on Hub, beside a package anywhere (hubLinkHtml in app.js). */
+.hub-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hub-link.hidden {
+  display: none;
+}
+
+.hub-link:hover {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+
+.hub-link .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.hub-link.has-label {
+  padding: 0 8px;
+  border-color: var(--line);
+}
+
+/* In a row of icon buttons, the Hub button is their size. */
+.vp-col-actions .hub-link {
+  width: 32px;
+  height: 32px;
+  vertical-align: middle;
+}
+
+.vp-col-actions .hub-link .material-symbols-outlined {
+  font-size: 20px;
+}

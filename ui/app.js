@@ -1347,6 +1347,7 @@ function dlItemInner(job) {
     `<div class="dl-item${openable ? " dl-item-openable" : ""}" data-dl-id="${job.id}"${openAttrs}>` +
     `<div class="dl-item-head"><span class="dl-item-name" title="${label}">${label}</span>` +
     (hostLabel ? `<span class="chip dl-host">${escapeHtml(hostLabel)}</span>` : "") +
+    (job.packageId ? hubLinkHtml(job.packageId) : "") +
     statusChip +
     `</div>` +
     body +
@@ -1727,6 +1728,7 @@ function getRowHtml(id, sourceHtml, { noSource = false } = {}) {
       : `<button type="button" class="ghost-button dl-mini get-btn" data-get-id="${escapeAttribute(id)}" title="Download it into AddonPackages (its dependencies aren't downloaded)"><span class="material-symbols-outlined">download</span>Get</button>`;
   return `<div class="get-row">
       <span class="get-row-text"><button type="button" class="get-name" data-get-open="${escapeAttribute(id)}" title="Open ${escapeAttribute(id)} in Package Explorer">${escapeHtml(id)}</button>${sourceHtml}</span>
+      ${hubLinkHtml(id)}
       ${getLibraryChip(id)}
       ${btn}
     </div>`;
@@ -4010,7 +4012,7 @@ function libRenderMissing() {
                 ? `<span class="lib-pill lib-pill-info" title="Not in the scanned folders, but the database index knows this package">In database</span>`
                 : `<span class="lib-pill lib-pill-err">Missing</span>`;
           return `<tr>
-            <td title="${escapeAttribute(id)}"><span class="lib-pkg-name">${escapeHtml(base)}</span></td>
+            <td title="${escapeAttribute(id)}"><span class="lib-pkg-name">${escapeHtml(base)}</span>${hubLinkHtml(id)}</td>
             <td class="lib-mono">${escapeHtml(libDepVersionLabel(id))}${have}</td>
             <td>${escapeHtml(deriveCreatorFromPackageId(id) ?? "—")}</td>
             <td>${users}${more}</td>
@@ -4128,7 +4130,7 @@ function libRenderSourceUpdates() {
                 : `<div class="lib-missing-get"><span class="get-src"><span class="material-symbols-outlined">bookmark</span>${escapeHtml(getHostName(u.host))}</span>
                      <button type="button" class="lib-small-link" data-get-id="${escapeAttribute(id)}" title="Download v${u.newest} into AddonPackages (from the Hub when it has it, else your saved source)"><span class="material-symbols-outlined">upgrade</span>Get v${u.newest}</button></div>`;
           return `<tr>
-            <td title="${escapeAttribute(id)}"><span class="lib-pkg-name">${escapeHtml(name)}</span></td>
+            <td title="${escapeAttribute(id)}"><span class="lib-pkg-name">${escapeHtml(name)}</span>${hubLinkHtml(id)}</td>
             <td>${escapeHtml(deriveCreatorFromPackageId(id) ?? "—")}</td>
             <td class="lib-mono">v${u.have}</td>
             <td class="lib-mono">v${u.newest}</td>
@@ -4314,7 +4316,7 @@ function libDepsSectionHtml(item, details) {
              data-offload-id="${escapeAttribute(dep.resolved_id ?? dep.id)}" data-offload-size="${Number(dep.size_bytes) || 0}"
              title="Move it back into AddonPackages so VaM loads it"><span class="material-symbols-outlined">unarchive</span></button>`
         : "";
-    return `<div class="lib-dep-row">${ref}${size}${libDepPill(dep)}${addSource}${restore}</div>`;
+    return `<div class="lib-dep-row">${ref}${size}${libDepPill(dep)}${hubLinkHtml(dep.resolved_id || dep.id)}${addSource}${restore}</div>`;
   });
   const body = rows.length
     ? `<div class="lib-box">${libCollapsible(rows, `deps:${item.file_path}`, rows.length)}</div>`
@@ -5553,6 +5555,126 @@ function libViewOnHub(rid) {
   setTimeout(() => hubPageOpen(rid), 150);
 }
 
+// ---- View on Hub, from any page --------------------------------------------------
+// A package shown anywhere can open its Hub page. The Hub index (hub_index.rs,
+// a local copy of the Hub's package list) says which resource a package id
+// belongs to: the exact version, else the newest of its family, so ".latest"
+// and versionless names resolve too. Answers are cached for the session.
+//
+// Pages render hubLinkHtml(id): a small Hub button, hidden until the lookup
+// says the package is on the Hub (a known resource id shows it at once).
+// One delegated click handler opens it; hubLinksResolve fills in the rest.
+
+const HUB_LINKS = { rid: new Map(), queued: new Set(), timer: null };
+
+function hubLinkKey(packageId) {
+  return String(packageId ?? "").trim().replace(/\.var$/i, "").toLowerCase();
+}
+
+// The cached answer for a package: its resource id, "" when it isn't on the
+// Hub, or undefined when not looked up yet.
+function hubCachedRid(packageId) {
+  return HUB_LINKS.rid.get(hubLinkKey(packageId));
+}
+
+// Looks packages up in the Hub index (one call for all of them).
+async function hubLookupRids(packageIds) {
+  const want = [...new Set(packageIds.map((id) => String(id ?? "").trim().replace(/\.var$/i, "")).filter(Boolean))].filter(
+    (id) => hubCachedRid(id) === undefined,
+  );
+  if (want.length && invoke) {
+    try {
+      const hits = await invoke("hub_index_lookup", { packageIds: want });
+      for (const h of hits ?? []) HUB_LINKS.rid.set(hubLinkKey(h.packageId), h.resourceId ? String(h.resourceId) : "");
+    } catch (_e) {
+      // The index isn't there (offline, first start): leave them unknown.
+    }
+  }
+  return new Map(packageIds.map((id) => [id, hubCachedRid(id)]));
+}
+
+// A package's Hub page: opens it, or says it isn't on the Hub.
+async function openPackageOnHub(packageId, rid = "") {
+  let id = String(rid || "");
+  if (!id) id = (await hubLookupRids([packageId])).get(packageId) || "";
+  if (id) libViewOnHub(id);
+  else showToast(`${packageId} isn't on the Hub.`, "info");
+}
+
+// The small Hub button a page puts beside a package. `rid`, when the page
+// already knows it, shows the button straight away.
+function hubLinkHtml(packageId, { rid = "", label = false, cls = "" } = {}) {
+  const id = String(packageId ?? "").trim();
+  if (!id) return "";
+  const known = rid || hubCachedRid(id);
+  const state = known ? "on" : known === "" ? "off" : "";
+  if (state === "off") return "";
+  return `<button type="button" class="hub-link${label ? " has-label" : ""}${cls ? ` ${cls}` : ""}${state ? "" : " hidden"}"
+      data-hub-open="${escapeAttribute(id)}" data-hub-rid="${escapeAttribute(known || "")}"${state ? ` data-hub-state="${state}"` : ""}
+      title="View ${escapeAttribute(id)} on the Hub" aria-label="View ${escapeAttribute(id)} on the Hub">
+      <span class="material-symbols-outlined" aria-hidden="true">explore</span>${label ? "<span>Hub</span>" : ""}</button>`;
+}
+
+// Shows the Hub buttons whose package turns out to be on the Hub (and drops
+// the others). Runs shortly after the page changes.
+async function hubLinksResolve() {
+  HUB_LINKS.timer = null;
+  const links = [...document.querySelectorAll("[data-hub-open]:not([data-hub-state])")];
+  if (!links.length) return;
+  const rids = await hubLookupRids(links.map((b) => b.getAttribute("data-hub-open")));
+  for (const b of links) {
+    const rid = rids.get(b.getAttribute("data-hub-open"));
+    if (rid === undefined) continue;
+    if (!rid) {
+      b.remove();
+      continue;
+    }
+    b.setAttribute("data-hub-rid", rid);
+    b.setAttribute("data-hub-state", "on");
+    b.classList.remove("hidden");
+  }
+}
+
+function hubLinksSchedule() {
+  if (!HUB_LINKS.timer) HUB_LINKS.timer = setTimeout(hubLinksResolve, 120);
+}
+
+function setupHubLinks() {
+  // Before the row's own click (rows often open something else).
+  document.addEventListener(
+    "click",
+    (event) => {
+      const btn = event.target.closest?.("[data-hub-open]");
+      if (!btn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openPackageOnHub(btn.getAttribute("data-hub-open"), btn.getAttribute("data-hub-rid") || "");
+    },
+    true,
+  );
+  // New Hub buttons appear whenever a page renders: resolve them in one go.
+  // The callback only schedules a lookup, so it costs next to nothing.
+  new MutationObserver((records) => {
+    for (const r of records) {
+      for (const n of r.addedNodes) {
+        if (n.nodeType === 1 && (n.matches?.("[data-hub-open]") || n.querySelector?.("[data-hub-open]"))) {
+          hubLinksSchedule();
+          return;
+        }
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+  hubLinksSchedule();
+}
+
+// A "View on Hub" entry for a package's right-click menu: hidden when the
+// package is known not to be on the Hub.
+function hubMenuItem(packageId, rid = "") {
+  const id = String(packageId ?? "").trim();
+  if (!id || (!rid && hubCachedRid(id) === "")) return [];
+  return [{ label: "View on Hub", action: () => openPackageOnHub(id, rid || hubCachedRid(id) || "") }];
+}
+
 // "N aren't on the Hub" for confirmations, from items already annotated or
 // (for package ids only) a lookup.
 function libNotOnHubNote(names) {
@@ -6284,6 +6406,7 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
   if (onDisk) pkgRemember(item);
   pkgShowView();
   pkgRender();
+  pkgResolveHub(item);
   const scroll = $("pkg-scroll");
   if (scroll) scroll.scrollTop = 0;
   if (!onDisk) {
@@ -6784,6 +6907,20 @@ function pkgIconAct(act, icon, title, { on = false, label = "" } = {}) {
       <span class="material-symbols-outlined">${icon}</span>${label ? `<span class="pkg-icon-label">${escapeHtml(label)}</span>` : ""}</button>`;
 }
 
+// The package's Hub resource: the library's, else the Hub index's.
+function pkgHubRid(item) {
+  return item?.hub_resource_id || hubCachedRid(item?.package_id) || "";
+}
+
+// Looks the open package up in the Hub index, and shows its Hub button when
+// it's there (a package opened by name doesn't know it yet).
+function pkgResolveHub(item) {
+  if (!item?.package_id || item.hub_resource_id || hubCachedRid(item.package_id) !== undefined) return;
+  hubLookupRids([item.package_id]).then((rids) => {
+    if (rids.get(item.package_id) && PKG.item === item) pkgRenderHero();
+  });
+}
+
 // One main button for whatever needs doing most; the rest as icons; Delete
 // and the rarer tools in More.
 function pkgActionsHtml(item, details, primaryAct) {
@@ -6799,7 +6936,7 @@ function pkgActionsHtml(item, details, primaryAct) {
     }<div class="pkg-tools">${[
       pkgIconAct("favorite", "star", fav ? "Remove from favorites" : "Add to favorites", { on: fav, label: "Favorite" }),
       ...(primaryAct !== "add-source" ? [pkgIconAct("add-source", "add_link", "Save a link where it can be downloaded", { label: "Add link" })] : []),
-      ...(item.hub_resource_id ? [pkgIconAct("view-hub", "explore", "View on the Hub", { label: "Hub" })] : []),
+      ...(pkgHubRid(item) ? [pkgIconAct("view-hub", "explore", "View on the Hub", { label: "Hub" })] : []),
     ].join("")}</div>`;
   }
   const extractable = (details?.content ?? []).some((c) => LIB_EXTRACTABLE.has(c.fine));
@@ -6832,7 +6969,7 @@ function pkgActionsHtml(item, details, primaryAct) {
       );
     }
   }
-  if (item.hub_resource_id) library.push(pkgIconAct("view-hub", "explore", "View on the Hub", { label: "Hub" }));
+  if (pkgHubRid(item)) library.push(pkgIconAct("view-hub", "explore", "View on the Hub", { label: "Hub" }));
   const tools = [
     pkgIconAct("scan-deps", "account_tree", "Scan dependencies: see where each one is; download, move, offload or delete them", { label: "Scan deps" }),
     ...(extractable ? [pkgIconAct("extract", "person_add", "Extract presets: save clothing, hair, morphs or looks of its people", { label: "Extract" })] : []),
@@ -7535,6 +7672,7 @@ function pkgDepRowHtml(id, { sub = "", color, mark = "", status = "", open = "",
       <span class="pkg-dep-name"><b>${escapeHtml(p.name)}</b><small>${escapeHtml([p.creator, p.ver].filter(Boolean).join(" · "))}${escapeHtml(sub)}</small></span>
       ${status ? `<span class="pkg-dep-status">${escapeHtml(status)}</span>` : ""}
       <span class="pkg-dep-size">${size ? escapeHtml(formatBytesLocal(Number(size))) : ""}</span>
+      ${hubLinkHtml(openId || missing || id)}
       ${missing ? pkgDepGetHtml(missing) : open ? `<span class="material-symbols-outlined pkg-dep-act">chevron_right</span>` : ""}
     </div>`;
 }
@@ -9142,7 +9280,7 @@ function pkgRunAction(act, event) {
       fmOpen(item.file_path);
       break;
     case "view-hub":
-      if (item.hub_resource_id) libViewOnHub(item.hub_resource_id);
+      openPackageOnHub(item.package_id, pkgHubRid(item));
       break;
     case "users-more":
     case "users-less":
@@ -10966,7 +11104,7 @@ function fmMissingPkgHtml(ref, { hasExact, fixed }) {
       </div>
       <p class="fm-why">${escapeHtml(why)}</p>
       <div class="fm-info-acts">
-        ${get}
+        ${get}${hubLinkHtml(pkgId, { label: true })}
       </div>
     </div>`;
 }
@@ -11067,7 +11205,7 @@ function fmCandGroupsHtml(ref, list, coverage, { limit = Infinity, moreKey = "" 
                     <button type="button" class="fm-icon-btn fm-pref-btn${fmPref(pkg) === -1 ? " is-avoid" : ""}" data-fm-pref="${escapeAttribute(pkg)}" data-fm-pref-val="-1" aria-pressed="${fmPref(pkg) === -1}"
                       title="${fmPref(pkg) === -1 ? "Avoided as a replacement source: click to clear" : "Avoid as a replacement source: never chosen by itself, a warning when you choose it"}"><span class="material-symbols-outlined">thumb_down</span></button>`
               }
-              ${c.isSelf ? "" : `<button type="button" class="fm-icon-btn" data-fm-explore-pkg="${escapeAttribute(c.package_id)}" data-fm-explore-file="${escapeAttribute(c.installed === false ? "" : c.package_file || "")}" title="Explore ${escapeAttribute(c.package_id)}"><span class="material-symbols-outlined">space_dashboard</span></button>`}
+              ${c.isSelf ? "" : `<button type="button" class="fm-icon-btn" data-fm-explore-pkg="${escapeAttribute(c.package_id)}" data-fm-explore-file="${escapeAttribute(c.installed === false ? "" : c.package_file || "")}" title="Explore ${escapeAttribute(c.package_id)}"><span class="material-symbols-outlined">space_dashboard</span></button>${hubLinkHtml(c.package_id)}`}
               <button type="button" class="fm-icon-btn" data-fm-copy="${escapeAttribute(c.isSelf ? fmTargetId() : c.package_id)}" title="Copy the package id"><span class="material-symbols-outlined">content_copy</span></button>
             </span>
           </div>
@@ -11379,6 +11517,7 @@ function fmRenderDetail() {
         <button type="button" class="ghost-button fm-small" data-fm-explore-pkg="${escapeAttribute(ref.ref_pkg)}" data-fm-explore-file="${escapeAttribute(
           (state.varPackagesItems ?? []).find((it) => it.package_id === ref.ref_pkg)?.file_path ?? "",
         )}" title="${escapeAttribute(`Open ${ref.ref_pkg} in Package Explorer`)}"><span class="material-symbols-outlined">space_dashboard</span>Explore package</button>
+        ${hubLinkHtml(ref.ref_pkg, { label: true })}
         <button type="button" class="ghost-button fm-small" data-fm-act="details" aria-expanded="${showDetails}"><span class="material-symbols-outlined">${
           showDetails ? "expand_less" : "info"
         }</span>${showDetails ? "Hide details" : "Details"}</button>
@@ -13116,6 +13255,7 @@ function izRenderDetail() {
       </div>
       <div class="fm-ref-acts">
         <button type="button" class="ghost-button fm-small" data-iz-explore-pkg="${escapeAttribute(pkg)}" data-iz-explore-file="${escapeAttribute(g.source_var_path)}" title="${escapeAttribute(`Open ${pkg} in Package Explorer`)}"><span class="material-symbols-outlined">space_dashboard</span>Explore package</button>
+        ${hubLinkHtml(pkg, { label: true })}
         ${
           g.installed === false
             ? ""
@@ -16434,6 +16574,7 @@ function cmRenderDetail() {
         <div class="cm-pkg-acts">
           <button type="button" class="fm-icon-btn" data-cm-explore="${escapeAttribute(p.file_path)}" title="Explore it"><span class="material-symbols-outlined">space_dashboard</span></button>
           <button type="button" class="fm-icon-btn" data-cm-show="${escapeAttribute(p.file_path)}" title="Show the file"><span class="material-symbols-outlined">folder_open</span></button>
+          ${hubLinkHtml(p.package_id)}
           ${close}
         </div>
       </div>
@@ -18534,6 +18675,7 @@ function sourcesRenderDetail() {
       <div class="fm-hero-acts sources-acts">
         <button type="button" class="ghost-button fm-small" data-sources-act="save-one"><span class="material-symbols-outlined">bookmark_add</span>Save it now</button>
         ${sourcesLibraryActsHtml(r.filename)}
+        ${hubLinkHtml(sourcesStem(r.filename), { label: true })}
       </div>
       ${pws.length ? `<h3 class="cm-files-h">Password</h3><div class="sources-group-pws is-panel">${pws.map(sourcesPwRowHtml).join("")}</div>` : ""}
       <h3 class="cm-files-h">Its mirrors <small>${r.mirrors.length}</small></h3>
@@ -19112,7 +19254,7 @@ function sourcesRenderSavedDetail() {
         sourcesInLibrary(f.filename)
           ? sourcesLibraryActsHtml(f.filename)
           : `<button type="button" class="ghost-button fm-small" data-sources-act="get-in-downloads" data-sources-file="${escapeAttribute(f.filename)}" title="Open the Downloads panel with it, to get it into AddonPackages"><span class="material-symbols-outlined">download</span>Get it in Downloads</button>`
-      }</div>
+      }${hubLinkHtml(sourcesStem(f.filename), { label: true })}</div>
       <h3 class="cm-files-h">Its links <small>${links.length}</small></h3>
       <p class="cm-files-cap">Downloads use them in this order: links that worked first, failing ones last.</p>
       <div class="sources-links">${links.map((l) => sourcesSavedLinkHtml(l, { remove: true })).join("")}</div>
@@ -23145,7 +23287,7 @@ function depCardHtml(list, it, extraLines = "") {
     hub?.category === "Paid" ? `<span class="dep-card-chip is-paid">Paid</span>` : "",
     hub?.license ? `<span class="dep-card-chip">${escapeHtml(hub.license)}</span>` : "",
     hub?.hub_url
-      ? `<button type="button" class="dep-card-hub" data-dep-hub-url="${escapeAttribute(hub.hub_url)}" title="Open on the VaM Hub"><span class="material-symbols-outlined">open_in_new</span>Hub</button>`
+      ? `<button type="button" class="dep-card-hub" data-dep-hub-url="${escapeAttribute(hub.hub_url)}" title="View it on the Hub page"><span class="material-symbols-outlined">explore</span>Hub</button>`
       : "",
   ].join("");
   return `<span class="dep-card" data-dep-card="${escapeAttribute(key)}">
@@ -23679,7 +23821,14 @@ function setupDepScanDialog() {
     const link = event.target.closest?.("[data-dep-hub-url]");
     if (!link || !invoke) return;
     event.stopPropagation();
-    invoke("open_url", { url: link.getAttribute("data-dep-hub-url") }).catch((e) => addLog(`Open link: ${String(e)}`));
+    const url = link.getAttribute("data-dep-hub-url");
+    const rid = /\/resources\/(?:[^/?#]*\.)?(\d+)/i.exec(url)?.[1];
+    if (rid) {
+      depScanClose();
+      libViewOnHub(rid);
+    } else {
+      invoke("open_url", { url }).catch((e) => addLog(`Open link: ${String(e)}`));
+    }
   });
   // "Settings" — close the modal and jump to the Settings page (VaM directory,
   // offload folder, the same folder list). Blocked while a scan runs (Close is
@@ -24531,6 +24680,7 @@ function dbPkgsRender() {
           <td class="vp-col-size vp-cell-size">${escapeHtml(formatBytesLocal(it.size_bytes))}</td>
           <td class="vp-col-modified vp-cell-modified">${escapeHtml(formatVarModifiedMs(it.modified_ms))}</td>
           <td class="vp-col-actions">
+            ${hubLinkHtml(it.package_id)}
             <button class="icon-button vp-row-fav${fav ? " is-active" : ""}" type="button"
                     data-db-fav="${escapeAttribute(it.package_id ?? "")}" aria-pressed="${fav}"
                     title="${fav ? "Remove from favorites" : "Add to favorites"}">
@@ -24673,6 +24823,7 @@ function setupDatabasePackages() {
     const onDisk = Boolean(item.indexed);
     showContextMenu(event.clientX, event.clientY, [
       { label: "Open Details", action: () => openPackageDetails(item, "db") },
+      ...hubMenuItem(item.package_id),
       ...(onDisk
         ? [
             {
@@ -28436,6 +28587,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDownloadsManager();
   hideIconLigatures(document);
   setupExperimentalPages();
+  setupHubLinks();
   setupSettingsTabs();
   setupDbLocation();
   setupSettingsAutosave();
@@ -29328,6 +29480,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         return `<li class="resource-list-side-item" data-rl-side-idx="${idx}">
           <div class="resource-list-side-item-head">
             <span class="resource-list-side-item-pkg">${escapeHtml(ref.package_id || "")}</span>
+            ${hubLinkHtml(ref.package_id)}
           </div>
           <div class="resource-list-side-item-path">${escapeHtml(ref.internal_path || "")}</div>
           <div class="resource-list-side-item-foot">
@@ -29382,6 +29535,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       });
     }
     if (item.package_id) {
+      items.push(...hubMenuItem(item.package_id));
       items.push({
         label: t("resourceListContextOpenPackage"),
         action: () => rlJumpToDetails({
