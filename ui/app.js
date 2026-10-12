@@ -18,9 +18,15 @@ const THEMES = [
   "crimson-blaze",
   "electric-cyber",
   "emerald-pulse",
+  "emerald-flow",
+  "glacier-frost",
+  "indigo-pulse",
+  "crimson-solar",
+  "violet-pulse",
+  "solar-core",
 ];
 // Themes wearing the Obsidian skin (styles.css: :root[data-skin="obsidian"]).
-const OBSIDIAN_THEMES = new Set(["modhub", "crimson-blaze", "electric-cyber", "emerald-pulse"]);
+const OBSIDIAN_THEMES = new Set(["modhub", "crimson-blaze", "electric-cyber", "emerald-pulse", "emerald-flow", "glacier-frost", "indigo-pulse", "crimson-solar", "violet-pulse", "solar-core"]);
 // Themes that were removed, and what a saved choice of one becomes.
 const RETIRED_THEMES = { backstage: "modhub" };
 
@@ -273,6 +279,12 @@ const I18N = {
     themeButtonCrimsonBlaze: "Crimson Blaze",
     themeButtonElectricCyber: "Electric Cyber",
     themeButtonEmeraldPulse: "Emerald Pulse",
+    themeButtonEmeraldFlow: "Emerald Flow",
+    themeButtonGlacierFrost: "Glacier Frost",
+    themeButtonIndigoPulse: "Indigo Pulse",
+    themeButtonCrimsonSolar: "Crimson Solar",
+    themeButtonVioletPulse: "Violet Pulse",
+    themeButtonSolarCore: "Solar Core",
     themeButtonAmber: "Amber Noir",
     themeButtonEmerald: "Emerald Dark",
     themeButtonMidnight: "Midnight Blue",
@@ -2061,6 +2073,12 @@ function themeToggleLabel(theme) {
     "crimson-blaze": "themeButtonCrimsonBlaze",
     "electric-cyber": "themeButtonElectricCyber",
     "emerald-pulse": "themeButtonEmeraldPulse",
+    "emerald-flow": "themeButtonEmeraldFlow",
+    "glacier-frost": "themeButtonGlacierFrost",
+    "indigo-pulse": "themeButtonIndigoPulse",
+    "crimson-solar": "themeButtonCrimsonSolar",
+    "violet-pulse": "themeButtonVioletPulse",
+    "solar-core": "themeButtonSolarCore",
   }[next];
   return labelKey ? t(labelKey) : "";
 }
@@ -2141,6 +2159,12 @@ function applySettingsCopy() {
   setText("settings-theme-crimson-blaze-label", t("themeButtonCrimsonBlaze"));
   setText("settings-theme-electric-cyber-label", t("themeButtonElectricCyber"));
   setText("settings-theme-emerald-pulse-label", t("themeButtonEmeraldPulse"));
+  setText("settings-theme-emerald-flow-label", t("themeButtonEmeraldFlow"));
+  setText("settings-theme-glacier-frost-label", t("themeButtonGlacierFrost"));
+  setText("settings-theme-indigo-pulse-label", t("themeButtonIndigoPulse"));
+  setText("settings-theme-crimson-solar-label", t("themeButtonCrimsonSolar"));
+  setText("settings-theme-violet-pulse-label", t("themeButtonVioletPulse"));
+  setText("settings-theme-solar-core-label", t("themeButtonSolarCore"));
 
   setText("settings-db-eyebrow", t("settingsDbEyebrow"));
   setText("settings-db-title", t("settingsDbTitle"));
