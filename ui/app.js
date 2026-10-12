@@ -111,14 +111,12 @@ const state = {
   // Filter selections; null means "no filter". `status` is the Status list
   // (favorites | dependency | standalone | broken | missing | outdated |
   // indexed | unindexed), `pkgType` a LIB_TYPES key, `location` "active" |
-  // "offloaded", `sizeBucket` "sm" | "md" | "lg", `scene` "with" | "without".
+  // "offloaded", `creator` an author name.
   varPackagesFilters: {
     status: null,
     pkgType: null,
     location: null,
-    sizeBucket: null,
     creator: null,
-    scene: null,
   },
   // Sort is NOT part of varPackagesFilters: Reset clears that object and must
   // not throw away the sort. key: "type" | "name" | "size" | "items" | "deps" |
@@ -20612,8 +20610,6 @@ function setupLibraryView() {
     "lib-status-list": "status",
     "lib-type-list": "pkgType",
     "lib-location-list": "location",
-    "lib-size-list": "sizeBucket",
-    "lib-scene-list": "scene",
   };
   for (const [id, field] of Object.entries(listField)) {
     $(id)?.addEventListener("click", (event) => {
@@ -20670,6 +20666,17 @@ function setupLibraryView() {
     libCloseDropdowns();
     setVarPackagesFilter("creator", null);
   });
+
+  // Each set filter's x, and Clear all.
+  const clearField = { status: "status", type: "pkgType", location: "location", author: "creator" };
+  document.querySelectorAll("[data-lib-dd-clear]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      libCloseDropdowns();
+      setVarPackagesFilter(clearField[btn.getAttribute("data-lib-dd-clear")], null);
+    });
+  });
+  $("lib-clear-all")?.addEventListener("click", clearVarPackagesFilters);
 
   // --- Toolbar ----------------------------------------------------------------
   $("var-packages-filter-clear")?.addEventListener("click", clearVarPackagesFilters);
@@ -23986,9 +23993,7 @@ function serializeVarPackageFilters(filters) {
   if (filters.status && filters.status !== "missing" && filters.status !== "source_updates") payload.status = filters.status;
   if (filters.pkgType) payload.pkgType = filters.pkgType;
   if (filters.location) payload.location = filters.location;
-  if (filters.sizeBucket) payload.sizeBucket = filters.sizeBucket;
   if (filters.creator) payload.creator = filters.creator;
-  if (filters.scene) payload.sceneImage = filters.scene;
   return Object.keys(payload).length > 0 ? payload : null;
 }
 
@@ -23999,14 +24004,12 @@ function activeVarPackageFilterCount(filters) {
   let n = 0;
   if (filters.pkgType) n += 1;
   if (filters.location) n += 1;
-  if (filters.sizeBucket) n += 1;
   if (filters.creator) n += 1;
-  if (filters.scene) n += 1;
   return n;
 }
 
 function emptyVarPackageFilters(status = null) {
-  return { status, pkgType: null, location: null, sizeBucket: null, creator: null, scene: null };
+  return { status, pkgType: null, location: null, creator: null };
 }
 
 /// Loads the Author suggestions: the creators of the scanned folders, read off
@@ -24041,11 +24044,27 @@ function setVarPackagesFilter(field, value) {
   refreshVarPackagesFromFolder({ forceRescan: false });
 }
 
+// Anything narrowing the list: the search, a Status other than All, a filter.
+function varPackagesNarrowed() {
+  return (
+    Boolean(String(state.varPackagesFilter ?? "").trim()) ||
+    Boolean(state.varPackagesFilters?.status) ||
+    activeVarPackageFilterCount(state.varPackagesFilters) > 0
+  );
+}
+
+// Clear all: the search, the Status and every filter, in one refresh.
 function clearVarPackagesFilters() {
-  if (activeVarPackageFilterCount(state.varPackagesFilters) === 0) return;
-  state.varPackagesFilters = emptyVarPackageFilters(state.varPackagesFilters?.status ?? null);
+  if (!varPackagesNarrowed()) return;
+  const wasMissing = libIsMissingView();
+  const search = $("var-packages-filter");
+  if (search) search.value = "";
+  state.varPackagesFilter = "";
+  state.varPackagesFilters = emptyVarPackageFilters();
   renderVarPackagesFilterBar();
+  if (wasMissing) renderVarPackages();
   refreshVarPackagesFromFolder({ forceRescan: false });
+  libLoadSourceStrip();
 }
 
 function libCountText(n) {
@@ -24063,17 +24082,6 @@ function libListRowHtml({ value, label, title = "", count, selected, indent = fa
     </button>`;
 }
 
-const LIB_SIZE_OPTIONS = [
-  { value: null, label: "Any size" },
-  { value: "sm", label: "< 100 MB" },
-  { value: "md", label: "100 MB – 1 GB" },
-  { value: "lg", label: "> 1 GB" },
-];
-const LIB_SCENE_OPTIONS = [
-  { value: null, label: "Any" },
-  { value: "with", label: "Has a scene image" },
-  { value: "without", label: "No scene image" },
-];
 const LIB_SORT_OPTIONS = [
   { value: "type", label: "Type" },
   { value: "name", label: "Name" },
@@ -24088,6 +24096,12 @@ const LIB_SORT_OPTIONS = [
 function libSetDropdown(name, label, active) {
   vpSetText(`lib-dd-${name}-label`, label);
   document.querySelector(`[data-lib-dd-trigger='${name}']`)?.classList.toggle("is-active", Boolean(active));
+  // A set filter shows an x beside it, to clear it without opening it.
+  const clear = document.querySelector(`[data-lib-dd-clear='${name}']`);
+  if (clear) {
+    clear.classList.toggle("hidden", !active);
+    clear.closest(".lib-dd")?.classList.toggle("has-clear", Boolean(active));
+  }
 }
 
 function libCloseDropdowns(except = null) {
@@ -24210,18 +24224,6 @@ function renderVarPackagesFilterBar() {
         .join("");
     }
   };
-  pickList("lib-size-list", LIB_SIZE_OPTIONS, f.sizeBucket);
-  libSetDropdown(
-    "size",
-    f.sizeBucket ? LIB_SIZE_OPTIONS.find((o) => o.value === f.sizeBucket)?.label ?? "Size" : "Size",
-    Boolean(f.sizeBucket),
-  );
-  pickList("lib-scene-list", LIB_SCENE_OPTIONS, f.scene);
-  libSetDropdown(
-    "scene",
-    f.scene ? LIB_SCENE_OPTIONS.find((o) => o.value === f.scene)?.label ?? "Scene image" : "Scene image",
-    Boolean(f.scene),
-  );
 
   const sort = state.varPackagesSort ?? { key: "type", dir: "asc" };
   pickList("lib-sort-list", LIB_SORT_OPTIONS, sort.key);
@@ -24233,6 +24235,7 @@ function renderVarPackagesFilterBar() {
   $("lib-search-clear")?.classList.toggle("hidden", !hasSearch);
   $("lib-search")?.classList.toggle("has-value", hasSearch);
   $("lib-search-legend")?.classList.toggle("is-available", !hasSearch);
+  $("lib-clear-all")?.classList.toggle("hidden", !varPackagesNarrowed());
   libRenderToolbar();
 }
 

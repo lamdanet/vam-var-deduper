@@ -21635,3 +21635,76 @@ button.vpx-seg:hover {
 .build-db-view:has(#db-tab-panel-resources:not(.hidden)) {
   max-width: none;
 }
+
+/* VAR Packages: a set filter shows an x beside its dropdown (outside the
+   menu) in place of the arrow; Clear all resets the search and every filter. */
+.lib-dd.has-clear {
+  position: relative;
+}
+
+.lib-dd.has-clear .lib-dd-trigger {
+  padding-right: 30px;
+}
+
+.lib-dd.has-clear .lib-dd-chevron {
+  visibility: hidden;
+}
+
+.lib-dd-clear {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lib-dd-clear.hidden {
+  display: none;
+}
+
+.lib-dd-clear:hover {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.lib-dd-clear .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.lib-clear-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lib-clear-all.hidden {
+  display: none;
+}
+
+.lib-clear-all:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.lib-clear-all .material-symbols-outlined {
+  font-size: 17px;
+}

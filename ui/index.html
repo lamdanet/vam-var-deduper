@@ -711,6 +711,9 @@
               <span id="lib-dd-status-label">Status</span>
               <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
             </button>
+            <button type="button" class="lib-dd-clear hidden" data-lib-dd-clear="status" title="Clear this filter" aria-label="Clear the Status filter">
+              <span class="material-symbols-outlined">close</span>
+            </button>
             <div class="lib-dd-menu hidden" data-lib-dd-menu="status">
               <div class="lib-list" id="lib-status-list"></div>
             </div>
@@ -722,6 +725,9 @@
               <span id="lib-dd-type-label">Type</span>
               <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
             </button>
+            <button type="button" class="lib-dd-clear hidden" data-lib-dd-clear="type" title="Clear this filter" aria-label="Clear the Type filter">
+              <span class="material-symbols-outlined">close</span>
+            </button>
             <div class="lib-dd-menu hidden" data-lib-dd-menu="type">
               <div class="lib-list" id="lib-type-list"></div>
             </div>
@@ -731,6 +737,9 @@
             <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="location">
               <span id="lib-dd-location-label">Location</span>
               <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
+            </button>
+            <button type="button" class="lib-dd-clear hidden" data-lib-dd-clear="location" title="Clear this filter" aria-label="Clear the Location filter">
+              <span class="material-symbols-outlined">close</span>
             </button>
             <div class="lib-dd-menu hidden" data-lib-dd-menu="location">
               <div class="lib-list" id="lib-location-list"></div>
@@ -742,6 +751,9 @@
               <span id="lib-dd-author-label">Author</span>
               <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
             </button>
+            <button type="button" class="lib-dd-clear hidden" data-lib-dd-clear="author" title="Clear this filter" aria-label="Clear the Author filter">
+              <span class="material-symbols-outlined">close</span>
+            </button>
             <div class="lib-dd-menu lib-dd-menu-wide hidden" data-lib-dd-menu="author">
               <div class="lib-chips-row hidden" id="lib-author-chips"></div>
               <div class="lib-autocomplete">
@@ -752,25 +764,9 @@
             </div>
           </div>
 
-          <div class="lib-dd" data-lib-dd="size">
-            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="size">
-              <span id="lib-dd-size-label">Size</span>
-              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
-            </button>
-            <div class="lib-dd-menu hidden" data-lib-dd-menu="size">
-              <div class="lib-list" id="lib-size-list"></div>
-            </div>
-          </div>
-
-          <div class="lib-dd" data-lib-dd="scene">
-            <button type="button" class="lib-dd-trigger" data-lib-dd-trigger="scene">
-              <span id="lib-dd-scene-label">Scene image</span>
-              <span class="material-symbols-outlined lib-dd-chevron">expand_more</span>
-            </button>
-            <div class="lib-dd-menu hidden" data-lib-dd-menu="scene">
-              <div class="lib-list" id="lib-scene-list"></div>
-            </div>
-          </div>
+          <button type="button" id="lib-clear-all" class="lib-clear-all hidden" title="Clear the search and every filter">
+            <span class="material-symbols-outlined">filter_alt_off</span>Clear all
+          </button>
 
           <span class="lib-spacer"></span>
 
@@ -802,7 +798,7 @@
               <span class="lib-filter-summary hidden" id="lib-filter-summary">
                 <span class="lib-dot-sep">·</span>
                 <span id="lib-filter-summary-text"></span>
-                (<button id="var-packages-filter-clear" class="lib-reset" type="button">Reset</button>)
+                (<button id="var-packages-filter-clear" class="lib-reset" type="button">Clear all</button>)
               </span>
               <span class="lib-hint" id="lib-select-hint">
                 <span class="lib-dot-sep">·</span>
