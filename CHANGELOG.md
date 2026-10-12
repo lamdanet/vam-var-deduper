@@ -12,8 +12,10 @@ release time, it fills it with the commit messages since the last release.
 
 ### Added
 - **View on Hub from every page**: wherever a package is shown and it's on the
-  Hub, a Hub button (compass) opens its page in the app's Hub. That covers
-  dependency rows (missing ones too) in VAR Packages and Package Explorer, the
+  Hub, a Hub button (compass) opens its page in the app's Hub. VAR Packages'
+  details panel has a **View on Hub** button under Open details, and a Hub
+  button on each dependency and each "Used by" package. That also covers
+  dependency rows (missing ones too) in Package Explorer, the
   Missing and "Newer in your sources" lists, Package Explorer for a package
   opened by name, Fix Missing, Internalize Resources, Clean VARs, the
   Database's Packages and Resources tabs (and their right-click menus),
