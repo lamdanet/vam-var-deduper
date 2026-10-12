@@ -51,6 +51,12 @@ release time, it fills it with the commit messages since the last release.
   or to a zip holding the .var, are added once downloaded
 
 ### Changed
+- **Resource List is now a tab of the Database page** (Database → Resources),
+  next to Packages: every file the database records, with the same search,
+  filters and duplicates panel
+- **Dependency Usage, Reclaim Space and Unique Resources are experimental**:
+  release builds no longer show them; debug builds list them under
+  "Experimental" in the sidebar
 - **Settings, laid out like the other pages**: four tabs (Library, Appearance,
   Database, About), each setting a card. Changes save as you make them (no
   Save button): "Saved." shows once they're written, or why they weren't.

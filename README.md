@@ -31,8 +31,10 @@ There is nothing to install.
 - **Hub:** browse, filter and install VaM Hub resources, and keep a wishlist
 - **Sources:** paste a forum post and the app finds the `.var` files, mirrors and
   zip passwords in it, then saves the links (MEGA, MediaFire, Pixeldrain, zips)
-- **Reclaim Space, Unique Resources, Resource List, Missing Resources,
-  Internalize Resources:** find and fix what your packages contain and reference
+- **Database:** index your packages, then browse every package and every file
+  it records (Packages and Resources tabs)
+- **Fix Missing, Internalize Resources:** find and fix what your packages
+  contain and reference
 
 Removing packages sends them to the Recycle Bin, and Clean VARs can back up the
 files it changes. Still, back up your library before large cleanups.
