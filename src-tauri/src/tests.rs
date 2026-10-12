@@ -6738,6 +6738,84 @@ fn lean_query_plans_on_a_real_copy() {
     }
 }
 
+/// A remote .var's listing (VVD_URL): the first names read here, and the
+/// zip crate's, to compare.
+#[test]
+#[ignore = "needs VVD_URL and the network"]
+fn remote_listing_of_a_url() {
+    let url = std::env::var("VVD_URL").expect("VVD_URL");
+    match crate::archives::remote_zip_listing(&url) {
+        Ok(l) => {
+            println!("len {} files {}", l.len, l.files.len());
+            for f in l.files.iter().take(8) {
+                println!("  {} {} {}", f.name, f.crc32, f.size);
+            }
+        }
+        Err(e) => println!("error: {e}"),
+    }
+}
+
+#[test]
+fn a_saved_source_is_indexed_from_its_listing() {
+    let dir = std::env::temp_dir().join(format!("vvd_src_index_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("dir");
+    let var = dir.join("Acme.Outfit.3.var");
+    write_test_var(
+        &var,
+        &[
+            ("Custom/Clothing/Female/Acme/top/top.vam", b"vam-bytes"),
+            ("Custom/Clothing/Female/Acme/top/top.vab", b"vab-bytes-longer"),
+            ("Custom/Clothing/Female/Acme/top/top.jpg", b"jpg"),
+            ("Custom/Atom/Person/Morphs/female/Acme/m.vmi", b"vmi"),
+            ("Custom/Atom/Person/Morphs/female/Acme/m.vmb", b"vmb-bytes"),
+            ("Saves/scene/Acme/中文.json", b"{}"),
+        ],
+    );
+    // The hand-read central directory agrees with the zip crate.
+    let listed = crate::archives::central_directory_for_test(&var).expect("listing");
+    let mut zip = zip::ZipArchive::new(fs::File::open(&var).unwrap()).unwrap();
+    assert_eq!(listed.len(), zip.len());
+    for f in &listed {
+        let z = zip.by_name(&f.name).expect("in zip");
+        assert_eq!((f.crc32, f.size), (z.crc32(), z.size()), "{}", f.name);
+    }
+    // Rows as a scan makes them: no meta.json, effective sizes from names.
+    let rows = crate::source_index::rows_from_listing("Acme.Outfit.3", &listed).expect("rows");
+    assert_eq!(rows.len(), 6);
+    let eff = |p: &str| rows.iter().find(|r| r.internal_path.ends_with(p)).unwrap().effective_size;
+    assert_eq!(eff("top.vam"), 9 + 16 + 3, "a .vam carries its .vab and texture");
+    assert_eq!(eff("m.vmi"), 3 + 9, "a .vmi carries its .vmb");
+    assert_eq!(eff("top.jpg"), 3);
+    // Not a package without meta.json.
+    let no_meta: Vec<_> = listed.iter().filter(|f| f.name != "meta.json").cloned().collect();
+    assert!(crate::source_index::rows_from_listing("Acme.Outfit.3", &no_meta).is_err());
+
+    let db = crate::db::open_in_memory().expect("db");
+    assert_eq!(crate::source_index::new_packages(&db, &["Acme.Outfit.3.var".into(), "acme.outfit.3.var".into()]).0, vec!["Acme.Outfit.3".to_string()]);
+    assert_eq!(crate::source_index::write_package(&db, "Acme.Outfit.3", 1234, &rows).expect("write"), 6);
+    let (fresh, known) = crate::source_index::new_packages(&db, &["Acme.Outfit.3.var".into()]);
+    assert!(fresh.is_empty() && known == 1, "known now");
+    let conn = db.conn.lock().unwrap();
+    let (path, size): (String, i64) = conn
+        .query_row("SELECT file_path, size_bytes FROM packages WHERE package_id = 'Acme.Outfit.3'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!((path.as_str(), size), ("source:Acme.Outfit.3", 1234));
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM resources WHERE package_id = 'Acme.Outfit.3'", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 6);
+    let cat: String = conn
+        .query_row(
+            "SELECT c.name FROM resources r JOIN categories c ON c.category_id = r.category_id WHERE r.internal_path LIKE '%top.vam'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(cat, "Clothing");
+    drop(conn);
+    drop(db);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_path_splits_into_folder_and_name_as_sql_does() {
     let conn = rusqlite::Connection::open_in_memory().expect("db");
