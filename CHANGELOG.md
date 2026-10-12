@@ -10,6 +10,26 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Added
+- **Get a package from your saved sources, on the pages that need it**: every
+  page downloads a package by name the same way (the VaM Hub first, then the
+  links on the Sources page), straight into AddonPackages and without its
+  dependencies. It says where each download comes from ("From your sources ·
+  Pixeldrain", or "only v1 (v2 asked)").
+  - The **Downloads panel** has a box: type part of a name to search your
+    saved sources, or paste names (a list, a meta.json) to look each up, then
+    Get one or all.
+  - **VAR Packages**: the Missing view gets Get per row and Get all, filling
+    in as sources are found (Find & Download All is gone). A new status,
+    **Newer in your sources**, lists packages with a newer version saved; a
+    package's panel offers **Update from sources**. A search also shows what
+    your sources have that you don't.
+  - **Redownload** of a damaged copy uses a saved source when the Hub hasn't
+    got it.
+  - **Package Explorer** gets missing dependencies with one click, and opens
+    any package by name, with Download.
+  - The **Hub**'s search shows what your sources have that the Hub doesn't.
+
 ### Changed
 - **Clean and Fix show their progress**: while Run Fixes or Clean writes a
   package, the bar says what it's doing (backing up, writing, putting it in
@@ -24,6 +44,13 @@ release time, it fills it with the commit messages since the last release.
   in reach, and a long scan can be stopped. Saved sources lists each saved
   file once; select it to see all its links, how each has fared, and forget
   one
+- **Sources is where links are added and removed**: a third tab, **Add by
+  hand**, holds the add-a-link form (the links already saved for the file show
+  above it) and **Import a list**, moved from the Database page. Saved sources
+  can forget the links of many files at once, and filter the failing ones.
+  Forget all links now asks first
+- Looking up where a long list of packages can be downloaded is faster: the
+  1,161 missing dependencies of a large library took about 70 s, now 24 s
 
 ### Fixed
 - A `.var` that isn't a package (often a Hub login page saved by a download
