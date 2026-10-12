@@ -45,8 +45,9 @@ release time, it fills it with the commit messages since the last release.
 
 ### Changed
 - **Settings, laid out like the other pages**: four tabs (Folders, Appearance,
-  Database, About), each setting a card, Save and Discard in the bar at the
-  bottom of the Folders tab
+  Database, About), each setting a card. Changes save as you make them (no
+  Save button); each card has Reset to default, and Reset all settings to
+  default lists what changes before it does
 - **The database is about a third of its size, and faster**: each package
   name and folder is now stored once instead of in every one of millions of
   rows. A 1.9 GB index becomes about 0.6 GB with nothing lost (every row
