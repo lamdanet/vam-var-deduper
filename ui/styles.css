@@ -21462,12 +21462,56 @@ button.vpx-seg:hover {
   opacity: 0.5;
   cursor: default;
 }
+/* Two lines of subfolders (28px each and the gap); "Show all" opens the rest
+   in a box that scrolls up and down, with a slim scrollbar. */
 .vpx-subs {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
+  max-height: 62px;
+  overflow: hidden;
+}
+.vpx-subs.is-open {
+  max-height: 232px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+/* A slim thumb, no arrow buttons (styled this way rather than with
+   scrollbar-width, which keeps Windows' arrows). */
+.vpx-subs.is-open::-webkit-scrollbar {
+  width: 6px;
+}
+.vpx-subs.is-open::-webkit-scrollbar-button {
+  display: none;
+}
+.vpx-subs.is-open::-webkit-scrollbar-track {
+  background: transparent;
+}
+.vpx-subs.is-open::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--lib-border-bright, var(--line-strong));
+}
+.vpx-subs-more {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--lib-text-2, var(--text-muted));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.vpx-subs-more.hidden {
+  display: none;
+}
+.vpx-subs-more:hover {
+  color: var(--lib-text, var(--text));
+}
+.vpx-subs-more .material-symbols-outlined {
+  font-size: 18px;
 }
 .vpx-sub {
   display: inline-flex;

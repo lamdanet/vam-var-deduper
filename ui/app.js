@@ -20594,28 +20594,60 @@ function vpxRenderCrumbs() {
     </div>
     ${
       kids.length
-        ? `<div class="vpx-subs">${kids
+        ? `<div class="vpx-subs${vpxSubsOpen() ? " is-open" : ""}" id="vpx-subs">${kids
             .map(
               (c) =>
                 `<button type="button" class="vpx-sub" data-vpx-open="${escapeAttribute(c.path)}" title="${escapeAttribute(c.path)}"><span class="material-symbols-outlined">folder</span><span class="vpx-sub-name">${escapeHtml(
                   vpxName(c.path),
                 )}</span><span class="vpx-count">${vpxCount(c).toLocaleString()}</span></button>`,
             )
-            .join("")}</div>`
+            .join("")}</div>
+          <button type="button" class="vpx-subs-more hidden" id="vpx-subs-more" data-vpx-subs-toggle></button>`
         : ""
     }`;
+  vpxFitSubs();
+}
+
+// The subfolders wrap onto two lines; when there are more, "Show all N
+// folders" opens the rest (in a box of its own that scrolls), instead of one
+// long line with a sideways scrollbar.
+function vpxFitSubs() {
+  const subs = $("vpx-subs");
+  const more = $("vpx-subs-more");
+  if (!subs || !more) return;
+  const n = subs.children.length;
+  const open = vpxSubsOpen();
+  const clipped = !open && subs.scrollHeight > subs.clientHeight + 2;
+  more.classList.toggle("hidden", !clipped && !open);
+  more.innerHTML = open
+    ? `<span class="material-symbols-outlined" aria-hidden="true">expand_less</span>Show fewer`
+    : `<span class="material-symbols-outlined" aria-hidden="true">expand_more</span>Show all ${n.toLocaleString()} folders`;
+  more.setAttribute("aria-expanded", String(open));
+}
+
+// "Show all" holds for the folder it was opened in; another folder starts on
+// two lines again.
+function vpxSubsOpen() {
+  return Boolean(VPX.subsOpen) && VPX.subsOpen === VPX.folder;
 }
 
 // ---- Events --------------------------------------------------------------------------------
 
 function setupVarPackagesExplore() {
   vpxLoad();
+  // A wider or narrower window fits more or fewer folders on two lines.
+  window.addEventListener("resize", () => vpxFitSubs());
   document.querySelectorAll("[data-vp-tab]").forEach((b) =>
     b.addEventListener("click", () => vpSetTab(b.getAttribute("data-vp-tab"))),
   );
   const onClick = (e) => {
     const q = (sel) => e.target.closest?.(sel);
     let el;
+    if (q("[data-vpx-subs-toggle]")) {
+      VPX.subsOpen = vpxSubsOpen() ? null : VPX.folder;
+      vpxRenderCrumbs();
+      return;
+    }
     if ((el = q("[data-vpx-toggle]"))) {
       const k = vpxKey(el.getAttribute("data-vpx-toggle"));
       if (VPX.open.has(k)) VPX.open.delete(k);
