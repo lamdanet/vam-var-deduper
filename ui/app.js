@@ -850,6 +850,7 @@ function queueDownload(opts) {
 
 function downloadsChanged() {
   renderDownloadsPanel();
+  getRenderPanel();
   updateDownloadsBadge();
   downloadsSaveSoon();
 }
@@ -1401,6 +1402,329 @@ function closeDownloadsPanel() {
   $("downloads-popover")?.classList.remove("open");
   $("downloads-overlay")?.classList.remove("open");
 }
+// ============================================================
+// Get a package: one way every page downloads a package by name.
+//
+// resolve_var_sources asks the VaM Hub, then your saved sources (Sources
+// page). The file goes straight into AddonPackages, on its own: its
+// dependencies aren't followed (that would mean resolving packages that may
+// not exist). Nothing is stored; the answers are kept for this session only.
+// ============================================================
+
+const GET = {
+  // Package id (lower case) -> VarSourceInfo, for this session.
+  cache: new Map(),
+  // The Downloads panel's box: "search" (part of a file name) or "names".
+  query: "",
+  mode: "search",
+  rows: [],
+  total: 0,
+  limit: 30,
+  ids: [],
+  loading: false,
+  error: "",
+  token: 0,
+  timer: 0,
+};
+
+// Package ids in pasted text: "Creator.Package.3", ".latest", ".min3", with
+// or without ".var" (a meta.json, a list, a post).
+const GET_ID_RE = /[^\s"':,\/\\{}]+\.[^\s"':,\/\\{}]+\.(?:\d+|latest|min\d+)(?=\.var\b|$|[\s"':,\/\\{}])/gi;
+
+function getParseIds(text) {
+  const found = String(text || "").match(GET_ID_RE) ?? [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of found) {
+    const id = raw.replace(/\.var$/i, "");
+    const key = id.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(id);
+  }
+  return out;
+}
+
+function getVersionOf(id) {
+  const m = /\.(\d+)$/.exec(String(id || "").replace(/\.var$/i, ""));
+  return m ? Number(m[1]) : null;
+}
+
+function getBaseOf(id) {
+  return String(id || "").replace(/\.var$/i, "").replace(/\.(\d+|latest|min\d+)$/i, "").toLowerCase();
+}
+
+// Against your library: "have" (this exact one, or any for .latest),
+// "newer" (newer than every version you have), "older", or "new".
+function getLibraryState(id) {
+  const stem = String(id || "").replace(/\.var$/i, "").toLowerCase();
+  if (HUB.local.ids.has(stem)) return { kind: "have" };
+  const versions = HUB.local.bases.get(getBaseOf(stem)) ?? [];
+  if (!versions.length) return { kind: "new" };
+  if (/\.latest$/i.test(stem)) return { kind: "have" };
+  const want = getVersionOf(stem);
+  const top = Math.max(...versions);
+  if (want == null) return { kind: "new" };
+  return want > top ? { kind: "newer", have: top } : { kind: "older", have: top };
+}
+
+function getLibraryChip(id) {
+  const s = getLibraryState(id);
+  if (s.kind === "have") return `<span class="chip fm-chip-good">In library</span>`;
+  if (s.kind === "newer") return `<span class="chip chip-accent" title="You have v${s.have}">Newer than yours</span>`;
+  if (s.kind === "older") return `<span class="chip" title="You have v${s.have}, a newer one">Older than yours</span>`;
+  return `<span class="chip">New</span>`;
+}
+
+function getHostName(host) {
+  return host === "hub" ? "VaM Hub" : srcHostLabel(host);
+}
+
+// Where it would download from, in one line (every page says it the same way).
+function getSourceLineHtml(id, info) {
+  if (!info) return `<span class="get-src is-wait">Looking for a source…</span>`;
+  if (!info.download_url) {
+    return info.error
+      ? `<span class="get-src is-none" title="${escapeAttribute(info.error)}"><span class="material-symbols-outlined">cloud_off</span>Couldn't reach the Hub, and no saved source</span>`
+      : `<span class="get-src is-none"><span class="material-symbols-outlined">block</span>No source: add a link on the Sources page</span>`;
+  }
+  const got = String(info.filename || "").replace(/\.var$/i, "");
+  const want = getVersionOf(id);
+  const other = want != null && got && got.toLowerCase() !== String(id).toLowerCase() ? getVersionOf(got) : null;
+  const from = info.host === "hub" ? "VaM Hub" : `From your sources · ${getHostName(info.host)}`;
+  return `<span class="get-src${info.host === "hub" ? " is-hub" : ""}"><span class="material-symbols-outlined">download</span>${escapeHtml(from)}${
+    other != null ? ` · <b class="get-src-warn">only v${other} (v${want} asked)</b>` : ""
+  }${info.file_size ? ` · ${escapeHtml(formatBytesLocal(Number(info.file_size)))}` : ""}</span>`;
+}
+
+// Resolves ids not asked about yet this session; returns id(lower) -> info.
+async function getResolve(ids, { fresh = false } = {}) {
+  const want = ids.filter((id) => fresh || !GET.cache.has(id.toLowerCase()));
+  if (want.length && invoke) {
+    for (let i = 0; i < want.length; i += 200) {
+      const pairs = await invoke("resolve_var_sources", { packageIds: want.slice(i, i + 200) });
+      for (const [id, info] of pairs ?? []) GET.cache.set(String(id).toLowerCase(), info);
+    }
+  }
+  const out = new Map();
+  for (const id of ids) out.set(id.toLowerCase(), GET.cache.get(id.toLowerCase()) ?? null);
+  return out;
+}
+
+// Downloads each id straight into AddonPackages, on its own. onDone fires per
+// package with ("done" | "exists" | "failed" | "cancelled" | "none", id).
+// Returns how many were queued.
+async function getPackages(ids, { onDone = null, replace = false } = {}) {
+  const list = (ids ?? []).filter(Boolean);
+  if (!list.length) return 0;
+  const dest = vamAddonPackagesDir();
+  if (!dest) {
+    showToast("Set your VaM folder in Settings first: downloads go into its AddonPackages.", "error", 6000);
+    return 0;
+  }
+  let found;
+  try {
+    found = await getResolve(list, { fresh: true });
+  } catch (e) {
+    showToast(`Couldn't look for a source: ${String(e?.message || e)}`, "error", 6000);
+    return 0;
+  }
+  let queued = 0;
+  const none = [];
+  for (const id of list) {
+    const info = found.get(id.toLowerCase());
+    if (!info?.download_url) {
+      none.push(id);
+      onDone?.("none", id);
+      continue;
+    }
+    const filename = info.filename || `${id}.var`;
+    const jobId = queueDownload({
+      packageId: filename.replace(/\.var$/i, ""),
+      url: info.download_url,
+      filename,
+      host: info.host || "",
+      destDir: dest,
+      label: filename,
+      replace,
+      autoDeps: false,
+      onDone: (status, done) => {
+        if (status === "done" || status === "exists") {
+          hubLocalAdd(filename.replace(/\.var$/i, ""));
+          getRefreshViews();
+        }
+        onDone?.(status, id, done);
+      },
+    });
+    if (jobId != null) queued += 1;
+  }
+  if (none.length) {
+    showToast(
+      none.length === 1 ? `No source for ${none[0]}: add a link on the Sources page.` : `${none.length} packages have no source: add links on the Sources page.`,
+      "error",
+      6000,
+    );
+  }
+  if (queued) showToast(`${pkgCount(queued, "download", "downloads")} queued into AddonPackages`, "success");
+  getRenderPanel();
+  return queued;
+}
+
+// Pages that show what you have, after a Get landed.
+function getRefreshViews() {
+  getRenderPanel();
+}
+
+// ---- The Downloads panel's box ---------------------------------------------------
+
+function getOnInput(value) {
+  GET.query = value;
+  clearTimeout(GET.timer);
+  GET.timer = setTimeout(() => getSearch().catch((e) => addLog(`Get a package: ${String(e)}`)), 250);
+}
+
+async function getSearch({ more = false } = {}) {
+  const text = GET.query.trim();
+  const token = ++GET.token;
+  if (!text) {
+    Object.assign(GET, { rows: [], ids: [], total: 0, loading: false, error: "" });
+    getRenderPanel();
+    return;
+  }
+  const ids = getParseIds(text);
+  // Whole names (or a pasted list): each looked up on the Hub and in your sources.
+  const rest = text.replace(GET_ID_RE, "").replace(/\.var\b/gi, "").replace(/[\s,;"'{}\[\]:]+/g, "");
+  if (ids.length && (ids.length > 1 || !rest)) {
+    Object.assign(GET, { mode: "names", ids, loading: true, error: "" });
+    getRenderPanel();
+    try {
+      await hubLoadLocal();
+      await getResolve(ids);
+    } catch (e) {
+      if (token === GET.token) GET.error = String(e?.message || e);
+    }
+    if (token !== GET.token) return;
+    GET.loading = false;
+    getRenderPanel();
+    return;
+  }
+  // Part of a name: your saved sources, a page at a time.
+  if (!more) GET.limit = 30;
+  Object.assign(GET, { mode: "search", loading: true, error: "" });
+  getRenderPanel();
+  try {
+    await hubLoadLocal();
+    const [rows, total] = await invoke("search_source_files", { query: text, offset: 0, limit: GET.limit });
+    if (token !== GET.token) return;
+    Object.assign(GET, { rows: Array.isArray(rows) ? rows : [], total: Number(total) || 0 });
+  } catch (e) {
+    if (token === GET.token) GET.error = String(e?.message || e);
+  }
+  if (token !== GET.token) return;
+  GET.loading = false;
+  getRenderPanel();
+}
+
+function getRowHtml(id, sourceHtml, { noSource = false } = {}) {
+  const job = findDownloadJob(id);
+  const lib = getLibraryState(id);
+  const btn = job
+    ? `<span class="get-queued">${job.status === "downloading" ? "Downloading…" : "Queued"}</span>`
+    : lib.kind === "have" || noSource
+      ? ""
+      : `<button type="button" class="ghost-button dl-mini get-btn" data-get-id="${escapeAttribute(id)}" title="Download it into AddonPackages (its dependencies aren't downloaded)"><span class="material-symbols-outlined">download</span>Get</button>`;
+  return `<div class="get-row">
+      <span class="get-row-text"><b title="${escapeAttribute(id)}">${escapeHtml(id)}</b>${sourceHtml}</span>
+      ${getLibraryChip(id)}
+      ${btn}
+    </div>`;
+}
+
+function getRenderPanel() {
+  const host = $("get-results");
+  if (!host) return;
+  const text = GET.query.trim();
+  host.classList.toggle("hidden", !text);
+  if (!text) {
+    host.innerHTML = "";
+    return;
+  }
+  if (GET.error) {
+    host.innerHTML = `<p class="get-note is-bad">${escapeHtml(GET.error)}</p>`;
+    return;
+  }
+  if (GET.mode === "names") {
+    const rows = GET.ids.map((id) => {
+      const info = GET.cache.get(id.toLowerCase());
+      return getRowHtml(id, getSourceLineHtml(id, info), { noSource: Boolean(info) && !info.download_url });
+    });
+    const can = GET.ids.filter((id) => getLibraryState(id).kind !== "have" && GET.cache.get(id.toLowerCase())?.download_url && !findDownloadJob(id));
+    host.innerHTML = `<div class="get-head">${pkgCount(GET.ids.length, "package", "packages")}${GET.loading ? " · looking for sources…" : ""}</div>
+      ${rows.join("")}
+      ${can.length > 1 ? `<div class="get-foot"><button type="button" class="primary-button dl-mini" data-get-all>Get all ${can.length}</button></div>` : ""}`;
+    return;
+  }
+  if (GET.loading && !GET.rows.length) {
+    host.innerHTML = `<p class="get-note">Searching your sources…</p>`;
+    return;
+  }
+  if (!GET.rows.length) {
+    host.innerHTML = `<p class="get-note">No saved source has "${escapeHtml(text)}" in its name. Type a package's full name (Creator.Package.3) to ask the Hub too.</p>`;
+    return;
+  }
+  const rows = GET.rows.map((r) => {
+    const id = String(r.filename).replace(/\.var$/i, "");
+    const hosts = String(r.hosts || "")
+      .split(",")
+      .filter(Boolean)
+      .map(getHostName)
+      .join(" · ");
+    const health = r.failing && r.failing >= r.links ? " · failed last time" : r.worked ? " · worked before" : "";
+    return getRowHtml(
+      id,
+      `<span class="get-src"><span class="material-symbols-outlined">bookmark</span>${escapeHtml(`${hosts}${r.links > 1 ? ` · ${r.links} links` : ""}${health}`)}</span>`,
+    );
+  });
+  host.innerHTML = `<div class="get-head">In your sources · ${pkgCount(GET.total, "file", "files")}</div>
+    ${rows.join("")}
+    ${
+      GET.rows.length < GET.total
+        ? `<div class="get-foot"><button type="button" class="ghost-button dl-mini" data-get-more>${GET.loading ? "Loading…" : `Show more (${(GET.total - GET.rows.length).toLocaleString()})`}</button></div>`
+        : ""
+    }`;
+}
+
+function setupGetPackage() {
+  const input = $("get-input");
+  if (!input) return;
+  input.addEventListener("input", () => {
+    // Grows with what's pasted, up to a few lines.
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    getOnInput(input.value);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && input.value) {
+      e.stopPropagation();
+      input.value = "";
+      input.style.height = "";
+      getOnInput("");
+    }
+  });
+  $("get-results")?.addEventListener("click", (e) => {
+    const one = e.target.closest?.("[data-get-id]");
+    if (one) return void getPackages([one.getAttribute("data-get-id")]);
+    if (e.target.closest?.("[data-get-all]")) {
+      const ids = GET.ids.filter((id) => getLibraryState(id).kind !== "have" && GET.cache.get(id.toLowerCase())?.download_url && !findDownloadJob(id));
+      return void getPackages(ids);
+    }
+    if (e.target.closest?.("[data-get-more]")) {
+      GET.limit += 30;
+      getSearch({ more: true }).catch((err) => addLog(`Get a package: ${String(err)}`));
+    }
+  });
+}
+
 window.__toggleDownloads = function () {
   const p = $("downloads-popover");
   if (!p) return;
@@ -1413,6 +1737,7 @@ window.__toggleDownloads = function () {
 };
 
 function setupDownloadsManager() {
+  setupGetPackage();
   const overlay = $("downloads-overlay");
   if (overlay) overlay.addEventListener("click", closeDownloadsPanel);
   const closeBtn = $("downloads-close");
