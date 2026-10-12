@@ -1056,18 +1056,20 @@ pub(crate) fn set_link_archive(db: &Db, row: &DownloadLinkRow) -> Result<()> {
 
 /// Stored links whose file name contains `query` (case-insensitive; all when
 /// empty), newest first, at most `limit`; and how many match in all.
-pub(crate) fn search_download_links(db: &Db, query: &str, limit: u32) -> Result<(Vec<DownloadLinkRow>, u64)> {
+/// `failing`: only links whose last download through them failed.
+pub(crate) fn search_download_links(db: &Db, query: &str, limit: u32, failing: bool) -> Result<(Vec<DownloadLinkRow>, u64)> {
     let handle = db.read()?;
+    let only_failing = if failing { " AND COALESCE(fail_count, 0) > 0" } else { "" };
     let pattern = format!("%{}%", query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
     let total: i64 = handle.query_row(
-        "SELECT COUNT(*) FROM download_links WHERE filename LIKE ?1 ESCAPE '\\'",
+        &format!("SELECT COUNT(*) FROM download_links WHERE filename LIKE ?1 ESCAPE '\\'{only_failing}"),
         params![pattern],
         |r| r.get(0),
     )?;
-    let mut stmt = handle.prepare(
+    let mut stmt = handle.prepare(&format!(
         "SELECT package_base, version, filename, host, url, size, archive_entry, archive_password, last_ok, fail_count, last_error
-         FROM download_links WHERE filename LIKE ?1 ESCAPE '\\' ORDER BY id DESC LIMIT ?2",
-    )?;
+         FROM download_links WHERE filename LIKE ?1 ESCAPE '\\'{only_failing} ORDER BY id DESC LIMIT ?2"
+    ))?;
     let rows = stmt
         .query_map(params![pattern, limit], |r| {
             Ok(DownloadLinkRow {

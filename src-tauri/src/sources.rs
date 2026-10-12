@@ -295,15 +295,22 @@ pub(crate) fn add_download_link(
 }
 
 /// Stored sources whose file name contains `query` (all when empty), newest
-/// first, at most `limit`; with the total that match.
+/// first, at most `limit`; with the total that match. `failing`: only links
+/// whose last download through them failed.
 #[tauri::command(async)]
 pub(crate) fn search_download_links(
     query: Option<String>,
     limit: Option<u32>,
+    failing: Option<bool>,
     db: State<'_, Db>,
 ) -> Result<(Vec<DownloadLinkRow>, u64), String> {
-    crate::db::search_download_links(&db, query.as_deref().unwrap_or("").trim(), limit.unwrap_or(300).min(2000))
-        .map_err(|e| e.to_string())
+    crate::db::search_download_links(
+        &db,
+        query.as_deref().unwrap_or("").trim(),
+        limit.unwrap_or(300).min(2000),
+        failing.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Saved files whose name contains `query`, a row per file (the newest
