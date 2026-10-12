@@ -361,14 +361,20 @@ fn target_folder(app: &tauri::AppHandle, target_dir: Option<&str>) -> Result<Pat
 }
 
 /// Everything that rules a folder out, then what's worth knowing about it.
+/// It makes nothing: the move creates the folder once it really starts.
 fn vet_target(dir: &Path, current: &Path, need: u64) -> Result<Vec<String>, String> {
+    // "D:folder" or "folder" would land wherever the app happens to run.
+    if !dir.is_absolute() {
+        return Err(format!("{} isn't a full folder path.", dir.display()));
+    }
     if same_file(&dir.join(DB_FILE_NAME), current) {
         return Err("The database is already there.".to_string());
     }
     let warnings = drive_checks(dir, need)?;
-    fs::create_dir_all(dir).map_err(|e| format!("Couldn't use {}: {e}", dir.display()))?;
-    // Can we write there at all?
-    let probe = dir.join(".vvd-write-test");
+    // Can we write there at all? (Or, for a folder still to be made, in the
+    // nearest one that exists.)
+    let at = dir.ancestors().find(|a| a.is_dir()).ok_or_else(|| format!("{} isn't on a drive that's there.", dir.display()))?;
+    let probe = at.join(format!(".vvd-write-test-{}", std::process::id()));
     fs::write(&probe, b"").map_err(|e| format!("Can't write to {}: {e}", dir.display()))?;
     let _ = fs::remove_file(&probe);
     Ok(warnings)
@@ -553,6 +559,8 @@ pub(crate) fn start_move_database_task(
             busy.join("; ")
         ));
     }
+    // Only now, with nothing in the way, is the folder made.
+    fs::create_dir_all(&dir).map_err(|e| format!("Couldn't use {}: {e}", dir.display()))?;
     let keep_dir = if same_file(&dir, &default) { None } else { Some(dir.display().to_string()) };
     let db = db.inner().clone();
     let (task_id, tasks, _cancel) = crate::packages::begin_task(&state, "db_move_starting", "Preparing")?;
