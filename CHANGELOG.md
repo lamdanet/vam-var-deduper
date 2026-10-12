@@ -49,6 +49,11 @@ release time, it fills it with the commit messages since the last release.
   above it) and **Import a list**, moved from the Database page. Saved sources
   can forget the links of many files at once, and filter the failing ones.
   Forget all links now asks first
+- **Downloads are one package by default**: Fix Missing, Find Dependencies,
+  the Hub update button and a .var clicked on a Hub page download only that
+  package, not its dependencies. On the Hub, Download is the package alone;
+  **+ N** beside it downloads its missing dependencies too (and what they
+  need), and the file picker still lets you tick dependencies
 - Looking up where a long list of packages can be downloaded is faster: the
   1,161 missing dependencies of a large library took about 70 s, now 24 s
 
