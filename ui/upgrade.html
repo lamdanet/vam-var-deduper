@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VAM VAR Deduper</title>
+    <!-- Shown once, while the database converts to the lean layout (db.rs
+         v22) before the main window opens. main.rs sends "db-upgrade" events:
+         { step, fraction, secs }, or { error }. -->
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0b0d;
+        --surface: #151518;
+        --line: #2a2a30;
+        --text: #f4f4f5;
+        --muted: #a1a1aa;
+        --accent: #a78bfa;
+        --danger: #ef4444;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 22px 24px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 17px;
+        font-weight: 650;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+      .step {
+        display: flex;
+        justify-content: space-between;
+        margin: 18px 0 6px;
+        font-weight: 600;
+      }
+      .step span:last-child {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        font-weight: 400;
+      }
+      .track {
+        height: 6px;
+        border-radius: 999px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .bar {
+        width: 2%;
+        height: 100%;
+        border-radius: 999px;
+        background: var(--accent);
+        transition: width 0.4s ease;
+      }
+      .note {
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+      }
+      .error {
+        display: none;
+        margin-top: 14px;
+        color: var(--danger);
+        white-space: pre-wrap;
+      }
+      body.failed .error {
+        display: block;
+      }
+      body.failed .bar {
+        background: var(--danger);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Making your database smaller</h1>
+    <p>Once, after this update: about a minute or two. Please keep the app open.</p>
+    <div class="step"><span id="step">Starting…</span><span id="time">0 s</span></div>
+    <div class="track"><div class="bar" id="bar"></div></div>
+    <p class="error" id="error"></p>
+    <p class="note" id="note">
+      Nothing is removed. The same information is stored once instead of millions of times, so the file shrinks to
+      about a third and the app reads it faster. Your current database is copied first, next to it, as
+      vam_var_deduper.before-lean.db.
+    </p>
+    <script>
+      const started = Date.now();
+      const time = document.getElementById("time");
+      const tick = setInterval(() => {
+        time.textContent = `${Math.round((Date.now() - started) / 1000)} s`;
+      }, 1000);
+      window.__TAURI__?.event?.listen("db-upgrade", ({ payload }) => {
+        if (payload?.error) {
+          clearInterval(tick);
+          document.body.classList.add("failed");
+          document.getElementById("step").textContent = "The conversion stopped";
+          document.getElementById("error").textContent = `${payload.error}\n\nYour database is as it was: the conversion is all or nothing. A copy is next to it. Close this window.`;
+          return;
+        }
+        document.getElementById("step").textContent = payload?.step || "Working…";
+        const pct = Math.max(2, Math.min(100, Math.round((payload?.fraction || 0) * 100)));
+        document.getElementById("bar").style.width = `${pct}%`;
+      });
+    </script>
+  </body>
+</html>

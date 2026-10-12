@@ -10,6 +10,8 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "create": false,
         "title": "VAM VAR Deduper",
         "width": 1480,
         "height": 920,

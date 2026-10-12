@@ -31,7 +31,7 @@ mod tests;
 mod utils;
 mod vamprefs;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::{
     extract::{extract_probe, extract_run},
@@ -84,16 +84,62 @@ use crate::{
     },
 };
 
+/// The app proper: its state and database, then the main window (created
+/// here, not from the config, so it never runs before the database is open).
+fn start_app(handle: &tauri::AppHandle, db: db::Db) -> anyhow::Result<()> {
+    handle.manage(AppState::new());
+    handle.manage(db);
+    if let Ok(dir) = handle.path().app_config_dir() {
+        hub_index::init(dir);
+    }
+    let config = handle
+        .config()
+        .app
+        .windows
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("no main window in the config"))?;
+    tauri::WebviewWindowBuilder::from_config(handle, &config)?.build()?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let db = db::open(app.handle())?;
-            app.manage(AppState::new());
-            app.manage(db);
-            if let Ok(dir) = app.path().app_config_dir() {
-                hub_index::init(dir);
+            let handle = app.handle().clone();
+            if !db::lean_conversion_pending(&handle) {
+                let db = db::open(&handle)?;
+                start_app(&handle, db)?;
+                return Ok(());
             }
+            // The one-time conversion to the lean layout takes a minute on a
+            // big index: a small window says how it's going, then the main
+            // window opens. Nothing reads the database until it's managed.
+            let progress = tauri::WebviewWindowBuilder::new(app, "upgrade", tauri::WebviewUrl::App("upgrade.html".into()))
+                .title("VAM VAR Deduper")
+                .inner_size(520.0, 280.0)
+                .resizable(false)
+                .center()
+                .build()?;
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                let report = |step: &str, fraction: f64| {
+                    let _ = handle.emit_to(
+                        "upgrade",
+                        "db-upgrade",
+                        serde_json::json!({ "step": step, "fraction": fraction, "secs": started.elapsed().as_secs() }),
+                    );
+                };
+                match db::open_with_progress(&handle, &report).and_then(|db| start_app(&handle, db)) {
+                    Ok(()) => {
+                        let _ = progress.close();
+                    }
+                    Err(e) => {
+                        let _ = handle.emit_to("upgrade", "db-upgrade", serde_json::json!({ "error": format!("{e:#}") }));
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
