@@ -135,6 +135,10 @@ const state = {
   vpDetailWidth: 340,
   // The Missing status view: { loading, items, error } from list_missing_dependencies.
   vpMissing: null,
+  // Installed packages with a newer version in your saved sources, and what
+  // the library search finds there that isn't installed.
+  vpSrcUpdates: null,
+  vpSrcSearch: null,
   // Author suggestions: the creators of the scanned folders.
   varPackagesFilterOptions: { creators: [] },
   // Roots+depth signature the creator options above were loaded for, so a
@@ -1576,6 +1580,7 @@ async function getPackages(ids, { onDone = null, replace = false } = {}) {
 function getRefreshViews() {
   getRenderPanel();
   if (libIsMissingView()) libRenderMissing();
+  libRenderSourceStrip();
 }
 
 // ---- The Downloads panel's box ---------------------------------------------------
@@ -2484,6 +2489,11 @@ const LIB_STATUSES = [
   },
   { key: "updates", label: "Updates", title: "A newer version is on the Hub" },
   {
+    key: "source_updates",
+    label: "Newer in your sources",
+    title: "A newer version is in your saved sources (Sources page)",
+  },
+  {
     key: "disabled",
     label: "Disabled",
     title: "VaM won't load them: a .var.disabled marker is beside them",
@@ -2627,8 +2637,14 @@ function libFindItem(filePath) {
   );
 }
 
+// The table views (no cards): Missing, and Newer in your sources.
 function libIsMissingView() {
-  return state.varPackagesFilters?.status === "missing";
+  const status = state.varPackagesFilters?.status;
+  return status === "missing" || status === "source_updates";
+}
+
+function libIsSourceUpdatesView() {
+  return state.varPackagesFilters?.status === "source_updates";
 }
 
 // ---- Thumbnails ------------------------------------------------------------
@@ -3058,6 +3074,8 @@ function renderVarPackages({ appendFrom = null } = {}) {
   const missingView = libIsMissingView();
   const table = state.vpView === "table";
   const items = state.varPackagesItems ?? [];
+  libRenderSourceStrip();
+  if (!state.vpSrcUpdates) libLoadSourceUpdates();
 
   grid.classList.toggle("hidden", missingView || table);
   tableWrap?.classList.toggle("hidden", missingView || !table);
@@ -3123,7 +3141,12 @@ function libRenderToolbar() {
   const count = $("var-packages-count");
   const total = Math.max(0, Number(state.varPackagesTotal ?? 0));
   if (count) {
-    if (libIsMissingView()) {
+    if (libIsSourceUpdatesView()) {
+      const n = state.vpSrcUpdates?.items?.length ?? 0;
+      count.textContent = !state.vpSrcUpdates || state.vpSrcUpdates.loading
+        ? "… newer versions in your sources"
+        : `${pkgCount(n, "package has", "packages have")} a newer version in your sources`;
+    } else if (libIsMissingView()) {
       const n = state.vpMissing?.items?.length ?? 0;
       count.textContent = state.vpMissing?.loading
         ? "… missing dependencies"
@@ -3151,7 +3174,7 @@ function libRenderToolbar() {
   const status = state.varPackagesFilters?.status ?? null;
   if (status === "broken") {
     actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-outline" data-lib-action="view-missing">View Missing Packages</button>`;
-  } else if (status === "missing") {
+  } else if (status === "missing" || status === "source_updates") {
     // Get all (above the list) downloads them: it fills in as sources are found.
     actions.innerHTML = `
       <button type="button" class="lib-icon-btn lib-icon-btn-sm" data-lib-action="refresh-missing" title="Refresh">
@@ -3228,6 +3251,10 @@ function libRenderStatusBar() {
 
 async function libLoadMissing() {
   if (!invoke) return;
+  if (libIsSourceUpdatesView()) {
+    await libLoadSourceUpdates({ force: true });
+    return;
+  }
   state.vpMissing = { ...(state.vpMissing ?? {}), loading: true };
   renderVarPackages();
   try {
@@ -3251,6 +3278,10 @@ function libDepVersionLabel(id) {
 function libRenderMissing() {
   const wrap = $("lib-missing-wrap");
   if (!wrap) return;
+  if (libIsSourceUpdatesView()) {
+    libRenderSourceUpdates();
+    return;
+  }
   const m = state.vpMissing ?? {};
   if (m.loading && !(m.items ?? []).length) {
     wrap.innerHTML = `<div class="lib-empty">Resolving dependencies…</div>`;
@@ -3321,6 +3352,175 @@ function libRenderMissing() {
             <td>${users}${more}</td>
             <td>${pill}</td>
             <td>${libMissingGetHtml(id)}</td>
+          </tr>`;
+        })
+        .join("")}</tbody>
+    </table>`;
+}
+
+// ---- Not installed, in your sources (the search strip) --------------------------
+// A library search also looks in your saved sources: what it finds there that
+// isn't installed is offered above the results, a few hundred at most.
+
+const LIB_SRC_STRIP_MAX = 300;
+
+async function libLoadSourceStrip() {
+  const q = String(state.varPackagesFilter ?? "").trim();
+  // Plain words only: the search's field filters (creator:…) aren't file names.
+  const text = q.includes(":") ? "" : q;
+  const token = (state.vpSrcSearch?.token ?? 0) + 1;
+  state.vpSrcSearch = { token, query: text, rows: [], open: false, loading: Boolean(text) && text.length >= 3 };
+  libRenderSourceStrip();
+  if (!state.vpSrcSearch.loading || !invoke) return;
+  try {
+    await hubLoadLocal();
+    const [rows] = await invoke("search_source_files", { query: text, offset: 0, limit: LIB_SRC_STRIP_MAX });
+    if (state.vpSrcSearch.token !== token) return;
+    state.vpSrcSearch.rows = Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    addLog(`Search in your sources: ${String(e)}`);
+  }
+  if (state.vpSrcSearch.token !== token) return;
+  state.vpSrcSearch.loading = false;
+  libRenderSourceStrip();
+}
+
+// The ids found that you don't have: new packages, or newer versions (older
+// versions of what you have aren't offered).
+function libSourceStripRows() {
+  return (state.vpSrcSearch?.rows ?? [])
+    .map((r) => String(r.filename).replace(/\.var$/i, ""))
+    .filter((id) => ["new", "newer"].includes(getLibraryState(id).kind));
+}
+
+function libRenderSourceStrip() {
+  const host = $("lib-src-strip");
+  if (!host) return;
+  const st = state.vpSrcSearch;
+  const ids = st && !st.loading ? libSourceStripRows() : [];
+  const on = Boolean(st?.query) && !libIsMissingView() && ids.length > 0;
+  host.classList.toggle("hidden", !on);
+  if (!on) {
+    host.innerHTML = "";
+    return;
+  }
+  const byId = new Map((st.rows ?? []).map((r) => [String(r.filename).replace(/\.var$/i, "").toLowerCase(), r]));
+  const more = (st.rows ?? []).length >= LIB_SRC_STRIP_MAX ? "+" : "";
+  const can = ids.filter((id) => !findDownloadJob(id));
+  host.innerHTML = `<div class="lib-src-strip-head">
+      <span class="material-symbols-outlined">download</span>
+      <span><b>${ids.length.toLocaleString()}${more} more in your sources</b> that you don't have</span>
+      ${st.open && can.length > 1 ? `<button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-src-act="get-all"><span class="material-symbols-outlined">download</span>Get all ${can.length}</button>` : ""}
+      <button type="button" class="lib-btn lib-btn-xs lib-btn-outline" data-lib-src-act="toggle">${st.open ? "Hide" : "Show them"}</button>
+    </div>
+    ${
+      st.open
+        ? `<div class="lib-src-strip-list">${ids
+            .map((id) => {
+              const r = byId.get(id.toLowerCase());
+              const hosts = String(r?.hosts || "").split(",").filter(Boolean).map(getHostName).join(" · ");
+              return getRowHtml(
+                id,
+                `<span class="get-src"><span class="material-symbols-outlined">bookmark</span>${escapeHtml(`${hosts}${r?.links > 1 ? ` · ${r.links} links` : ""}`)}</span>`,
+              );
+            })
+            .join("")}</div>`
+        : ""
+    }`;
+}
+
+// ---- Newer in your sources -------------------------------------------------------
+// Installed packages whose saved sources hold a newer version
+// (list_source_updates: one lookup per family, nothing stored). Loaded once
+// per session, again after a rescan or Refresh.
+
+async function libLoadSourceUpdates({ force = false } = {}) {
+  if (!invoke) return;
+  if (state.vpSrcUpdates && !force) return;
+  state.vpSrcUpdates = { ...(state.vpSrcUpdates ?? {}), loading: true };
+  try {
+    await hubLoadLocal(force);
+    const items = await invoke("list_source_updates", { installed: [...HUB.local.ids] });
+    state.vpSrcUpdates = { loading: false, items: Array.isArray(items) ? items : [], error: null };
+  } catch (err) {
+    state.vpSrcUpdates = { loading: false, items: [], error: String(err) };
+    addLog(`Newer in your sources: ${String(err)}`);
+  }
+  renderVarPackagesFilterBar();
+  if (libIsSourceUpdatesView()) renderVarPackages();
+  else libRenderDetail();
+}
+
+// The saved-source update for a package, when its version is older.
+function libSourceUpdate(item) {
+  const id = String(item?.package_id ?? "");
+  const v = getVersionOf(id);
+  if (!id || v == null) return null;
+  const u = (state.vpSrcUpdates?.items ?? []).find((x) => x.base === getBaseOf(id));
+  return u && u.newest > v ? u : null;
+}
+
+function libSourceUpdateId(u) {
+  return String(u.filename).replace(/\.var$/i, "");
+}
+
+function libSourceUpdateGet(item) {
+  const u = libSourceUpdate(item);
+  if (u) getPackages([libSourceUpdateId(u)]);
+}
+
+function libRenderSourceUpdates() {
+  const wrap = $("lib-missing-wrap");
+  if (!wrap) return;
+  const st = state.vpSrcUpdates;
+  if (!st || st.loading) {
+    wrap.innerHTML = `<div class="lib-empty">Looking in your saved sources…</div>`;
+    if (!st) libLoadSourceUpdates();
+    return;
+  }
+  if (st.error) {
+    wrap.innerHTML = `<div class="lib-empty">Couldn't look<span class="lib-empty-sub">${escapeHtml(st.error)}</span></div>`;
+    return;
+  }
+  const rows = st.items ?? [];
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="lib-empty">Nothing newer<span class="lib-empty-sub">No saved source has a newer version of a package you have.</span></div>`;
+    return;
+  }
+  const ids = rows.map(libSourceUpdateId);
+  const gettable = ids.filter((id) => !findDownloadJob(id) && getLibraryState(id).kind !== "have");
+  wrap.innerHTML = `<div class="lib-missing-bar">
+      <span>${pkgCount(rows.length, "package has", "packages have")} a newer version in your saved sources. Get downloads it into AddonPackages; the version you have stays until you remove it.</span>
+      ${
+        gettable.length
+          ? `<button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-get-updates>
+               <span class="material-symbols-outlined">upgrade</span>Get all ${gettable.length}</button>`
+          : ""
+      }
+    </div>
+    <table class="lib-table lib-missing-table">
+      <thead><tr>
+        <th style="width:34%">Package</th><th style="width:16%">Author</th>
+        <th style="width:12%">You have</th><th style="width:12%">In your sources</th><th>Download</th>
+      </tr></thead>
+      <tbody>${rows
+        .map((u) => {
+          const id = libSourceUpdateId(u);
+          const name = id.replace(/\.\d+$/, "");
+          const job = findDownloadJob(id);
+          const cell =
+            getLibraryState(id).kind === "have"
+              ? `<span class="get-src is-hub"><span class="material-symbols-outlined">check_circle</span>Downloaded</span>`
+              : job
+                ? `<span class="get-queued">${job.status === "downloading" ? "Downloading…" : "Queued"}</span>`
+                : `<div class="lib-missing-get"><span class="get-src"><span class="material-symbols-outlined">bookmark</span>${escapeHtml(getHostName(u.host))}</span>
+                     <button type="button" class="lib-small-link" data-get-id="${escapeAttribute(id)}" title="Download v${u.newest} into AddonPackages (from the Hub when it has it, else your saved source)"><span class="material-symbols-outlined">upgrade</span>Get v${u.newest}</button></div>`;
+          return `<tr>
+            <td title="${escapeAttribute(id)}"><span class="lib-pkg-name">${escapeHtml(name)}</span></td>
+            <td>${escapeHtml(deriveCreatorFromPackageId(id) ?? "—")}</td>
+            <td class="lib-mono">v${u.have}</td>
+            <td class="lib-mono">v${u.newest}</td>
+            <td>${cell}</td>
           </tr>`;
         })
         .join("")}</tbody>
@@ -3739,6 +3939,13 @@ function libDetailHeaderHtml(item, details) {
                 <span class="material-symbols-outlined">upgrade</span>Update to v${item.hub_update_version}</button>`
             : ""
         }
+        ${(() => {
+          // A newer version in your saved sources (when the Hub's isn't as new).
+          const u = libSourceUpdate(item);
+          if (!u || Number(item.hub_update_version ?? 0) >= u.newest) return "";
+          return `<button type="button" class="lib-btn lib-btn-gradient lib-btn-full" data-lib-action="source-update" title="Download ${escapeAttribute(u.filename)} into AddonPackages; this version stays until you remove it">
+              <span class="material-symbols-outlined">upgrade</span>Update from sources to v${u.newest}</button>`;
+        })()}
         ${libOffloadButtonHtml(item, { big: true })}
         <button type="button" class="lib-btn lib-btn-accent lib-btn-full" data-lib-action="open-details" title="Its pictures, content, dependencies and files">
           <span class="material-symbols-outlined">space_dashboard</span>Open details
@@ -4041,6 +4248,7 @@ async function refreshVarPackagesFromFolder({
         );
       }
       if (libIsMissingView() || forceRescan) state.vpMissing = null;
+      if (forceRescan) state.vpSrcUpdates = null;
       if (libIsMissingView()) libLoadMissing();
     }
     applyVarPackagesDepthUi();
@@ -5897,6 +6105,10 @@ function pkgHealth(item, details) {
   if (offDeps) add("warn", "archive", `${pkgCount(offDeps, "dependency is", "dependencies are")} offloaded; restore ${offDeps === 1 ? "it" : "them"} so this works in VaM.`, "restore-deps");
   if (lib && item.on_hub === false) add("warn", "cloud_off", "Not on the Hub: once deleted, only a saved source (Sources page) can bring it back. Keep a backup.");
   if (item.hub_update_version) add("info", "upgrade", `Version ${item.hub_update_version} is on the Hub.`, "hub-update");
+  const srcUpdate = lib ? libSourceUpdate(item) : null;
+  if (srcUpdate && Number(item.hub_update_version ?? 0) < srcUpdate.newest) {
+    add("info", "upgrade", `Version ${srcUpdate.newest} is in your saved sources.`, "source-update");
+  }
   if (lib && item.newer_version) add("info", "history", "A newer version is in your library.");
   if (other) add("info", "swap_horiz", `${pkgCount(other, "dependency is", "dependencies are")} a different version than it asks for.`);
   if (lib && item.orphan) add("info", "link_off", "Orphan: it came in as a dependency and nothing uses it now.");
@@ -5925,6 +6137,7 @@ function pkgFixButton(act, item, details) {
       enable: ["power_settings_new", "Enable", "Let VaM load it again"],
       "restore-deps": ["unarchive", "Restore dependencies", "Move its offloaded dependencies back into AddonPackages"],
       "hub-update": ["upgrade", `Update to v${item.hub_update_version}`, "Download the new version; this one stays until you remove it"],
+      "source-update": ["upgrade", `Update to v${libSourceUpdate(item)?.newest ?? ""}`, "Download it from your saved sources into AddonPackages; this one stays until you remove it"],
       download: ["download", PKG.avail?.size ? `Download · ${formatBytesLocal(PKG.avail.size)}` : "Download", `Download it from ${pkgHostLabel(PKG.avail?.host) || "its source"}`],
       "add-source": ["add_link", "Add a download link", "Save a link where it can be downloaded"],
       "open-downloads": ["download", "Open Downloads", "See the download's progress"],
@@ -8261,6 +8474,9 @@ function pkgRunAction(act, event) {
       break;
     case "hub-update":
       libHubUpdate([item]);
+      break;
+    case "source-update":
+      libSourceUpdateGet(item);
       break;
     case "redownload":
       libRedownload([item]);
@@ -18561,6 +18777,9 @@ function libRunAction(action, trigger) {
     case "hub-update":
       if (item) libHubUpdate([item]);
       break;
+    case "source-update":
+      if (item) libSourceUpdateGet(item);
+      break;
     case "verify":
       if (item) libVerify([item], { recheck: true });
       break;
@@ -18746,6 +18965,9 @@ function libContextMenu(event, item) {
         ...(item.damaged || !item.readable
           ? [{ label: "Redownload", action: () => libRedownload([item]) }]
           : []),
+        ...(libSourceUpdate(item) && Number(item.hub_update_version ?? 0) < libSourceUpdate(item).newest
+          ? [{ label: `Update from sources to v${libSourceUpdate(item).newest}`, action: () => libSourceUpdateGet(item) }]
+          : []),
         ...(item.hub_update_version
           ? [{ label: `Update to v${item.hub_update_version}`, action: () => libHubUpdate([item]) }]
           : []),
@@ -18836,6 +19058,24 @@ function libHandleSharedClick(event) {
   if (target.closest?.("[data-lib-get-missing]")) {
     event.stopPropagation();
     getPackages(libMissingGettable(state.vpMissing?.items ?? []));
+    return true;
+  }
+  if (target.closest?.("[data-lib-get-updates]")) {
+    event.stopPropagation();
+    const ids = (state.vpSrcUpdates?.items ?? []).map(libSourceUpdateId);
+    getPackages(ids.filter((id) => !findDownloadJob(id) && getLibraryState(id).kind !== "have"));
+    return true;
+  }
+  const strip = target.closest?.("[data-lib-src-act]");
+  if (strip) {
+    event.stopPropagation();
+    const act = strip.getAttribute("data-lib-src-act");
+    if (act === "toggle") {
+      state.vpSrcSearch.open = !state.vpSrcSearch.open;
+      libRenderSourceStrip();
+    } else if (act === "get-all") {
+      getPackages(libSourceStripRows().filter((id) => !findDownloadJob(id)));
+    }
     return true;
   }
   const offload = target.closest?.("[data-lib-offload]");
@@ -19345,6 +19585,7 @@ function setupLibraryView() {
       state.varPackagesFilter = next;
       renderVarPackagesFilterBar();
       refreshVarPackagesFromFolder({ forceRescan: false });
+      libLoadSourceStrip();
     }, 180);
   });
   search?.addEventListener("keydown", (event) => {
@@ -22731,7 +22972,7 @@ function setupImageZoom() {
 function serializeVarPackageFilters(filters) {
   if (!filters) return null;
   const payload = {};
-  if (filters.status && filters.status !== "missing") payload.status = filters.status;
+  if (filters.status && filters.status !== "missing" && filters.status !== "source_updates") payload.status = filters.status;
   if (filters.pkgType) payload.pkgType = filters.pkgType;
   if (filters.location) payload.location = filters.location;
   if (filters.sizeBucket) payload.sizeBucket = filters.sizeBucket;
@@ -22780,7 +23021,7 @@ function setVarPackagesFilter(field, value) {
   const wasMissing = libIsMissingView();
   state.varPackagesFilters[field] = next;
   renderVarPackagesFilterBar();
-  if (field === "status" && next === "missing") {
+  if (field === "status" && libIsMissingView()) {
     renderVarPackages();
     libLoadMissing();
     return;
@@ -22885,7 +23126,12 @@ function renderVarPackagesFilterBar() {
         title: s.title,
         indent: s.indent,
         selected: (f.status ?? null) === s.key,
-        count: facets ? facets.statuses?.[s.count ?? s.key] : null,
+        count:
+          s.key === "source_updates"
+            ? state.vpSrcUpdates?.items?.length ?? null
+            : facets
+              ? facets.statuses?.[s.count ?? s.key]
+              : null,
       }),
     ).join("");
   }
