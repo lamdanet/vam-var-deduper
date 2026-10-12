@@ -1581,6 +1581,7 @@ function getRefreshViews() {
   getRenderPanel();
   if (libIsMissingView()) libRenderMissing();
   libRenderSourceStrip();
+  if (PKG.item && PKG.details && $("pkg-view") && !$("pkg-view").classList.contains("hidden")) pkgRenderDeps();
 }
 
 // ---- The Downloads panel's box ---------------------------------------------------
@@ -1642,7 +1643,7 @@ function getRowHtml(id, sourceHtml, { noSource = false } = {}) {
       ? ""
       : `<button type="button" class="ghost-button dl-mini get-btn" data-get-id="${escapeAttribute(id)}" title="Download it into AddonPackages (its dependencies aren't downloaded)"><span class="material-symbols-outlined">download</span>Get</button>`;
   return `<div class="get-row">
-      <span class="get-row-text"><b title="${escapeAttribute(id)}">${escapeHtml(id)}</b>${sourceHtml}</span>
+      <span class="get-row-text"><button type="button" class="get-name" data-get-open="${escapeAttribute(id)}" title="Open ${escapeAttribute(id)} in Package Explorer">${escapeHtml(id)}</button>${sourceHtml}</span>
       ${getLibraryChip(id)}
       ${btn}
     </div>`;
@@ -1720,6 +1721,11 @@ function setupGetPackage() {
     }
   });
   $("get-results")?.addEventListener("click", (e) => {
+    const open = e.target.closest?.("[data-get-open]");
+    if (open) {
+      closeDownloadsPanel();
+      return void pkgOpen({ package_id: open.getAttribute("data-get-open") });
+    }
     const one = e.target.closest?.("[data-get-id]");
     if (one) return void getPackages([one.getAttribute("data-get-id")]);
     if (e.target.closest?.("[data-get-all]")) {
@@ -5518,15 +5524,12 @@ async function pkgResolveSource(token) {
   pkgRenderHero();
 }
 
-// Download into the folder the database last saw it in, else the downloads
-// folder; open it here once it lands.
+// Into AddonPackages, on its own (as every Get): open it here once it lands.
 async function pkgDownload() {
   const item = PKG.item;
   const a = PKG.avail ?? {};
   if (!item || !a.url) return;
-  const fp = String(item.file_path || "");
-  const cut = Math.max(fp.lastIndexOf("\\"), fp.lastIndexOf("/"));
-  const destDir = (cut > 0 ? fp.slice(0, cut) : "") || (await ensureDownloadsDir());
+  const destDir = vamAddonPackagesDir() || (await ensureDownloadsDir());
   if (!destDir) return;
   const token = PKG.token;
   PKG.avail = { ...a, state: "downloading" };
@@ -5538,8 +5541,9 @@ async function pkgDownload() {
     host: a.host,
     destDir,
     label: a.filename,
-    autoDeps: true,
+    autoDeps: false,
     onDone: (status, info) => {
+      if (status === "done" || status === "exists") hubLocalAdd(String(a.filename || "").replace(/\.var$/i, ""));
       if (token !== PKG.token) return;
       if (status === "done" || status === "exists") {
         const p = info?.localPath;
@@ -6833,8 +6837,21 @@ function pkgRenderDeps() {
     counts[label] = counts[label] ?? { n: 0, color: pkgDepColor(dep) };
     counts[label].n += 1;
   }
-  const missing = deps.filter((x) => x.status === "missing" || x.status === "indexed").length;
+  const missingIds = deps.filter((x) => x.status === "missing" || x.status === "indexed").map((x) => x.id);
+  const missing = missingIds.length;
   const offloaded = deps.filter((x) => x.offloaded && x.file_path && (x.status === "found" || x.status === "other_version")).length;
+  // Where each missing one can be downloaded from: asked once, then drawn again.
+  const pending = missingIds.filter((id) => !GET.cache.has(id.toLowerCase()));
+  if (pending.length && PKG.depResolving !== PKG.token) {
+    const token = PKG.token;
+    PKG.depResolving = token;
+    getResolve(pending)
+      .catch((e) => addLog(`Package Explorer: ${String(e)}`))
+      .finally(() => {
+        if (token === PKG.token) pkgRenderDeps();
+      });
+  }
+  const gettable = pkgDepsGettable(missingIds);
   if (tools) {
     const filter = PKG.depFilter;
     tools.innerHTML = [
@@ -6859,7 +6876,11 @@ function pkgRenderDeps() {
              <input id="pkg-dep-search" type="text" placeholder="Find a package" spellcheck="false" value="${escapeAttribute(PKG.depQuery ?? "")}" /></div>`
         : "",
       offloaded ? `<button type="button" class="pkg-mini-btn" data-pkg-act="restore-deps"><span class="material-symbols-outlined">unarchive</span>Restore ${offloaded}</button>` : "",
-      missing ? `<button type="button" class="pkg-mini-btn is-warn" data-pkg-act="find-deps"><span class="material-symbols-outlined">travel_explore</span>Find ${missing} missing</button>` : "",
+      gettable.length
+        ? `<button type="button" class="pkg-mini-btn is-warn" data-pkg-get-deps title="Download the missing ones that have a source into AddonPackages (not their own dependencies)"><span class="material-symbols-outlined">download</span>Get ${gettable.length} missing</button>`
+        : missing && pending.length
+          ? `<span class="pkg-mini-note">Looking for ${pending.length} missing…</span>`
+          : "",
       deps.length ? `<button type="button" class="pkg-mini-btn" data-pkg-act="scan-deps"><span class="material-symbols-outlined">account_tree</span>Scan…</button>` : "",
     ].join("");
     $("pkg-dep-search")?.addEventListener("input", (e) => {
@@ -6868,6 +6889,12 @@ function pkgRenderDeps() {
     });
   }
   pkgRenderDepGraph();
+}
+
+// The missing dependencies a Get would download: a source found, not queued,
+// not downloaded since.
+function pkgDepsGettable(ids) {
+  return ids.filter((id) => GET.cache.get(id.toLowerCase())?.download_url && !findDownloadJob(id) && getLibraryState(id).kind !== "have");
 }
 
 const PKG_DEP_VIEW_STORE = "pkg.depView";
@@ -6895,8 +6922,22 @@ function pkgDepRowHtml(id, { sub = "", color, mark = "", status = "", open = "",
       <span class="pkg-dep-name"><b>${escapeHtml(p.name)}</b><small>${escapeHtml([p.creator, p.ver].filter(Boolean).join(" · "))}${escapeHtml(sub)}</small></span>
       ${status ? `<span class="pkg-dep-status">${escapeHtml(status)}</span>` : ""}
       <span class="pkg-dep-size">${size ? escapeHtml(formatBytesLocal(Number(size))) : ""}</span>
-      ${missing ? `<span class="material-symbols-outlined pkg-dep-act" title="Add a download link">add_link</span>` : open ? `<span class="material-symbols-outlined pkg-dep-act">chevron_right</span>` : ""}
+      ${missing ? pkgDepGetHtml(missing) : open ? `<span class="material-symbols-outlined pkg-dep-act">chevron_right</span>` : ""}
     </div>`;
+}
+
+// A missing dependency's end of the row: Get when it has a source, else the
+// row opens it (where a link can be added).
+function pkgDepGetHtml(id) {
+  const info = GET.cache.get(id.toLowerCase());
+  const job = findDownloadJob(id);
+  if (getLibraryState(id).kind === "have") return `<span class="pkg-dep-get is-done" title="Downloaded">Downloaded</span>`;
+  if (job) return `<span class="pkg-dep-get">${job.status === "downloading" ? "Downloading…" : "Queued"}</span>`;
+  if (info?.download_url) {
+    const from = info.host === "hub" ? "the Hub" : `your sources (${getHostName(info.host)})`;
+    return `<button type="button" class="fm-icon-btn pkg-dep-get-btn" data-get-id="${escapeAttribute(id)}" title="Get it: download it from ${escapeAttribute(from)} into AddonPackages" aria-label="Get ${escapeAttribute(id)}"><span class="material-symbols-outlined">download</span></button>`;
+  }
+  return `<span class="material-symbols-outlined pkg-dep-act" title="${info ? "No source: open it to add a download link" : "Looking for a source…"}">${info ? "add_link" : "more_horiz"}</span>`;
 }
 
 function pkgDepListHtml(deps, users) {
@@ -6964,7 +7005,7 @@ function pkgRenderDepGraph() {
       }
       ${
         depsBytes
-          ? `<p class="pkg-muted pkg-graph-foot">Its dependencies take ${escapeHtml(formatBytesLocal(depsBytes))}. Click a package to explore it; a missing one to add a download link.</p>`
+          ? `<p class="pkg-muted pkg-graph-foot">Its dependencies take ${escapeHtml(formatBytesLocal(depsBytes))}. Click a package to explore it, a missing one too (to download it or add a link); the download icon gets it straight away.</p>`
           : ""
       }
     </div>`;
@@ -8573,9 +8614,19 @@ function pkgOnClick(event) {
     pkgRenderShared();
     return;
   }
+  const getOne = t.closest?.("[data-get-id]");
+  if (getOne) {
+    getPackages([getOne.getAttribute("data-get-id")]);
+    return;
+  }
+  if (t.closest?.("[data-pkg-get-deps]")) {
+    const deps = PKG.details?.dependencies ?? [];
+    getPackages(pkgDepsGettable(deps.filter((x) => x.status === "missing" || x.status === "indexed").map((x) => x.id)));
+    return;
+  }
   const missing = t.closest?.("[data-pkg-missing]");
   if (missing) {
-    sourceOpen({ packageId: missing.getAttribute("data-pkg-missing") });
+    pkgOpen({ package_id: missing.getAttribute("data-pkg-missing") });
     return;
   }
   const cover = t.closest?.("[data-pkg-cover]");
@@ -19053,6 +19104,12 @@ function libHandleSharedClick(event) {
   if (getOne) {
     event.stopPropagation();
     getPackages([getOne.getAttribute("data-get-id")]);
+    return true;
+  }
+  const getOpen = target.closest?.("[data-get-open]");
+  if (getOpen) {
+    event.stopPropagation();
+    pkgOpen({ package_id: getOpen.getAttribute("data-get-open") });
     return true;
   }
   if (target.closest?.("[data-lib-get-missing]")) {
