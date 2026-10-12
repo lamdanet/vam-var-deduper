@@ -142,9 +142,7 @@ where
         let mut pkg_stmt = tx
             .prepare(db::MANIFEST_PACKAGE_INSERT_SQL)
             .context("failed to prepare manifest package insert")?;
-        let mut res_stmt = tx
-            .prepare(db::MANIFEST_RESOURCE_INSERT_SQL)
-            .context("failed to prepare manifest resource insert")?;
+        let mut res_stmt = db::ResourceWriter::insert_or_ignore(&tx)?;
 
         // Reused line buffer — avoids 1 allocation per line vs `reader.lines()`.
         let mut line_buf = String::with_capacity(256);

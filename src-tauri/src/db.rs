@@ -17,7 +17,7 @@ use crate::{
 };
 
 const DB_FILE_NAME: &str = "vam_var_deduper.db";
-pub(crate) const SCHEMA_VERSION: i32 = 21;
+pub(crate) const SCHEMA_VERSION: i32 = 22;
 
 /// Number of additional read-only connections opened against the same file.
 /// WAL lets these run concurrently with the single writer and with each
@@ -91,6 +91,7 @@ impl ReadPool {
         self.inner.lock().map(|g| g.capacity == 0).unwrap_or(true)
     }
 
+    #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         self.inner.lock().map(|g| g.capacity).unwrap_or(0)
     }
@@ -157,10 +158,21 @@ impl<'a> Deref for ReadHandle<'a> {
     }
 }
 
+/// What the one-time lean conversion reports: a step and its share of the
+/// whole (0..1).
+pub(crate) type Progress<'a> = &'a dyn Fn(&str, f64);
+
+fn no_progress(_: &str, _: f64) {}
+
 impl Db {
-    fn migrate_writer(mut conn: Connection) -> Result<Connection> {
+    #[cfg(test)]
+    fn migrate_writer(conn: Connection) -> Result<Connection> {
+        Self::migrate_writer_with(conn, &no_progress)
+    }
+
+    fn migrate_writer_with(mut conn: Connection, progress: Progress) -> Result<Connection> {
         apply_pragmas(&conn)?;
-        migrate(&mut conn)?;
+        migrate(&mut conn, progress)?;
         // Re-run the seed step on every open so new categories added to
         // SEEDED_CATEGORIES land in DBs that already have v4 applied. Cheap
         // (one INSERT OR IGNORE per name) and idempotent.
@@ -190,6 +202,7 @@ impl Db {
 
     /// How many read-only queries can run at once: the read connections (the
     /// writer alone when there are none, as for in-memory databases).
+    #[cfg(test)]
     pub(crate) fn read_parallelism(&self) -> usize {
         self.readers.capacity().max(1)
     }
@@ -211,6 +224,10 @@ impl Db {
 }
 
 fn db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
+    // For testing a build on a copy of a database: VVD_DB_PATH names the file.
+    if let Some(path) = std::env::var_os("VVD_DB_PATH").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
     let dir = app
         .path()
         .app_data_dir()
@@ -220,23 +237,85 @@ fn db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
 }
 
 pub(crate) fn open(app: &tauri::AppHandle) -> Result<Db> {
+    open_with_progress(app, &no_progress)
+}
+
+/// Whether opening the database will run the one-time lean conversion (v22)
+/// on an index big enough to take a while — the app then shows its progress
+/// in a window of its own before the main one opens.
+pub(crate) fn lean_conversion_pending(app: &tauri::AppHandle) -> bool {
+    let Ok(path) = db_path(app) else { return false };
+    let big = fs::metadata(&path).map(|m| m.len() > 64 * 1024 * 1024).unwrap_or(false);
+    big && Connection::open(&path).map(|c| lean_conversion_needed(&c)).unwrap_or(false)
+}
+
+/// An old layout with its `resources` table still to convert.
+fn lean_conversion_needed(conn: &Connection) -> bool {
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
+    let table: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'resources'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    version < 22 && table
+}
+
+pub(crate) fn open_with_progress(app: &tauri::AppHandle, progress: Progress) -> Result<Db> {
     let path = db_path(app)?;
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open SQLite database at {}", path.display()))?;
+    let lean = lean_conversion_needed(&conn);
+    if lean {
+        backup_before_lean(&conn, &path, progress)?;
+    }
     // Migrate on the writer FIRST so the schema (incl. WAL mode) is committed
     // before any reader connects. Then open the read pool against the same
     // file — its connections inherit the migrated schema via SQLite's
     // standard cross-connection visibility under WAL.
-    let conn = Db::migrate_writer(conn)?;
+    let conn = Db::migrate_writer_with(conn, progress)?;
+    if lean {
+        // The old layout's pages are free now: give them back to the disk.
+        progress("Compacting the file", 0.9);
+        conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+            .context("failed to compact the database after the lean conversion")?;
+    }
     let readers = ReadPool::open_from_path(&path, READ_POOL_SIZE)?;
     Db::finalize(conn, readers)
+}
+
+/// Copies the database file aside before the lean conversion, never over an
+/// earlier copy: `vam_var_deduper.before-lean.db` (then `.2`, `.3`…).
+fn backup_before_lean(conn: &Connection, path: &Path, progress: Progress) -> Result<()> {
+    progress("Backing up your database", 0.02);
+    // Everything in the main file first, so the copy is complete on its own.
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA wal_checkpoint(TRUNCATE);")
+        .context("failed to checkpoint before the backup")?;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut target = dir.join("vam_var_deduper.before-lean.db");
+    let mut n = 2;
+    while target.exists() {
+        target = dir.join(format!("vam_var_deduper.before-lean.{n}.db"));
+        n += 1;
+    }
+    fs::copy(path, &target)
+        .with_context(|| format!("failed to back up the database to {}", target.display()))?;
+    Ok(())
 }
 
 /// A database file with its read connections, as the app opens one.
 #[cfg(test)]
 pub(crate) fn open_file(path: &Path) -> Result<Db> {
     let conn = Connection::open(path)?;
+    let lean = lean_conversion_needed(&conn);
+    if lean {
+        backup_before_lean(&conn, path, &no_progress)?;
+    }
     let conn = Db::migrate_writer(conn)?;
+    if lean {
+        conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+    }
     let readers = ReadPool::open_from_path(path, READ_POOL_SIZE)?;
     Db::finalize(conn, readers)
 }
@@ -278,7 +357,7 @@ fn apply_pragmas(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn migrate(conn: &mut Connection) -> Result<()> {
+fn migrate(conn: &mut Connection, progress: Progress) -> Result<()> {
     let current: i32 =
         conn.query_row("PRAGMA user_version", [], |row| row.get(0))
             .context("failed to read schema version")?;
@@ -748,12 +827,239 @@ fn migrate(conn: &mut Connection) -> Result<()> {
         .context("failed to create replacement_prefs")?;
     }
 
+    if current < 22 {
+        migrate_v22_lean(conn, progress)?;
+    }
+
     if current != SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("failed to set schema version")?;
     }
 
     Ok(())
+}
+
+/// A path's folder part, as SQL: everything up to and including the last
+/// `/` ("" when there is none). The file name is what follows it.
+const DIR_OF_PATH_SQL: &str = "rtrim(internal_path, replace(internal_path, '/', ''))";
+
+/// v22, the lean layout. Each of the millions of resource rows repeated its
+/// package id (~25 bytes) and its whole path (~65 bytes), twice more in the
+/// indexes. Now a package is a number (`packages.pkg`) and each folder is
+/// stored once (`dirs`); a row keeps its file name, and `effective_size`
+/// only where it differs from `size`. Nothing is lost: the `resources` view
+/// gives back the old columns, row for row (1.9 GB → about 0.55 GB on a
+/// 4.4-million-row index).
+///
+/// One transaction: if it fails, the old layout is left as it was.
+fn migrate_v22_lean(conn: &mut Connection, progress: Progress) -> Result<()> {
+    // Old and new tables point at each other while both exist.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .context("failed to pause foreign keys for v22")?;
+    let result = (|| -> Result<()> {
+        let tx = conn.transaction().context("failed to start v22 tx")?;
+        progress("Converting packages", 0.1);
+        tx.execute_batch(
+            "CREATE TABLE packages_lean (
+                pkg               INTEGER PRIMARY KEY,
+                package_id        TEXT NOT NULL UNIQUE,
+                file_path         TEXT NOT NULL UNIQUE,
+                size_bytes        INTEGER NOT NULL,
+                modified_ns       TEXT NOT NULL,
+                scene_image_path  TEXT,
+                last_scanned_at   INTEGER NOT NULL,
+                creator_id        INTEGER REFERENCES creators(creator_id)
+            );
+            INSERT INTO packages_lean
+                (package_id, file_path, size_bytes, modified_ns, scene_image_path, last_scanned_at, creator_id)
+              SELECT package_id, file_path, size_bytes, modified_ns, scene_image_path, last_scanned_at, creator_id
+              FROM packages ORDER BY rowid;
+            -- Rows of a package the packages table lost (foreign keys were
+            -- off at some point) keep a placeholder package, as a manifest
+            -- import makes, instead of being dropped.
+            INSERT OR IGNORE INTO packages_lean
+                (package_id, file_path, size_bytes, modified_ns, scene_image_path, last_scanned_at, creator_id)
+              SELECT DISTINCT r.package_id, 'manifest:' || r.package_id, 0, '0', NULL, 0, NULL
+              FROM resources r WHERE r.package_id NOT IN (SELECT package_id FROM packages);",
+        )
+        .context("failed to convert packages for v22")?;
+        progress("Collecting folders", 0.2);
+        tx.execute_batch(&format!(
+            "CREATE TABLE dirs (
+                dir_id INTEGER PRIMARY KEY,
+                path   TEXT NOT NULL UNIQUE
+            );
+            INSERT INTO dirs (path) SELECT DISTINCT {DIR_OF_PATH_SQL} FROM resources;"
+        ))
+        .context("failed to collect folders for v22")?;
+        progress("Converting the files in packages", 0.35);
+        tx.execute_batch(&format!(
+            "CREATE TABLE res_rows (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                pkg            INTEGER NOT NULL REFERENCES packages_lean(pkg) ON DELETE CASCADE,
+                dir            INTEGER NOT NULL REFERENCES dirs(dir_id),
+                name           TEXT NOT NULL,
+                size           INTEGER NOT NULL,
+                effective_size INTEGER,
+                crc32          INTEGER,
+                category_id    INTEGER REFERENCES categories(category_id)
+            );
+            INSERT INTO res_rows (id, pkg, dir, name, size, effective_size, crc32, category_id)
+              SELECT r.id, p.pkg, d.dir_id, substr(r.internal_path, length(d.path) + 1),
+                     r.size, NULLIF(r.effective_size, r.size), r.crc32, r.category_id
+              FROM resources r
+              JOIN packages_lean p ON p.package_id = r.package_id
+              JOIN dirs d ON d.path = {dir_of_r}
+              ORDER BY r.id;
+            -- New rows go on numbering after the old ones, as before
+            -- (inserting the ids made the row; it may lag the old counter).
+            UPDATE sqlite_sequence
+               SET seq = MAX(seq, COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'resources'), 0))
+             WHERE name = 'res_rows';",
+            dir_of_r = DIR_OF_PATH_SQL.replace("internal_path", "r.internal_path"),
+        ))
+        .context("failed to convert resources for v22")?;
+        let (old, new): (i64, i64) = tx.query_row(
+            "SELECT (SELECT COUNT(*) FROM resources), (SELECT COUNT(*) FROM res_rows)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if old != new {
+            return Err(anyhow!("v22 kept {new} of {old} resource rows; nothing was changed"));
+        }
+        progress("Building the indexes", 0.6);
+        tx.execute_batch(
+            "DROP TABLE resources;
+             DROP TABLE packages;
+             ALTER TABLE packages_lean RENAME TO packages;
+             DELETE FROM sqlite_sequence WHERE name = 'resources';
+             CREATE INDEX idx_packages_creator  ON packages(creator_id);
+             CREATE INDEX idx_packages_id_lower ON packages(lower(package_id));
+             CREATE UNIQUE INDEX uq_res_rows_pkg_dir_name ON res_rows(pkg, dir, name);
+             CREATE INDEX idx_resources_crc32    ON res_rows(crc32);
+             CREATE INDEX idx_resources_category ON res_rows(category_id);
+             CREATE INDEX idx_res_rows_dir       ON res_rows(dir);",
+        )
+        .context("failed to build the v22 indexes")?;
+        tx.execute_batch(RESOURCES_VIEW_SQL).context("failed to create the v22 resources view")?;
+        tx.commit().context("failed to commit v22 migration")?;
+        Ok(())
+    })();
+    let restore = conn.execute_batch("PRAGMA foreign_keys = ON;");
+    result?;
+    restore.context("failed to turn foreign keys back on after v22")?;
+    Ok(())
+}
+
+/// The old `resources` columns, for reads (and plain inserts, as the tests
+/// write rows): one row per file in a package, joined back from the lean
+/// layout. `pkg`, `dir` and `name` are there too, so a query can use their
+/// indexes. Upserts and bulk writes go to `res_rows` (`ResourceWriter`).
+const RESOURCES_VIEW_SQL: &str = "
+    CREATE VIEW resources AS
+      SELECT r.id AS id, p.package_id AS package_id, d.path || r.name AS internal_path,
+             r.size AS size, COALESCE(r.effective_size, r.size) AS effective_size,
+             r.crc32 AS crc32, r.category_id AS category_id,
+             r.pkg AS pkg, r.dir AS dir, r.name AS name
+      FROM res_rows r
+      JOIN packages p ON p.pkg = r.pkg
+      JOIN dirs d ON d.dir_id = r.dir;
+    CREATE TRIGGER resources_insert INSTEAD OF INSERT ON resources
+    BEGIN
+      INSERT OR IGNORE INTO dirs (path)
+        VALUES (rtrim(NEW.internal_path, replace(NEW.internal_path, '/', '')));
+      INSERT INTO res_rows (id, pkg, dir, name, size, effective_size, crc32, category_id)
+        VALUES (
+          NEW.id,
+          (SELECT pkg FROM packages WHERE package_id = NEW.package_id),
+          (SELECT dir_id FROM dirs WHERE path = rtrim(NEW.internal_path, replace(NEW.internal_path, '/', ''))),
+          substr(NEW.internal_path, length(rtrim(NEW.internal_path, replace(NEW.internal_path, '/', ''))) + 1),
+          NEW.size, NULLIF(NEW.effective_size, NEW.size), NEW.crc32, NEW.category_id);
+    END;";
+
+/// A path split as the lean layout stores it: its folder (up to and
+/// including the last `/`, "" when there is none) and its file name.
+pub(crate) fn split_internal_path(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(i) => (&path[..=i], &path[i + 1..]),
+        None => ("", path),
+    }
+}
+
+/// Writes resource rows into the lean layout: the package and the folder are
+/// looked up (a folder added when new) and kept for the next row, as a scan
+/// or an import writes many rows of one package and folder in a row.
+pub(crate) struct ResourceWriter<'c> {
+    conn: &'c Connection,
+    row: rusqlite::Statement<'c>,
+    pkg: Option<(String, i64)>,
+    dirs: HashMap<String, i64>,
+}
+
+impl<'c> ResourceWriter<'c> {
+    /// Adds a row, or updates the one for the same package and path.
+    pub(crate) fn upsert(conn: &'c Connection) -> Result<Self> {
+        Self::with_sql(conn, RESOURCE_UPSERT_SQL)
+    }
+
+    /// Adds a row unless the package already has the path (manifest import).
+    pub(crate) fn insert_or_ignore(conn: &'c Connection) -> Result<Self> {
+        Self::with_sql(conn, MANIFEST_RESOURCE_INSERT_SQL)
+    }
+
+    fn with_sql(conn: &'c Connection, sql: &str) -> Result<Self> {
+        let row = conn.prepare(sql).context("failed to prepare the resource write")?;
+        Ok(Self { conn, row, pkg: None, dirs: HashMap::new() })
+    }
+
+    fn pkg_of(&mut self, package_id: &str) -> Result<i64> {
+        if let Some((id, pkg)) = &self.pkg {
+            if id == package_id {
+                return Ok(*pkg);
+            }
+        }
+        let pkg: i64 = self
+            .conn
+            .prepare_cached("SELECT pkg FROM packages WHERE package_id = ?1")?
+            .query_row(params![package_id], |r| r.get(0))
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => anyhow!("package {package_id} isn't in the database"),
+                other => other.into(),
+            })?;
+        self.pkg = Some((package_id.to_string(), pkg));
+        Ok(pkg)
+    }
+
+    fn dir_of(&mut self, dir: &str) -> Result<i64> {
+        if let Some(id) = self.dirs.get(dir) {
+            return Ok(*id);
+        }
+        self.conn
+            .prepare_cached("INSERT OR IGNORE INTO dirs (path) VALUES (?1)")?
+            .execute(params![dir])?;
+        let id: i64 = self
+            .conn
+            .prepare_cached("SELECT dir_id FROM dirs WHERE path = ?1")?
+            .query_row(params![dir], |r| r.get(0))?;
+        self.dirs.insert(dir.to_string(), id);
+        Ok(id)
+    }
+
+    /// Writes one row; returns how many rows changed (0 when ignored).
+    pub(crate) fn write(
+        &mut self,
+        package_id: &str,
+        internal_path: &str,
+        crc32: Option<i64>,
+        size: i64,
+        effective_size: i64,
+        category_id: Option<i64>,
+    ) -> Result<usize> {
+        let pkg = self.pkg_of(package_id)?;
+        let (dir, name) = split_internal_path(internal_path);
+        let dir = self.dir_of(dir)?;
+        Ok(self.row.execute(params![pkg, dir, name, crc32, size, effective_size, category_id])?)
+    }
 }
 
 /// Bulk-inserts download links (`INSERT OR IGNORE` on the (filename, url) unique
@@ -1360,6 +1666,14 @@ pub(crate) const SCENE_IMAGE_PREDICATE_SQL: &str = "lower(internal_path) LIKE 's
      AND (lower(internal_path) LIKE '%.jpg' OR lower(internal_path) LIKE '%.jpeg' \
           OR lower(internal_path) LIKE '%.png')";
 
+/// The packages (`pkg`) with a scene preview image: the same test as
+/// `SCENE_IMAGE_PREDICATE_SQL`, split as the lean layout stores a path — the
+/// folder under `Saves/scene/` (a few thousand `dirs` rows, then the folder
+/// index), the extension on the file name.
+pub(crate) const SCENE_IMAGE_PKGS_SQL: &str = "SELECT pkg FROM res_rows \
+     WHERE dir IN (SELECT dir_id FROM dirs WHERE lower(path) LIKE 'saves/scene/%') \
+       AND (lower(name) LIKE '%.jpg' OR lower(name) LIKE '%.jpeg' OR lower(name) LIKE '%.png')";
+
 /// Package ids that carry a `Saves/scene/` preview image, for the VAR Packages
 /// "scene image" filter.
 ///
@@ -1381,8 +1695,7 @@ pub(crate) const SCENE_IMAGE_PREDICATE_SQL: &str = "lower(internal_path) LIKE 's
 /// the database-mode SQL predicate.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn get_scene_image_package_ids(conn: &Connection) -> Result<HashSet<String>> {
-    let sql =
-        format!("SELECT DISTINCT package_id FROM resources WHERE {SCENE_IMAGE_PREDICATE_SQL}");
+    let sql = format!("SELECT package_id FROM packages WHERE pkg IN ({SCENE_IMAGE_PKGS_SQL})");
     let mut stmt = conn
         .prepare(&sql)
         .context("failed to prepare scene image package query")?;
@@ -1422,24 +1735,25 @@ pub(crate) const PACKAGE_UPSERT_SQL: &str =
         last_scanned_at  = excluded.last_scanned_at,
         creator_id       = COALESCE(excluded.creator_id, packages.creator_id)";
 
-pub(crate) const RESOURCE_UPSERT_SQL: &str =
-    "INSERT INTO resources (package_id, internal_path, crc32, size, effective_size, category_id)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-     ON CONFLICT(package_id, internal_path) DO UPDATE SET
+// ?1 pkg, ?2 dir, ?3 name (ResourceWriter resolves them); effective_size is
+// stored only where it differs from size.
+const RESOURCE_UPSERT_SQL: &str =
+    "INSERT INTO res_rows (pkg, dir, name, crc32, size, effective_size, category_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ?5), ?7)
+     ON CONFLICT(pkg, dir, name) DO UPDATE SET
         crc32          = excluded.crc32,
         size           = excluded.size,
         effective_size = excluded.effective_size,
-        category_id    = COALESCE(excluded.category_id, resources.category_id)";
+        category_id    = COALESCE(excluded.category_id, res_rows.category_id)";
 
 pub(crate) const MANIFEST_PACKAGE_INSERT_SQL: &str =
     "INSERT OR IGNORE INTO packages
         (package_id, file_path, size_bytes, modified_ns, scene_image_path, last_scanned_at, creator_id)
      VALUES (?1, ?2, 0, '0', NULL, ?3, ?4)";
 
-pub(crate) const MANIFEST_RESOURCE_INSERT_SQL: &str =
-    "INSERT OR IGNORE INTO resources
-        (package_id, internal_path, crc32, size, effective_size, category_id)
-     VALUES (?1, ?2, ?3, 0, 0, ?4)";
+const MANIFEST_RESOURCE_INSERT_SQL: &str =
+    "INSERT OR IGNORE INTO res_rows (pkg, dir, name, crc32, size, effective_size, category_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, NULLIF(?6, ?5), ?7)";
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn upsert_package(
@@ -1490,20 +1804,21 @@ pub(crate) fn execute_package_upsert(
 }
 
 pub(crate) fn execute_resource_upsert(
-    stmt: &mut rusqlite::Statement<'_>,
+    writer: &mut ResourceWriter<'_>,
     resource: &ResourceRef,
     category_ids: &HashMap<&'static str, i64>,
 ) -> Result<()> {
     let category_id = category_id_for_path(category_ids, &resource.internal_path);
-    stmt.execute(params![
-        resource.package_id,
-        resource.internal_path,
-        resource.crc32.map(|v| v as i64),
-        resource.size as i64,
-        resource.effective_size as i64,
-        category_id,
-    ])
-    .with_context(|| {
+    writer
+        .write(
+            &resource.package_id,
+            &resource.internal_path,
+            resource.crc32.map(|v| v as i64),
+            resource.size as i64,
+            resource.effective_size as i64,
+            category_id,
+        )
+        .with_context(|| {
         format!(
             "failed to upsert resource {} for package {}",
             resource.internal_path, resource.package_id
@@ -1525,15 +1840,15 @@ pub(crate) fn execute_manifest_package_insert(
 }
 
 pub(crate) fn execute_manifest_resource_insert(
-    stmt: &mut rusqlite::Statement<'_>,
+    writer: &mut ResourceWriter<'_>,
     package_id: &str,
     internal_path: &str,
     crc32: u32,
     category_ids: &HashMap<&'static str, i64>,
 ) -> Result<usize> {
     let category_id = category_id_for_path(category_ids, internal_path);
-    let changed = stmt
-        .execute(params![package_id, internal_path, crc32 as i64, category_id])
+    let changed = writer
+        .write(package_id, internal_path, Some(crc32 as i64), 0, 0, category_id)
         .with_context(|| {
             format!(
                 "failed to insert manifest resource {internal_path} for {package_id}"
@@ -1554,11 +1869,9 @@ pub(crate) fn replace_resources(
         .context("failed to start replace_resources tx")?;
 
     {
-        let mut stmt = tx
-            .prepare(RESOURCE_UPSERT_SQL)
-            .context("failed to prepare upsert statement")?;
+        let mut writer = ResourceWriter::upsert(&tx)?;
         for resource in resources {
-            execute_resource_upsert(&mut stmt, resource, &category_ids).with_context(|| {
+            execute_resource_upsert(&mut writer, resource, &category_ids).with_context(|| {
                 format!(
                     "failed to upsert resources for package {}",
                     package_id
@@ -1732,7 +2045,7 @@ pub(crate) fn database_stats(app: &tauri::AppHandle, db: &Db) -> Result<DbStats>
     let package_count: i64 =
         conn.query_row("SELECT COUNT(*) FROM packages", [], |row| row.get(0))?;
     let resource_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))?;
+        conn.query_row("SELECT COUNT(*) FROM res_rows", [], |row| row.get(0))?;
 
     let db_size_bytes = db_path(app)
         .ok()
@@ -1882,8 +2195,10 @@ pub(crate) fn clear_all<F: FnMut(&str, f64, &str)>(db: &Db, mut on_progress: F) 
     let result = (|| -> Result<()> {
         let tx = conn.transaction().context("failed to start clear tx")?;
         on_progress("clear_db_resources", 0.10, "Clearing resources");
-        tx.execute("DELETE FROM resources", [])
+        tx.execute("DELETE FROM res_rows", [])
             .context("failed to clear resources")?;
+        tx.execute("DELETE FROM dirs", [])
+            .context("failed to clear folders")?;
         on_progress("clear_db_packages", 0.55, "Clearing packages");
         tx.execute("DELETE FROM packages", [])
             .context("failed to clear packages")?;

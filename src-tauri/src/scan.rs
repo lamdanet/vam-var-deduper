@@ -917,9 +917,7 @@ where
         let mut pkg_stmt = tx
             .prepare(db::PACKAGE_UPSERT_SQL)
             .context("failed to prepare package upsert")?;
-        let mut res_stmt = tx
-            .prepare(db::RESOURCE_UPSERT_SQL)
-            .context("failed to prepare resource upsert")?;
+        let mut res_stmt = db::ResourceWriter::upsert(&tx)?;
 
         for (index, (package_id, package)) in targets.iter().enumerate() {
             let file_path_str = package.file_path.display().to_string();
