@@ -1403,9 +1403,11 @@
       <!-- Settings: tabs and cards, like the other pages (setupSettingsTabs in
            app.js). Every control keeps its id; the copy comes from applySettingsCopy. -->
       <section id="settings-view" class="app-main missing-resources-view fm-view settings-view settings-v2 hidden">
+        <h2 class="sr-only">Settings</h2>
+        <span id="settings-live" class="sr-only" role="status" aria-live="polite"></span>
         <nav class="cv-modes settings-tabs" role="tablist" aria-label="Settings">
           <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="folders">
-            <span class="material-symbols-outlined">folder_open</span><span class="cv-mode-text"><b>Folders</b><small>VaM, offload and downloads</small></span></button>
+            <span class="material-symbols-outlined">folder_open</span><span class="cv-mode-text"><b>Library</b><small>Folders, downloads and VaM</small></span></button>
           <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="appearance">
             <span class="material-symbols-outlined">palette</span><span class="cv-mode-text"><b>Appearance</b><small>Themes</small></span></button>
           <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="database">
@@ -1413,8 +1415,8 @@
           <button type="button" role="tab" class="cv-mode" aria-selected="false" data-settings-tab="about">
             <span class="material-symbols-outlined">info</span><span class="cv-mode-text"><b>About</b><small>Version and release notes</small></span></button>
         </nav>
-        <div class="settings-autosave">
-          <span class="material-symbols-outlined">cloud_done</span>
+        <div class="settings-autosave" id="settings-autosave">
+          <span class="material-symbols-outlined">check_circle</span>
           <span id="settings-autosave-text">Changes save as you make them.</span>
           <button id="settings-reset-all" class="ghost-button fm-small" type="button">
             <span class="material-symbols-outlined">settings_backup_restore</span>Reset all settings to default…
@@ -1424,7 +1426,7 @@
         <div class="settings-pane" data-settings-pane="folders">
         <section class="settings-grid">
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">hard_drive</span>VaM directory<button type="button" class="fm-link settings-reset" data-settings-reset="folders">Reset to default</button></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">hard_drive</span><h3 class="settings-card-title">VaM directory</h3></header>
             <div class="settings-card-body">
               <div class="settings-path-card" id="settings-vam-card">
                 <div class="input-with-button">
@@ -1432,23 +1434,16 @@
                     <span class="material-symbols-outlined input-leading-icon">hard_drive</span>
                     <span id="settings-vam-dir-text" class="vam-dir-text is-empty">Not configured</span>
                   </div>
-                  <button id="settings-pick-vam-dir" class="ghost-button" type="button">
+                  <button id="settings-pick-vam-dir" class="ghost-button" type="button" aria-label="Browse for the VaM directory">
                     <span class="material-symbols-outlined">folder_open</span>
                     <span>Browse</span>
                   </button>
                 </div>
-                <p class="settings-path-hint" id="settings-vam-dir-status">
+                <p class="settings-path-hint" id="settings-vam-dir-status" role="status">
                   Pick the folder VaM is installed in (the one that contains AddonPackages).
                 </p>
-                <div class="additional-dirs">
-                  <label class="settings-path-label" id="settings-library-additional-dirs-label"></label>
-                  <div id="settings-library-additional-dirs" class="additional-dirs-list"></div>
-                  <button id="settings-library-add-folder-button" class="ghost-button" type="button"></button>
-                </div>
                 <p class="settings-path-hint">
-                  Every page reads packages from AddonPackages, the folder VaM itself loads. Folders added here
-                  are also checked when finding a package's dependencies and when scanning which packages use one
-                  before you delete it; each page keeps its own Add folder list for its scans.
+                  VaM loads packages from AddonPackages, and so does every page here.
                 </p>
                 <!-- Mirrors of AddonPackages for the code that reads these fields (see applyVamDir). -->
                 <input id="settings-input-dir" type="hidden" />
@@ -1457,7 +1452,23 @@
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">archive</span>Offload folder<button type="button" class="fm-link settings-reset" data-settings-reset="offload">Reset to default</button></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">create_new_folder</span><h3 class="settings-card-title">Additional VAR folders</h3><button type="button" class="fm-link settings-reset" data-settings-reset="folders">Reset to default</button></header>
+            <div class="settings-card-body">
+              <div class="settings-path-card">
+                <div class="additional-dirs">
+                  <div id="settings-library-additional-dirs" class="additional-dirs-list" role="list" aria-label="Additional VAR folders"></div>
+                  <button id="settings-library-add-folder-button" class="ghost-button" type="button"></button>
+                </div>
+                <p class="settings-path-hint">
+                  Other folders that hold .var files (an archive, a second drive). The app looks there for a
+                  package's dependencies and to see what uses a package before you delete it. AddonPackages and
+                  the offload folder are always included. Each page keeps its own Add folder list for its scans.
+                </p>
+              </div>
+            </div>
+          </article>
+          <article class="card settings-card">
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">archive</span><h3 class="settings-card-title">Offload folder</h3><button type="button" class="fm-link settings-reset" data-settings-reset="offload">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card" id="settings-offload-card">
                 <div class="input-with-button">
@@ -1465,16 +1476,12 @@
                     <span class="material-symbols-outlined input-leading-icon">archive</span>
                     <span id="settings-offload-text" class="vam-dir-text is-empty">Not configured</span>
                   </div>
-                  <button id="settings-pick-offload" class="ghost-button" type="button">
+                  <button id="settings-pick-offload" class="ghost-button" type="button" aria-label="Browse for the offload folder">
                     <span class="material-symbols-outlined">folder_open</span>
                     <span>Browse</span>
                   </button>
-                  <button id="settings-reset-offload" class="ghost-button hidden" type="button" title="Use AddonPackages_offload beside AddonPackages">
-                    <span class="material-symbols-outlined">restart_alt</span>
-                    <span>Default</span>
-                  </button>
                 </div>
-                <p class="settings-path-hint" id="settings-offload-status"></p>
+                <p class="settings-path-hint" id="settings-offload-status" role="status"></p>
                 <label class="check-row" for="settings-offload-by-creator">
                   <input id="settings-offload-by-creator" type="checkbox" />
                   <span>Organize offloaded and restored packages into creator folders</span>
@@ -1488,7 +1495,7 @@
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">download</span><label for="settings-downloads-folder">Downloads folder</label><button type="button" class="fm-link settings-reset" data-settings-reset="downloads">Reset to default</button></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">download</span><h3 class="settings-card-title"><label for="settings-downloads-folder">Downloads folder</label></h3><button type="button" class="fm-link settings-reset" data-settings-reset="downloads">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card">
                 <div class="input-with-button">
@@ -1496,27 +1503,29 @@
                     <span class="material-symbols-outlined input-leading-icon">download</span>
                     <input id="settings-downloads-folder" type="text" placeholder="Defaults to AddonPackages" spellcheck="false" />
                   </div>
-                  <button id="settings-pick-downloads" class="ghost-button" type="button">
+                  <button id="settings-pick-downloads" class="ghost-button" type="button" aria-label="Browse for the downloads folder">
                     <span class="material-symbols-outlined">folder_open</span>
                     <span>Browse</span>
                   </button>
                 </div>
                 <p class="settings-path-hint">
-                  Where downloaded VARs are saved. Leave blank to save them into AddonPackages; if no VaM
-                  directory is set either, you'll be asked to pick a folder the first time you download.
+                  Where downloaded VARs are saved. Leave blank to save them straight into AddonPackages. VaM only
+                  loads packages inside AddonPackages: anything saved elsewhere has to be moved there before VaM
+                  sees it.
                 </p>
                 <label class="check-row" for="settings-organize-by-creator">
                   <input id="settings-organize-by-creator" type="checkbox" />
-                  <span>Organize downloads into creator subfolders</span>
+                  <span>Organize downloads into creator folders</span>
                 </label>
                 <p class="settings-path-hint">
-                  e.g. <code>qing.hgf1.1</code> &rarr; <code>&lt;downloads&gt;\qing\qing.hgf1.1.var</code>
+                  e.g. <code>qing.hgf1.1</code> &rarr; <code>&lt;downloads&gt;\qing\qing.hgf1.1.var</code>. Hub
+                  downloads always go into a folder per creator, with their dependencies in a deps folder.
                 </p>
               </div>
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">visibility_off</span>VaM's content browser<button type="button" class="fm-link settings-reset" data-settings-reset="browser">Reset to default</button></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">visibility_off</span><h3 class="settings-card-title">VaM's content browser</h3><button type="button" class="fm-link settings-reset" data-settings-reset="browser">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card">
                 <label class="check-row" for="settings-auto-hide-deps">
@@ -1525,16 +1534,15 @@
                 </label>
                 <p class="settings-path-hint">
                   Hides the scenes, looks, poses, clothing and hair inside packages that are only dependencies, so
-                  VaM's browser shows the packages you chose. It uses VaM's own hide flags (AddonPackagesFilePrefs);
-                  nothing is deleted. Turning it off brings back only what it hid — never what you hid yourself.
+                  VaM's browser shows the packages you chose. It uses VaM's own hide flags; nothing is deleted. Turning it off brings back only what it hid — never what you hid yourself.
                   Hide or favorite single items from a package's content list in VAR Packages.
                 </p>
-                <p class="settings-path-hint" id="settings-auto-hide-status"></p>
+                <p class="settings-path-hint" id="settings-auto-hide-status" role="status"></p>
               </div>
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">file_download</span>Dropping .var files on the window<button type="button" class="fm-link settings-reset" data-settings-reset="dropping">Reset to default</button></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">file_download</span><h3 class="settings-card-title">Dropping .var files on the window</h3><button type="button" class="fm-link settings-reset" data-settings-reset="dropping">Reset to default</button></header>
             <div class="settings-card-body">
               <div class="settings-path-card">
                 <label class="check-row" for="settings-drop-move">
@@ -1554,208 +1562,213 @@
         <div class="settings-pane hidden" data-settings-pane="appearance">
         <section class="settings-grid is-one">
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">palette</span><span id="settings-appearance-eyebrow"></span><button type="button" class="fm-link settings-reset" data-settings-reset="theme">Reset to default</button></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">palette</span><h3 class="settings-card-title"><span id="settings-appearance-eyebrow"></span></h3><button type="button" class="fm-link settings-reset" data-settings-reset="theme">Reset to default</button></header>
             <div class="settings-card-body">
-              <p class="settings-path-hint" id="settings-theme-desc"></p><div class="theme-grid">
-                <button id="settings-theme-light" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-light">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+              <p class="settings-path-hint" id="settings-theme-desc"></p><div class="theme-groups" role="radiogroup" aria-labelledby="settings-appearance-eyebrow">
+                <h4 class="theme-group-title" id="settings-theme-classic">Classic</h4>
+                <div class="theme-grid" role="group" aria-labelledby="settings-theme-classic">
+                <button id="settings-theme-light" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-light" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-light-label"></span>
                 </button>
-                <button id="settings-theme-dark" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-dark">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-dark" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-dark" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-dark-label"></span>
                 </button>
-                <button id="settings-theme-nord" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-nord">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-nord" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-nord" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-nord-label"></span>
                 </button>
-                <button id="settings-theme-solarized" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-solarized">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-solarized" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-solarized" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-solarized-label"></span>
                 </button>
-                <button id="settings-theme-monolith" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-monolith">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-monolith" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-monolith" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-monolith-label"></span>
                 </button>
-                <button id="settings-theme-amber" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-amber">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-amber" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-amber" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-amber-label"></span>
                 </button>
-                <button id="settings-theme-emerald" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-emerald">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-emerald" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-emerald" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-emerald-label"></span>
                 </button>
-                <button id="settings-theme-midnight" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-midnight">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-midnight" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-midnight" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-midnight-label"></span>
                 </button>
-                <button id="settings-theme-cyber" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-cyber">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-cyber" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-cyber" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-cyber-label"></span>
                 </button>
-                <button id="settings-theme-porcelain" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-porcelain">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-porcelain" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-porcelain" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-porcelain-label"></span>
                 </button>
-                <button id="settings-theme-frost" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-frost">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-frost" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-frost" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-frost-label"></span>
                 </button>
-                <button id="settings-theme-circuit" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-circuit">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-circuit" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-circuit" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-circuit-label"></span>
                 </button>
-                <button id="settings-theme-modhub" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-modhub">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                </div>
+                <h4 class="theme-group-title" id="settings-theme-obsidian">Obsidian</h4>
+                <div class="theme-grid" role="group" aria-labelledby="settings-theme-obsidian">
+                <button id="settings-theme-modhub" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-modhub" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-modhub-label"></span>
                 </button>
-                <button id="settings-theme-crimson-blaze" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-crimson-blaze">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-crimson-blaze" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-crimson-blaze" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-crimson-blaze-label"></span>
                 </button>
-                <button id="settings-theme-electric-cyber" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-electric-cyber">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-electric-cyber" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-electric-cyber" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-electric-cyber-label"></span>
                 </button>
-                <button id="settings-theme-emerald-pulse" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-emerald-pulse">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-emerald-pulse" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-emerald-pulse" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-emerald-pulse-label"></span>
                 </button>
-                <button id="settings-theme-emerald-flow" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-emerald-flow">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-emerald-flow" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-emerald-flow" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-emerald-flow-label"></span>
                 </button>
-                <button id="settings-theme-glacier-frost" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-glacier-frost">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-glacier-frost" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-glacier-frost" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-glacier-frost-label"></span>
                 </button>
-                <button id="settings-theme-indigo-pulse" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-indigo-pulse">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-indigo-pulse" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-indigo-pulse" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-indigo-pulse-label"></span>
                 </button>
-                <button id="settings-theme-crimson-solar" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-crimson-solar">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-crimson-solar" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-crimson-solar" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-crimson-solar-label"></span>
                 </button>
-                <button id="settings-theme-violet-pulse" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-violet-pulse">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-violet-pulse" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-violet-pulse" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-violet-pulse-label"></span>
                 </button>
-                <button id="settings-theme-solar-core" class="theme-card" type="button">
-                  <span class="theme-card-check material-symbols-outlined">check</span>
-                  <div class="theme-preview theme-preview-solar-core">
-                    <div class="theme-preview-bar"></div>
-                    <div class="theme-preview-line theme-preview-line-full"></div>
-                    <div class="theme-preview-line theme-preview-line-2-3"></div>
-                  </div>
+                <button id="settings-theme-solar-core" class="theme-card" type="button" role="radio" aria-checked="false">
+                  <span class="theme-card-check material-symbols-outlined" aria-hidden="true">check</span>
+                  <span class="theme-preview theme-preview-solar-core" aria-hidden="true">
+                    <span class="theme-preview-bar"></span>
+                    <span class="theme-preview-line theme-preview-line-full"></span>
+                    <span class="theme-preview-line theme-preview-line-2-3"></span>
+                  </span>
                   <span class="theme-card-label" id="settings-theme-solar-core-label"></span>
                 </button>
-              </div>
+                </div>              </div>
             </div>
           </article>
         </section>
@@ -1764,7 +1777,7 @@
         <div class="settings-pane hidden" data-settings-pane="database">
         <section class="settings-grid">
           <article class="card settings-card" id="settings-dbloc-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">folder_special</span>Location</header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">folder_special</span><h3 class="settings-card-title">Location</h3></header>
             <div class="settings-card-body">
               <div class="input-with-button">
                 <div class="vam-dir-display">
@@ -1773,7 +1786,21 @@
                 </div>
                 <span class="chip" id="settings-dbloc-chip">Default</span>
               </div>
-              <p class="settings-path-hint" id="settings-dbloc-status"></p>
+              <p class="settings-path-hint" id="settings-dbloc-status" role="status"></p>
+              <div class="settings-notice is-warn hidden" id="settings-dbloc-missing" role="alert">
+                <span class="material-symbols-outlined" aria-hidden="true">warning</span>
+                <div>
+                  <p id="settings-dbloc-missing-text"></p>
+                  <button id="settings-dbloc-forget" class="ghost-button fm-small" type="button">Keep using this one</button>
+                </div>
+              </div>
+              <div class="settings-notice hidden" id="settings-dbloc-old">
+                <span class="material-symbols-outlined" aria-hidden="true">history</span>
+                <div>
+                  <p id="settings-dbloc-old-text"></p>
+                  <button id="settings-dbloc-old-delete" class="ghost-button fm-small" type="button">Delete it now</button>
+                </div>
+              </div>
               <div class="settings-card-actions">
                 <button id="settings-dbloc-move" class="ghost-button" type="button">
                   <span class="material-symbols-outlined">drive_file_move</span><span>Move to another folder…</span>
@@ -1785,24 +1812,15 @@
                   <span class="material-symbols-outlined">folder_open</span><span>Show</span>
                 </button>
               </div>
-              <div id="settings-dbloc-progress" class="settings-advanced-progress hidden">
-                <div class="settings-advanced-progress-row">
-                  <span id="settings-dbloc-progress-label">Moving</span>
-                  <span id="settings-dbloc-progress-pct">0%</span>
-                </div>
-                <div class="settings-advanced-progress-track">
-                  <div id="settings-dbloc-progress-fill" class="settings-advanced-progress-fill"></div>
-                </div>
-              </div>
               <p class="settings-path-hint">
-                Moving copies the database to the folder you pick (compacted on the way), checks the copy, then
-                restarts the app there; the old file is removed after the restart. The default is the app's data
-                folder.
+                Moving copies the database to the folder you pick, checks the copy, then restarts the app, which
+                stops anything still running. The old file is deleted once the new one has worked. Pick a drive
+                that's always connected; network drives and OneDrive or Dropbox folders can't hold it safely.
               </p>
             </div>
           </article>
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">analytics</span><span id="settings-db-title"></span></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">analytics</span><h3 class="settings-card-title"><span id="settings-db-title"></span></h3></header>
             <div class="settings-card-body">
               <p class="settings-path-hint" id="settings-db-desc"></p><div class="settings-stats-grid">
                 <div class="settings-stat">
@@ -1827,18 +1845,15 @@
                   <span id="settings-refresh-label"></span>
                 </button>
               </div>
-              <p class="settings-feedback" id="settings-feedback"></p>
+              <p class="settings-feedback" id="settings-feedback" role="status"></p>
             </div>
           </article>
           <article class="card settings-card is-wide is-danger">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">delete_forever</span>Clear the database</header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">delete_forever</span><h3 class="settings-card-title">Clear the database</h3></header>
             <div class="settings-card-body">
               <div class="settings-advanced-feature">
                 <div class="settings-advanced-feature-head">
                   <div class="settings-advanced-feature-text">
-                    <h4 class="settings-advanced-feature-title" id="settings-clear-db-title">
-                      Clear local database
-                    </h4>
                     <p class="settings-advanced-feature-desc" id="settings-clear-db-desc">
                       Permanently deletes every indexed package, resource, and creator
                       from the local SQLite file. Your .var files on disk are not
@@ -1878,7 +1893,7 @@
                     <span id="settings-clear-db-progress-label">Clearing</span>
                     <span id="settings-clear-db-progress-pct">0%</span>
                   </div>
-                  <div class="settings-advanced-progress-track">
+                  <div class="settings-advanced-progress-track" id="settings-clear-db-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="settings-clear-db-progress-label">
                     <div
                       id="settings-clear-db-progress-fill"
                       class="settings-advanced-progress-fill"
@@ -1887,10 +1902,11 @@
                   <p
                     id="settings-clear-db-progress-status"
                     class="settings-advanced-progress-status"
+                    role="status"
                   ></p>
                 </div>
 
-                <p class="settings-feedback" id="settings-clear-db-status"></p>
+                <p class="settings-feedback" id="settings-clear-db-status" role="status"></p>
               </div>
             </div>
           </article>
@@ -1900,15 +1916,15 @@
         <div class="settings-pane hidden" data-settings-pane="about">
         <section class="settings-grid is-one">
           <article class="card settings-card">
-            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">info</span><span id="settings-about-eyebrow"></span></header>
+            <header class="card-eyebrow settings-card-head"><span class="material-symbols-outlined">info</span><h3 class="settings-card-title"><span id="settings-about-eyebrow"></span></h3></header>
             <div class="settings-card-body">
               <p class="settings-path-hint" id="settings-about-desc"></p><div class="settings-about-card">
                 <div class="settings-about-row">
                   <div class="settings-about-mark" aria-hidden="true">
-                    <span class="material-symbols-outlined">terminal</span>
+                    <span class="material-symbols-outlined">layers</span>
                   </div>
                   <div class="settings-about-text">
-                    <h4 id="settings-about-title">VAM VAR Deduper</h4>
+                    <p id="settings-about-title" class="settings-about-name">VAM VAR Deduper</p>
                     <div class="settings-about-meta">
                       <!-- Filled from the app (Cargo.toml) at startup. -->
                       <span class="settings-version-pill" id="settings-about-version"></span>
@@ -1916,7 +1932,7 @@
                   </div>
                 </div>
                 <div class="settings-about-footer">
-                  <span>© 2026 VAM VAR Engine</span>
+                  <span>© 2026 VAM VAR Deduper</span>
                   <button id="settings-release-notes" class="ghost-button" type="button">
                     <span class="material-symbols-outlined">description</span>
                     <span id="settings-release-notes-label"></span>
@@ -2341,9 +2357,10 @@
     </div>
 
     <div id="dialog-backdrop" class="dialog-backdrop hidden">
-      <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-message dialog-list">
         <h3 id="dialog-title"></h3>
         <p id="dialog-message"></p>
+        <ul id="dialog-list" class="dialog-list hidden"></ul>
         <div class="dialog-actions">
           <button id="dialog-cancel" class="ghost-button" type="button"></button>
           <button id="dialog-confirm" class="primary-button" type="button"></button>

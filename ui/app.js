@@ -27,6 +27,8 @@ const THEMES = [
 ];
 // Themes wearing the Obsidian skin (styles.css: :root[data-skin="obsidian"]).
 const OBSIDIAN_THEMES = new Set(["modhub", "crimson-blaze", "electric-cyber", "emerald-pulse", "emerald-flow", "glacier-frost", "indigo-pulse", "crimson-solar", "violet-pulse", "solar-core"]);
+// Themes on a light background (styles.css: :root[data-scheme="light"]).
+const LIGHT_THEMES = new Set(["light", "porcelain", "emerald-flow", "glacier-frost", "indigo-pulse", "crimson-solar"]);
 // Themes that were removed, and what a saved choice of one becomes.
 const RETIRED_THEMES = { backstage: "modhub" };
 
@@ -293,8 +295,8 @@ const I18N = {
     themeButtonFrost: "Nordic Frost",
     themeButtonCircuit: "Amber Circuit",
     inputLabel: "VAR Folder",
-    scanAdditionalDirsLabel: "Additional VAR Folders",
-    addFolder: "Add Folder",
+    scanAdditionalDirsLabel: "Additional VAR folders",
+    addFolder: "Add folder",
     removeFolder: "Remove folder",
     browse: "Browse",
     scan: "Scan",
@@ -357,25 +359,25 @@ const I18N = {
       "Configure where the engine looks for source files and where results are stored.",
     settingsAppearanceEyebrow: "Appearance",
     settingsThemeLabel: "Theme",
-    settingsThemeDesc: "Switch between light and dark interface.",
+    settingsThemeDesc: "Pick a colour theme. It applies straight away.",
     settingsDbEyebrow: "Database",
-    settingsDbTitle: "Local Cache Database",
+    settingsDbTitle: "What's in the database",
     settingsDbDesc:
-      "Stores scanned packages and resources for fast rescans and persistent CRC history.",
+      "The app's index of your scanned packages and their files. It makes searches, duplicate checks and rescans fast.",
     settingsDbPackages: "Packages",
     settingsDbResources: "Resources",
-    settingsDbSize: "Database Size",
+    settingsDbSize: "Size on disk",
     settingsRefresh: "Refresh",
     settingsClearCache: "Clear Cache",
     settingsAboutEyebrow: "About",
     settingsAboutDesc:
-      "Cross-package duplicate resource detection and removal for VAR packages.",
+      "Find duplicates, fix missing dependencies, and download, offload and organize your VaM packages.",
     settingsReleaseNotes: "Release notes",
     releaseNotesTitle: "Release notes",
     releaseNotesClose: "Close",
     releaseNotesEmpty: "No release notes yet.",
     settingsConfirmClear:
-      "Clear all package and resource records from the local database? This cannot be undone.",
+      "Delete every package, file and creator record from the database? Your .var files aren't touched. This can't be undone: to use the app again you'll need to rescan your folders.",
     settingsCleared: "Database cleared.",
     settingsClearing: "Clearing database…",
     settingsLoadFailed: "Failed to load database stats: ",
@@ -608,10 +610,10 @@ Object.assign(I18N.en_US, {
   // Settings → Advanced → Clear local database
   settingsClearDbTitle: "Clear local database",
   settingsClearDbDesc:
-    "Permanently deletes every indexed package, resource, and creator from the local SQLite file. Your .var files on disk are not touched.",
-  settingsClearDbWarningTitle: "This cannot be undone:",
+    "Deletes the index of packages, files and creators. Your .var files aren't touched.",
+  settingsClearDbWarningTitle: "This can't be undone:",
   settingsClearDbWarningBody:
-    "You'll need to re-scan or re-import to rebuild the database. On multi-million-row libraries this takes several minutes. Do not touch if you don't know what you are doing.",
+    "to use the app again you'll need to rescan your folders, which can take several minutes for a large library.",
   settingsClearDbButton: "Clear database",
   resourceListRefresh: "Refresh",
   resourceListThIcon: "Type",
@@ -1919,12 +1921,29 @@ function showToast(message, kind = "info", ms = 3200) {
   el.className = `toast toast-${kind}`;
   const icon = document.createElement("span");
   icon.className = "material-symbols-outlined toast-icon";
+  icon.setAttribute("aria-hidden", "true");
   icon.textContent = TOAST_ICONS[kind] || TOAST_ICONS.info;
+  // An error is announced at once and stays until it's closed (the close
+  // button, or a click on it): it may take longer than a few seconds to read.
+  if (kind === "error") {
+    el.setAttribute("role", "alert");
+    ms = 0;
+    const sticky = [...host.querySelectorAll('.toast[role="alert"]')];
+    if (sticky.length >= 3) sticky[0].remove();
+  }
   const text = document.createElement("span");
   text.className = "toast-text";
   // textContent, not innerHTML — messages carry filenames/errors verbatim.
   text.textContent = String(message ?? "");
   el.append(icon, text);
+  if (kind === "error") {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "toast-close";
+    close.setAttribute("aria-label", "Close");
+    close.textContent = "✕";
+    el.append(close);
+  }
   host.appendChild(el);
   requestAnimationFrame(() => el.classList.add("show"));
 
@@ -1961,23 +1980,81 @@ function showToast(message, kind = "info", ms = 3200) {
   };
 }
 
-function showAppConfirm(message) {
+// The confirm dialog. opts: title, confirm (its button's label: say what it
+// does), cancel, danger (a red confirm button), list (lines shown as a list
+// under the message). Resolves true when confirmed.
+function showAppConfirm(message, opts = {}) {
+  const choice = { value: true, label: opts.confirm || t("dialogConfirm"), danger: opts.danger };
+  return showAppDialog(message, { ...opts, choices: [choice] }).then((v) => v === true);
+}
+
+// A dialog with named choices ({ value, label, danger, focus }): resolves to
+// the picked one's value, or null for Cancel, Escape or a click outside.
+// Focus goes to the dialog (Cancel, or the choice marked focus), the rest of
+// the app is inert while it's open, and focus comes back after.
+function showAppDialog(message, { title, cancel, list, choices = [] } = {}) {
   return new Promise((resolve) => {
-    state.pendingDialog = resolve;
-    $("dialog-title").textContent = t("dialogConfirmTitle");
+    // One at a time: an earlier one still open counts as cancelled.
+    if (state.pendingDialog) closeAppConfirm(null);
+    state.pendingDialog = (v) => resolve(v === false || v == null ? null : v);
+    state.dialogReturn = document.activeElement;
+    $("dialog-title").textContent = title || t("dialogConfirmTitle");
     $("dialog-message").textContent = message;
-    $("dialog-cancel").textContent = t("dialogCancel");
-    $("dialog-confirm").textContent = t("dialogConfirm");
+    const ul = $("dialog-list");
+    if (ul) {
+      ul.replaceChildren(
+        ...(list || []).map((line) => {
+          const li = document.createElement("li");
+          li.textContent = line;
+          return li;
+        }),
+      );
+      ul.classList.toggle("hidden", !list?.length);
+    }
+    $("dialog-cancel").textContent = cancel || t("dialogCancel");
+    const actions = $("dialog-confirm").parentElement;
+    actions.querySelectorAll("[data-dialog-choice]").forEach((b) => b.remove());
+    $("dialog-confirm").classList.add("hidden");
+    let focus = $("dialog-cancel");
+    for (const c of choices) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = c.danger ? "primary-button is-danger" : choices.length > 1 && !c.focus ? "ghost-button" : "primary-button";
+      b.textContent = c.label;
+      b.setAttribute("data-dialog-choice", "");
+      b.addEventListener("click", () => closeAppConfirm(c.value));
+      actions.append(b);
+      if (c.focus) focus = b;
+    }
+    dialogInert(true);
     $("dialog-backdrop").classList.remove("hidden");
+    focus.focus();
   });
+}
+
+// Everything but the dialog (and the toasts) is inert while it's open.
+function dialogInert(on) {
+  if (on) {
+    state.dialogInert = [...document.body.children].filter(
+      (el) => el.id !== "dialog-backdrop" && el.id !== "toast-host" && el.tagName !== "SCRIPT" && !el.inert,
+    );
+    state.dialogInert.forEach((el) => (el.inert = true));
+  } else {
+    (state.dialogInert || []).forEach((el) => (el.inert = false));
+    state.dialogInert = null;
+  }
 }
 
 function closeAppConfirm(result) {
   $("dialog-backdrop").classList.add("hidden");
+  dialogInert(false);
   const resolver = state.pendingDialog;
   state.pendingDialog = null;
+  const back = state.dialogReturn;
+  state.dialogReturn = null;
+  if (back?.isConnected && typeof back.focus === "function") back.focus();
   if (resolver) {
-    resolver(Boolean(result));
+    resolver(result);
   }
 }
 
@@ -2079,6 +2156,7 @@ function updateStaticCopy() {
   document.documentElement.lang = "en";
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.dataset.skin = OBSIDIAN_THEMES.has(state.theme) ? "obsidian" : "";
+  document.documentElement.dataset.scheme = LIGHT_THEMES.has(state.theme) ? "light" : "dark";
   document.title = t("appTitle");
   $("eyebrow").textContent = t("eyebrow");
   $("app-title").textContent = t("appTitle");
@@ -2104,11 +2182,7 @@ function applySettingsCopy() {
     const node = $(id);
     if (node) node.textContent = value;
   };
-  setText("settings-title", t("settingsTitle"));
-  setText("settings-subtitle", t("settingsSubtitle"));
 
-  setText("settings-paths-title", t("settingsPathsTitle"));
-  setText("settings-paths-desc", t("settingsPathsDesc"));
   setText("build-db-input-label", t("inputLabel"));
   setText("build-db-pick-input-label", t("browse"));
   setText("build-db-status-title", t("buildDbStatusTitle"));
@@ -2133,7 +2207,6 @@ function applySettingsCopy() {
   renderVarPackages();
 
   setText("settings-appearance-eyebrow", t("settingsAppearanceEyebrow"));
-  setText("settings-theme-label", t("settingsThemeLabel"));
   setText("settings-theme-desc", t("settingsThemeDesc"));
   setText("settings-theme-light-label", t("themeButtonLight"));
   setText("settings-theme-dark-label", t("themeButtonDark"));
@@ -2158,7 +2231,6 @@ function applySettingsCopy() {
   setText("settings-theme-violet-pulse-label", t("themeButtonVioletPulse"));
   setText("settings-theme-solar-core-label", t("themeButtonSolarCore"));
 
-  setText("settings-db-eyebrow", t("settingsDbEyebrow"));
   setText("settings-db-title", t("settingsDbTitle"));
   setText("settings-db-desc", t("settingsDbDesc"));
   setText("settings-db-packages-label", t("settingsDbPackages"));
@@ -2172,12 +2244,7 @@ function applySettingsCopy() {
   setText("release-notes-title", t("releaseNotesTitle"));
   setText("release-notes-close", t("releaseNotesClose"));
 
-  // Advanced settings
-  setText("settings-advanced-title", t("settingsAdvancedTitle"));
-  setText("settings-advanced-desc", t("settingsAdvancedDesc"));
-  setText("settings-advanced-eyebrow", t("settingsAdvancedTag"));
 
-  setText("settings-clear-db-title", t("settingsClearDbTitle"));
   setText("settings-clear-db-desc", t("settingsClearDbDesc"));
   setText("settings-clear-db-warning-title", t("settingsClearDbWarningTitle"));
   setText("settings-clear-db-warning-body", t("settingsClearDbWarningBody"));
@@ -2191,7 +2258,12 @@ function applySettingsCopy() {
 function syncSettingsControlState() {
   for (const theme of THEMES) {
     const btn = $(`settings-theme-${theme}`);
-    if (btn) btn.classList.toggle("active", state.theme === theme);
+    if (!btn) continue;
+    const on = state.theme === theme;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-checked", String(on));
+    // One tab stop for the group (the chosen theme); arrows move within it.
+    btn.tabIndex = on ? 0 : -1;
   }
 }
 
@@ -2225,31 +2297,68 @@ async function loadSettingsView() {
   }
 }
 
+// Material Symbols are ligatures: without aria-hidden a screen reader reads
+// "folder_open Browse". An icon-only button keeps a name from its title.
+function hideIconLigatures(root) {
+  root.querySelectorAll(".material-symbols-outlined:not([aria-hidden])").forEach((icon) => {
+    const owner = icon.closest("button, a, [role=button], [role=tab]");
+    if (owner && !owner.hasAttribute("aria-label") && owner.textContent.trim() === icon.textContent.trim()) {
+      if (!owner.title) return;
+      owner.setAttribute("aria-label", owner.title);
+    }
+    icon.setAttribute("aria-hidden", "true");
+  });
+}
+
 // ---- Settings: tabs, like the other pages ----------------------------------------
 
 const SETTINGS_TAB = "settings.tab";
 
 function settingsShowTab(key) {
   const tabs = [...document.querySelectorAll("[data-settings-tab]")];
-  const want = tabs.some((t) => t.getAttribute("data-settings-tab") === key) ? key : "folders";
-  for (const t of tabs) {
-    const on = t.getAttribute("data-settings-tab") === want;
-    t.classList.toggle("is-active", on);
-    t.setAttribute("aria-selected", String(on));
+  const want = tabs.some((tab) => tab.getAttribute("data-settings-tab") === key) ? key : "folders";
+  for (const tab of tabs) {
+    const on = tab.getAttribute("data-settings-tab") === want;
+    tab.classList.toggle("is-active", on);
+    tab.setAttribute("aria-selected", String(on));
+    // One tab stop for the row; the arrow keys move between them.
+    tab.tabIndex = on ? 0 : -1;
   }
   document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
     pane.classList.toggle("hidden", pane.getAttribute("data-settings-pane") !== want);
   });
   fmStoreSet(SETTINGS_TAB, want);
-  // Save and Discard belong to the folders; the other tabs act at once.
+  // The autosave line and Reset all are for the Library and Appearance tabs.
   $("settings-view")?.setAttribute("data-tab", want);
   if (want === "database") dblocRefresh();
 }
 
+// The tabs follow the ARIA tabs pattern: each names its panel, and Left /
+// Right / Home / End move between them.
 function setupSettingsTabs() {
-  document.querySelectorAll("[data-settings-tab]").forEach((t) =>
-    t.addEventListener("click", () => settingsShowTab(t.getAttribute("data-settings-tab"))),
-  );
+  const tabs = [...document.querySelectorAll("[data-settings-tab]")];
+  for (const tab of tabs) {
+    const key = tab.getAttribute("data-settings-tab");
+    tab.id = `settings-tab-${key}`;
+    tab.setAttribute("aria-controls", `settings-pane-${key}`);
+    const pane = document.querySelector(`[data-settings-pane="${key}"]`);
+    if (pane) {
+      pane.id = `settings-pane-${key}`;
+      pane.setAttribute("role", "tabpanel");
+      pane.setAttribute("aria-labelledby", tab.id);
+    }
+    tab.addEventListener("click", () => settingsShowTab(key));
+  }
+  tabs[0]?.parentElement?.addEventListener("keydown", (e) => {
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    const next = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const tab = tabs[(next + tabs.length) % tabs.length];
+    settingsShowTab(tab.getAttribute("data-settings-tab"));
+    tab.focus();
+  });
   settingsShowTab(fmStoreGet(SETTINGS_TAB, "folders"));
 }
 
@@ -2274,33 +2383,106 @@ async function dblocRefresh() {
 function dblocRender() {
   const i = DBLOC.info;
   if (!i) return;
-  vpSetText("settings-dbloc-path", i.path);
+  const path = $("settings-dbloc-path");
+  if (path) {
+    path.textContent = i.path;
+    path.title = i.path;
+  }
   const chip = $("settings-dbloc-chip");
   if (chip) {
-    chip.textContent = i.testing ? "Test copy" : i.is_default ? "Default" : "Custom folder";
-    chip.classList.toggle("fm-chip-good", i.is_default && !i.testing);
+    chip.textContent = i.testing ? "Test copy" : i.missing ? "Folder missing" : i.is_default ? "Default" : "Custom folder";
+    chip.classList.toggle("fm-chip-good", i.is_default && !i.testing && !i.missing);
+    chip.classList.toggle("fm-chip-warn", Boolean(i.missing));
   }
   const status = [
     formatBytesLocal(Number(i.size_bytes || 0)),
-    i.is_default ? "in the app's data folder" : `the default is ${i.default_dir}`,
+    i.is_default ? `in the app's data folder` : `the default is ${i.default_dir}`,
   ];
-  if (i.missing) status.push(`your chosen folder ${i.missing} wasn't there at start, so the default was used`);
   if (i.testing) status.push("VVD_DB_PATH is set: moving is off");
   vpSetText("settings-dbloc-status", status.join(" · "));
+  // The chosen folder wasn't there at start: say so plainly, and offer to
+  // keep using the database in the default folder.
+  const warn = $("settings-dbloc-missing");
+  if (warn) {
+    warn.classList.toggle("hidden", !i.missing);
+    vpSetText(
+      "settings-dbloc-missing-text",
+      i.missing
+        ? `Your database is in ${i.missing}, and that folder wasn't there when the app started, so it's using the one in the app's data folder. Plug the drive in and restart to use yours, or keep using this one.`
+        : "",
+    );
+  }
+  const old = $("settings-dbloc-old");
+  if (old) {
+    old.classList.toggle("hidden", !i.old_copy);
+    vpSetText("settings-dbloc-old-text", i.old_copy ? `The copy the move left at ${i.old_copy} is deleted the next time the app starts.` : "");
+  }
   const move = $("settings-dbloc-move");
   const back = $("settings-dbloc-default");
   if (move) move.disabled = DBLOC.moving || i.testing;
-  if (back) back.disabled = DBLOC.moving || i.testing || (i.is_default && !i.missing);
+  if (back) {
+    back.disabled = DBLOC.moving || i.testing || i.is_default;
+    back.classList.toggle("hidden", Boolean(i.missing));
+  }
 }
 
 function dblocProgress(fraction, message) {
-  $("settings-dbloc-progress")?.classList.toggle("hidden", fraction == null);
-  if (fraction == null) return;
+  const overlay = $("dbloc-overlay");
+  if (fraction == null) {
+    overlay?.remove();
+    dblocInert(false);
+    return;
+  }
   const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
-  const fill = $("settings-dbloc-progress-fill");
+  if (!overlay) dblocOverlay();
+  const fill = $("dbloc-overlay-fill");
   if (fill) fill.style.width = `${pct}%`;
-  vpSetText("settings-dbloc-progress-pct", `${pct}%`);
-  if (message) vpSetText("settings-dbloc-progress-label", message);
+  $("dbloc-overlay-track")?.setAttribute("aria-valuenow", String(pct));
+  vpSetText("dbloc-overlay-pct", `${pct}%`);
+  if (message) vpSetText("dbloc-overlay-label", message);
+}
+
+// While the database moves, the app waits: nothing else can use it, and
+// the app restarts at the end. A panel says how it's going.
+function dblocOverlay() {
+  const el = document.createElement("div");
+  el.id = "dbloc-overlay";
+  el.className = "dialog-backdrop dbloc-overlay";
+  el.innerHTML = `
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="dbloc-overlay-title" aria-describedby="dbloc-overlay-note">
+      <h3 id="dbloc-overlay-title">Moving the database</h3>
+      <p id="dbloc-overlay-note">The app restarts when it's done. Please wait.</p>
+      <div class="settings-advanced-progress">
+        <div class="settings-advanced-progress-row">
+          <span id="dbloc-overlay-label" role="status">Preparing</span>
+          <span id="dbloc-overlay-pct">0%</span>
+        </div>
+        <div class="settings-advanced-progress-track" id="dbloc-overlay-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="dbloc-overlay-title">
+          <div id="dbloc-overlay-fill" class="settings-advanced-progress-fill"></div>
+        </div>
+      </div>
+    </div>`;
+  document.body.append(el);
+  dblocInert(true);
+  el.querySelector(".dialog-card").tabIndex = -1;
+  el.querySelector(".dialog-card").focus();
+}
+
+function dblocInert(on) {
+  if (on) {
+    DBLOC.inert = [...document.body.children].filter((el) => el.id !== "dbloc-overlay" && el.id !== "toast-host" && el.tagName !== "SCRIPT" && !el.inert);
+    DBLOC.inert.forEach((el) => (el.inert = true));
+  } else {
+    (DBLOC.inert || []).forEach((el) => (el.inert = false));
+    DBLOC.inert = null;
+  }
+}
+
+function dblocDescribe(d) {
+  if (!d) return "";
+  if (d.problem) return `${formatBytesLocal(Number(d.size_bytes || 0))}, can't be used: ${d.problem}`;
+  const when = d.modified ? `, last changed ${new Date(d.modified * 1000).toLocaleString()}` : "";
+  return `${formatBytesLocal(Number(d.size_bytes || 0))}, ${pkgCount(Number(d.packages || 0), "package", "packages")}, ${Number(d.files || 0).toLocaleString()} files${when}`;
 }
 
 // Moves the database to `dir` (null: back to the default folder).
@@ -2308,39 +2490,48 @@ async function dblocMove(dir) {
   const i = DBLOC.info;
   if (!invoke || !i || DBLOC.moving) return;
   const where = dir || i.default_dir;
-  const ok = await showAppConfirm(
-    `Move the database (${formatBytesLocal(Number(i.size_bytes || 0))}) to ${where}? It's copied there and checked, then the app restarts to use it; the old file is removed after the restart.`,
-  );
-  if (!ok) return;
+  let check;
+  try {
+    check = await invoke("check_database_target", { targetDir: dir });
+  } catch (e) {
+    showToast(String(e?.message || e), "error");
+    return;
+  }
+  const warnings = check.warnings || [];
   let useExisting = null;
-  for (;;) {
-    DBLOC.moving = true;
+  if (check.existing) {
+    // The folder has a database already: use it, or replace it with yours.
+    // Nothing is ever deleted: a replaced one is kept beside it.
+    const there = check.existing;
+    const usable = !there.problem;
+    const choice = await showAppDialog(`${where} already has a database. Use that one, or replace it with yours? A replaced one is kept beside it as vam_var_deduper.replaced.db. Either way the app restarts, which stops anything still running.`, {
+      title: "There's a database there already",
+      list: [`There: ${dblocDescribe(there)}`, `Yours: ${dblocDescribe(check.mine)}`, ...warnings],
+      choices: [
+        ...(usable ? [{ value: "existing", label: "Use the one there", focus: (there.packages || 0) >= (check.mine.packages || 0) }] : []),
+        { value: "replace", label: "Replace it with mine", focus: !usable || (there.packages || 0) < (check.mine.packages || 0) },
+      ],
+    });
+    if (!choice) return;
+    useExisting = choice === "existing";
+  } else {
+    const ok = await showAppConfirm(
+      `Move the database (${formatBytesLocal(Number(i.size_bytes || 0))}) to ${where}? It's copied there and checked, then the app restarts to use it, which stops anything still running. The old file is deleted once the new one has worked.`,
+      { title: "Move the database", confirm: "Move and restart", list: warnings },
+    );
+    if (!ok) return;
+  }
+  DBLOC.moving = true;
+  dblocRender();
+  dblocProgress(0, "Preparing");
+  try {
+    await fmPoll("start_move_database_task", { targetDir: dir, useExisting }, (f, msg) => dblocProgress(f, msg));
+    dblocProgress(1, useExisting ? "Switching: the app restarts…" : "Moved: the app restarts…");
+  } catch (e) {
+    DBLOC.moving = false;
+    dblocProgress(null);
     dblocRender();
-    dblocProgress(0, "Preparing");
-    try {
-      await fmPoll("start_move_database_task", { targetDir: dir, useExisting }, (f, msg) => dblocProgress(f, msg));
-      dblocProgress(1, "Moved: the app restarts…");
-      showToast("Database moved. The app restarts to use it…", "success", 6000);
-      return;
-    } catch (e) {
-      const msg = String(e?.message || e);
-      DBLOC.moving = false;
-      dblocProgress(null);
-      dblocRender();
-      if (msg.startsWith("EXISTS:") && useExisting == null) {
-        const there = msg.slice(7);
-        if (await showAppConfirm(`${there} already has a database. Use that one instead of yours? (Yours stays where it is.)`)) {
-          useExisting = true;
-        } else if (await showAppConfirm(`Replace the database in ${where} with yours? The one there is deleted.`)) {
-          useExisting = false;
-        } else {
-          return;
-        }
-        continue;
-      }
-      showToast(msg, "error", 8000);
-      return;
-    }
+    showToast(String(e?.message || e), "error");
   }
 }
 
@@ -2354,6 +2545,41 @@ function setupDbLocation() {
   $("settings-dbloc-show")?.addEventListener("click", () => {
     if (DBLOC.info?.path) invoke("show_in_explorer", { path: DBLOC.info.path }).catch((e) => addLog(String(e)));
   });
+  // The chosen folder is missing: keep using the database in the default
+  // folder from now on (nothing moves; yours stays where it is).
+  $("settings-dbloc-forget")?.addEventListener("click", async () => {
+    const dir = DBLOC.info?.missing;
+    if (!dir) return;
+    const ok = await showAppConfirm(
+      `Stop using the database in ${dir}? The app keeps using the one in its data folder from now on. The one in ${dir} isn't deleted: you can move back to it later.`,
+      { title: "Use the database here", confirm: "Use this one" },
+    );
+    if (!ok) return;
+    try {
+      await invoke("forget_database_folder");
+      showToast("The app uses the database in its data folder from now on.", "success");
+    } catch (e) {
+      showToast(String(e?.message || e), "error");
+    }
+    dblocRefresh();
+  });
+  $("settings-dbloc-old-delete")?.addEventListener("click", async () => {
+    const old = DBLOC.info?.old_copy;
+    if (!old) return;
+    const ok = await showAppConfirm(`Delete the old copy at ${old} now? The database you're using isn't touched.`, {
+      title: "Delete the old copy",
+      confirm: "Delete it",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await invoke("delete_old_database_copy");
+      showToast("Old copy deleted.", "success");
+    } catch (e) {
+      showToast(String(e?.message || e), "error");
+    }
+    dblocRefresh();
+  });
 }
 
 // ---- Settings: saved as they change; back to the defaults -------------------------
@@ -2364,8 +2590,9 @@ function setupDbLocation() {
 
 const SETTINGS_RESETS = {
   folders: {
-    what: "Additional VAR folders: none (the VaM directory stays)",
-    isDefault: () => !getUserAdditionalDirs("downloadVars").length,
+    what: "Additional VAR folders: none",
+    // What the card lists (AddonPackages and the offload folder aren't).
+    isDefault: () => !settingsListedFolders().length,
     apply: async () => {
       additionalDirsState("downloadVars").length = 0;
       renderAllAdditionalDirs();
@@ -2419,43 +2646,80 @@ const SETTINGS_RESETS = {
     apply: async () => {
       state.theme = "light";
       updateStaticCopy();
-      if (typeof syncSettingsControlState === "function") syncSettingsControlState();
       await persistAllConfig();
     },
   },
 };
 
-// Each card's Reset to default: off when it's already the default.
+// The extra folders the VaM card lists (it leaves out AddonPackages and the
+// offload folder, which are scanned anyway).
+function settingsListedFolders() {
+  const norm = (d) => String(d ?? "").trim().replace(/[\\/]+$/, "").toLowerCase();
+  const hidden = new Set([vamAddonPackagesDir(), offloadDir()].filter(Boolean).map(norm));
+  return additionalDirsState("downloadVars").filter((d) => norm(d) && !hidden.has(norm(d)));
+}
+
+// Each card's Reset to default. At the default it says so and does nothing;
+// it stays focusable (aria-disabled), so a keyboard user keeps their place
+// and hears why.
 function settingsSyncResets() {
   document.querySelectorAll("[data-settings-reset]").forEach((btn) => {
     const r = SETTINGS_RESETS[btn.getAttribute("data-settings-reset")];
     const at = Boolean(r?.isDefault());
-    btn.disabled = at;
+    btn.setAttribute("aria-disabled", String(at));
+    btn.classList.toggle("is-at-default", at);
+    btn.textContent = at ? "At default" : "Reset to default";
     btn.title = at ? "Already the default" : `Back to: ${r?.what ?? ""}`;
+    const card = btn.closest(".settings-card")?.querySelector(".settings-card-title")?.textContent?.trim();
+    btn.setAttribute("aria-label", at ? `${card || "This setting"}: at its default` : `Reset ${card || "this setting"} to default`);
   });
   const all = $("settings-reset-all");
-  if (all) all.disabled = Object.values(SETTINGS_RESETS).every((r) => r.isDefault());
+  if (all) {
+    const none = Object.values(SETTINGS_RESETS).every((r) => r.isDefault());
+    all.setAttribute("aria-disabled", String(none));
+    all.title = none ? "Every setting is at its default" : "";
+  }
 }
 
+const SETTINGS_AUTOSAVE_IDLE = "Changes save as you make them.";
+
+// After a save: "Saved." for a moment (and for screen readers), and the
+// reset buttons follow what changed.
 function settingsSaved() {
+  const line = $("settings-autosave");
   const text = $("settings-autosave-text");
-  if (!text) return;
-  text.textContent = "Saved.";
+  if (text) {
+    line?.classList.remove("is-error");
+    text.textContent = "Saved.";
+    clearTimeout(settingsSaved.timer);
+    settingsSaved.timer = setTimeout(() => {
+      text.textContent = SETTINGS_AUTOSAVE_IDLE;
+    }, 2000);
+  }
+  const live = $("settings-live");
+  if (live) live.textContent = live.textContent === "Saved." ? "Saved" : "Saved.";
+  settingsSyncResets();
+}
+
+// A save that failed says so, and stays until the next one works.
+function settingsSaveFailed(error) {
+  const line = $("settings-autosave");
+  const text = $("settings-autosave-text");
   clearTimeout(settingsSaved.timer);
-  settingsSaved.timer = setTimeout(() => {
-    text.textContent = "Changes save as you make them.";
-  }, 2000);
+  if (text) text.textContent = `Couldn't save: ${String(error?.message || error)}`;
+  line?.classList.add("is-error");
+  const live = $("settings-live");
+  if (live) live.textContent = `Couldn't save your settings: ${String(error?.message || error)}`;
 }
 
 async function settingsResetOne(key) {
   const r = SETTINGS_RESETS[key];
   if (!r || r.isDefault()) return;
-  if (!(await showAppConfirm(`Back to the default? ${r.what}.`))) return;
+  if (!(await showAppConfirm(`Put this back to its default? ${r.what}.`, { title: "Reset to default", confirm: "Reset" }))) return;
   try {
     await r.apply();
-    settingsSaved();
   } catch (e) {
-    showToast(String(e?.message || e), "error", 6000);
+    showToast(`Couldn't reset: ${String(e?.message || e)}`, "error");
   }
   settingsSyncResets();
 }
@@ -2466,18 +2730,28 @@ async function settingsResetAll() {
     showToast("Every setting is already at its default.", "info");
     return;
   }
-  const list = keys.map((k) => `• ${SETTINGS_RESETS[k].what}`).join("\n");
-  if (!(await showAppConfirm(`Put these settings back to their defaults?\n\n${list}\n\nThe VaM directory and the database's location stay as they are.`))) return;
+  const ok = await showAppConfirm("Put these settings back to their defaults? The VaM directory and the database's location stay as they are.", {
+    title: "Reset settings",
+    confirm: `Reset ${pkgCount(keys.length, "setting", "settings")}`,
+    list: keys.map((k) => SETTINGS_RESETS[k].what),
+  });
+  if (!ok) return;
+  const failed = [];
   for (const k of keys) {
     try {
       await SETTINGS_RESETS[k].apply();
     } catch (e) {
+      failed.push(k);
       addLog(`Settings: resetting ${k} failed: ${String(e?.message || e)}`);
     }
   }
-  settingsSaved();
   settingsSyncResets();
-  showToast(`${pkgCount(keys.length, "setting", "settings")} back to the default`, "success");
+  const done = keys.length - failed.length;
+  if (failed.length) {
+    showToast(`${pkgCount(done, "setting", "settings")} back to the default; ${failed.length} couldn't be reset (see the console)`, "error");
+  } else {
+    showToast(`${pkgCount(done, "setting", "settings")} back to the default`, "success");
+  }
 }
 
 function setupSettingsAutosave() {
@@ -2487,26 +2761,22 @@ function setupSettingsAutosave() {
     const btn = e.target.closest?.("[data-settings-reset]");
     if (btn) {
       e.preventDefault();
-      settingsResetOne(btn.getAttribute("data-settings-reset"));
+      if (btn.getAttribute("aria-disabled") !== "true") settingsResetOne(btn.getAttribute("data-settings-reset"));
     }
   });
-  $("settings-reset-all")?.addEventListener("click", settingsResetAll);
-  // Every change saves itself (each control's own listener): say so, and
-  // re-check which cards are at their default.
-  view.addEventListener("change", () => {
-    settingsSaved();
-    setTimeout(settingsSyncResets, 300);
+  $("settings-reset-all")?.addEventListener("click", (e) => {
+    if (e.currentTarget.getAttribute("aria-disabled") !== "true") settingsResetAll();
   });
-  view.addEventListener("click", (e) => {
-    if (e.target.closest?.(".theme-card, .additional-dir-row button, #settings-library-add-folder-button, #settings-pick-offload, #settings-reset-offload, #settings-pick-downloads, #settings-pick-vam-dir")) {
-      setTimeout(settingsSyncResets, 600);
-    }
+  // These two save in this window's storage, not through the config file.
+  view.addEventListener("change", (e) => {
+    if (e.target?.id === "settings-auto-hide-deps" || e.target?.id === "settings-drop-move") settingsSaved();
   });
 }
 
 window.__loadSettingsView = () => {
   loadSettingsView();
-  settingsShowTab(fmStoreGet(SETTINGS_TAB, "folders"));
+  // No VaM directory yet: that's what Settings is opened for.
+  settingsShowTab(vamDir() ? fmStoreGet(SETTINGS_TAB, "folders") : "folders");
   settingsSyncResets();
 };
 window.__refreshBuildDbStats = () => {
@@ -2687,6 +2957,7 @@ function renderSettingsClearDb() {
     const pct = Math.round((scd().taskProgress ?? 0) * 100);
     if (progressPct) progressPct.textContent = `${pct}%`;
     if (progressFill) progressFill.style.width = `${pct}%`;
+    $("settings-clear-db-progress-track")?.setAttribute("aria-valuenow", String(pct));
     if (progressStatus) progressStatus.textContent = scd().taskMessage ?? "";
   }
 }
@@ -5056,10 +5327,16 @@ function offloadDirProblem(dir) {
 }
 
 async function setOffloadDir(dir) {
+  const before = offloadDir();
   state.offloadDirSetting = String(dir || "").trim();
   await persistAllConfig();
   renderSettingsOffload();
   await refreshOffloadExists();
+  // Another folder: what the pages list comes from the new one.
+  if (offloadDir() !== before) {
+    renderAllAdditionalDirs();
+    await vpRefreshAfterMutation().catch(() => {});
+  }
 }
 
 function setupOffload() {
@@ -5673,6 +5950,7 @@ function setupVamPrefs() {
       localStorage.setItem(PREFS_STORE, on ? "1" : "0");
     } catch (_e) {}
     if (on && !state.vpHasListing) {
+      vpSetText("settings-auto-hide-status", "On. Hiding starts the next time you open VAR Packages.");
       showToast("Open VAR Packages once so the app knows your dependencies — hiding starts then.", "info", 6000);
       return;
     }
@@ -25099,6 +25377,7 @@ async function initConfig() {
 
 function applyConfigToInputs(config) {
   if (!config) return;
+  state.loadedConfig = { ...config };
   state.vamDir =
     typeof config.vam_dir === "string" && config.vam_dir.trim()
       ? config.vam_dir.trim()
@@ -25107,12 +25386,30 @@ function applyConfigToInputs(config) {
     const el = $(id);
     if (el && typeof val === "string") el.value = val;
   };
-  setVal("input-dir", config.input_dir ?? "");
-  setAdditionalDirs("overview", config.scan_additional_dirs);
   setAdditionalDirs("varDetails", config.var_details_additional_dirs);
   setVal("var-packages-input-dir", config.var_packages_input_dir ?? "");
   setAdditionalDirs("varPackages", config.var_packages_additional_dirs);
-  setAdditionalDirs("downloadVars", config.download_vars_additional_dirs);
+  // The Database scan used to keep a list of its own nobody could see (and
+  // the offload folder ended up in it). What else it holds joins the Settings
+  // list, where it can be seen and removed; AddonPackages and the offload
+  // folder are scanned anyway.
+  const norm = (d) => String(d ?? "").trim().replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const scanned = new Set(
+    [
+      vamDir() ? vamJoin(vamDir(), "AddonPackages") : "",
+      vamDir() ? vamJoin(vamDir(), "AddonPackages_offload") : "",
+      typeof config.offload_dir === "string" ? config.offload_dir : "",
+    ]
+      .filter(Boolean)
+      .map(norm),
+  );
+  const library = Array.isArray(config.download_vars_additional_dirs) ? [...config.download_vars_additional_dirs] : [];
+  for (const dir of Array.isArray(config.scan_additional_dirs) ? config.scan_additional_dirs : []) {
+    if (typeof dir !== "string" || !dir.trim() || scanned.has(norm(dir))) continue;
+    if (!library.some((d) => norm(d) === norm(dir))) library.push(dir);
+  }
+  setAdditionalDirs("overview", []);
+  setAdditionalDirs("downloadVars", library);
   setAdditionalDirs("internalize", config.internalize_additional_dirs);
   setAdditionalDirs("missing", config.missing_additional_dirs);
 
@@ -25217,11 +25514,14 @@ function applyConfigToInputs(config) {
 
 function buildCurrentConfig() {
   return {
+    // Fields no page edits any more (vap_dir, the Find Duplicates paths…)
+    // go back as they were loaded instead of being reset on every save.
+    ...(state.loadedConfig || {}),
     language: state.language,
     theme: state.theme,
     vam_dir: vamDir() || null,
-    input_dir: ($("input-dir")?.value || "").trim() || null,
-    scan_additional_dirs: getScanAdditionalDirs().length ? getScanAdditionalDirs() : null,
+    // The Database scan's old hidden list joined the Settings list at load.
+    scan_additional_dirs: null,
     var_details_additional_dirs: getUserAdditionalDirs("varDetails").length
       ? getUserAdditionalDirs("varDetails")
       : null,
@@ -25232,7 +25532,6 @@ function buildCurrentConfig() {
     // State-backed rather than DOM-backed: the control is a mode-switch, so
     // there is no checkbox to read the value off.
     var_packages_deep_scan: state.varPackagesDeepScan !== false,
-    output_dir: ($("output-dir")?.value || "").trim() || null,
     download_vars_folder: ($("settings-library-folder")?.value || "").trim() || null,
     download_vars_additional_dirs: getUserAdditionalDirs("downloadVars").length
       ? getUserAdditionalDirs("downloadVars")
@@ -25525,6 +25824,7 @@ async function browseVamSetup() {
 
 function openVamDirSettings() {
   document.querySelector('[data-sidebar-link="settings"]')?.click();
+  settingsShowTab("folders");
   requestAnimationFrame(() => {
     const card = $("settings-vam-card");
     if (!card) return;
@@ -25567,9 +25867,17 @@ function setupVamDir() {
 // extra scan roots (unioned into that section's scan, deduped by the backend).
 // One generic registry + helper set drives every section's list UI.
 // =====================================================================
+// Every setting saves through here: Settings says "Saved." only once the
+// file is written, or why it wasn't, and its reset buttons follow.
 async function persistAllConfig() {
   if (!invoke) return;
-  await invoke("save_config", { config: buildCurrentConfig() });
+  try {
+    await invoke("save_config", { config: buildCurrentConfig() });
+  } catch (e) {
+    settingsSaveFailed(e);
+    throw e;
+  }
+  settingsSaved();
 }
 
 // onChange: how to persist after a list edit (null = session-only, not saved).
@@ -25606,6 +25914,8 @@ const ADDITIONAL_DIR_SECTIONS = {
     addBtnId: "settings-library-add-folder-button",
     labelId: "settings-library-additional-dirs-label",
     primaryInputId: "settings-library-folder",
+    // AddonPackages and the offload folder are always scanned: not listed.
+    hidden: () => [vamAddonPackagesDir(), offloadDir()],
     onChange: persistAllConfig,
   },
   // Scan Dependencies dialog: the same list as Settings (downloadVars),
@@ -25727,7 +26037,7 @@ function renderAdditionalDirs(sectionId) {
     remove.type = "button";
     remove.className = "ghost-button additional-dir-remove";
     remove.textContent = "✕";
-    remove.setAttribute("aria-label", t("removeFolder"));
+    remove.setAttribute("aria-label", `${t("removeFolder")}: ${dir}`);
     remove.disabled = Boolean(state.activeTask);
     remove.addEventListener("click", () => {
       removeAdditionalDir(sectionId, index).catch((error) => addLog(String(error)));
@@ -25807,10 +26117,7 @@ function initAdditionalDirSections() {
 }
 
 async function persistLanguage() {
-  if (!invoke) {
-    return;
-  }
-  await invoke("save_config", { config: buildCurrentConfig() });
+  await persistAllConfig();
 }
 
 // ============================================================
@@ -28094,6 +28401,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   setupDownloadLinksImport();
   setupDownloadsManager();
+  hideIconLigatures(document);
   setupSettingsTabs();
   setupDbLocation();
   setupSettingsAutosave();
@@ -28268,18 +28576,37 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (state.theme === next) return;
     state.theme = next;
     updateStaticCopy();
-    await persistLanguage();
+    await persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
   };
   for (const theme of THEMES) {
     const btn = $(`settings-theme-${theme}`);
     if (btn) btn.addEventListener("click", () => setThemeFromSettings(theme));
   }
+  // The theme cards are radio buttons: the arrow keys pick the next one.
+  document.querySelector(".theme-groups")?.addEventListener("keydown", (e) => {
+    const cards = [...document.querySelectorAll(".theme-groups .theme-card")];
+    const i = cards.indexOf(document.activeElement);
+    if (i < 0) return;
+    const next = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: cards.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const card = cards[(next + cards.length) % cards.length];
+    card.click();
+    card.focus();
+  });
 
   // Downloads folder — standalone config (not mirrored). Browse + persist.
   const dlFolderInput = $("settings-downloads-folder");
   if (dlFolderInput) {
+    const save = () => persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
+    let typing = null;
+    dlFolderInput.addEventListener("input", () => {
+      clearTimeout(typing);
+      typing = setTimeout(save, 600);
+    });
     dlFolderInput.addEventListener("change", () => {
-      persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
+      clearTimeout(typing);
+      save();
     });
   }
   const dlFolderPick = $("settings-pick-downloads");
@@ -28290,29 +28617,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         const folder = await invoke("pick_folder");
         if (folder && dlFolderInput) {
           dlFolderInput.value = folder;
-          persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
-        }
-      } catch (err) {
-        addLog(`Settings: ${String(err)}`);
-      }
-    });
-  }
-  // VAR library folder — the reference set for dependency checks. Browse +
-  // persist, mirroring the Downloads folder above.
-  const libFolderInput = $("settings-library-folder");
-  if (libFolderInput) {
-    libFolderInput.addEventListener("change", () => {
-      persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
-    });
-  }
-  const libFolderPick = $("settings-pick-library");
-  if (libFolderPick) {
-    libFolderPick.addEventListener("click", async () => {
-      if (!invoke) return;
-      try {
-        const folder = await invoke("pick_folder");
-        if (folder && libFolderInput) {
-          libFolderInput.value = folder;
           persistAllConfig().catch((e) => addLog(`Settings: ${String(e)}`));
         }
       } catch (err) {
@@ -28334,7 +28638,11 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   if ($("settings-clear-db-button")) {
     $("settings-clear-db-button").addEventListener("click", async () => {
-      const confirmed = await showAppConfirm(t("settingsConfirmClear"));
+      const confirmed = await showAppConfirm(t("settingsConfirmClear"), {
+        title: "Clear the database",
+        confirm: "Clear database",
+        danger: true,
+      });
       if (!confirmed) return;
       if (!invoke) {
         const feedback = $("settings-clear-db-status");
