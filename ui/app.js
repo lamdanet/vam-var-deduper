@@ -850,7 +850,7 @@ function queueDownload(opts) {
 
 function downloadsChanged() {
   renderDownloadsPanel();
-  getRenderPanel();
+  getRefreshViews();
   updateDownloadsBadge();
   downloadsSaveSoon();
 }
@@ -1498,12 +1498,14 @@ function getSourceLineHtml(id, info) {
 }
 
 // Resolves ids not asked about yet this session; returns id(lower) -> info.
-async function getResolve(ids, { fresh = false } = {}) {
+// onBatch runs after each batch of 100, so a long list fills in as it goes.
+async function getResolve(ids, { fresh = false, onBatch = null } = {}) {
   const want = ids.filter((id) => fresh || !GET.cache.has(id.toLowerCase()));
   if (want.length && invoke) {
-    for (let i = 0; i < want.length; i += 200) {
-      const pairs = await invoke("resolve_var_sources", { packageIds: want.slice(i, i + 200) });
+    for (let i = 0; i < want.length; i += 100) {
+      const pairs = await invoke("resolve_var_sources", { packageIds: want.slice(i, i + 100) });
       for (const [id, info] of pairs ?? []) GET.cache.set(String(id).toLowerCase(), info);
+      onBatch?.();
     }
   }
   const out = new Map();
@@ -1573,6 +1575,7 @@ async function getPackages(ids, { onDone = null, replace = false } = {}) {
 // Pages that show what you have, after a Get landed.
 function getRefreshViews() {
   getRenderPanel();
+  if (libIsMissingView()) libRenderMissing();
 }
 
 // ---- The Downloads panel's box ---------------------------------------------------
@@ -3149,11 +3152,8 @@ function libRenderToolbar() {
   if (status === "broken") {
     actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-outline" data-lib-action="view-missing">View Missing Packages</button>`;
   } else if (status === "missing") {
-    const want = (state.vpMissing?.items ?? []).filter((m) => m.status === "missing").length;
+    // Get all (above the list) downloads them: it fills in as sources are found.
     actions.innerHTML = `
-      <button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-action="find-missing" ${want ? "" : "disabled"}>
-        <span class="material-symbols-outlined">download</span>Find &amp; Download All (${want})
-      </button>
       <button type="button" class="lib-icon-btn lib-icon-btn-sm" data-lib-action="refresh-missing" title="Refresh">
         <span class="material-symbols-outlined">refresh</span>
       </button>`;
@@ -3165,7 +3165,7 @@ function libRenderToolbar() {
     actions.innerHTML = `<button type="button" class="lib-btn lib-btn-xs lib-btn-destructive" data-lib-action="remove-orphans" title="Send every orphaned dependency to the Recycle Bin">
         <span class="material-symbols-outlined">delete_sweep</span>Remove all orphans (${total}${bytes ? ` · ${escapeHtml(formatBytesLocal(bytes))}` : ""})</button>`;
   } else if (status === "damaged") {
-    const fixable = (state.varPackagesItems ?? []).filter((it) => it.on_hub !== false).length;
+    const fixable = (state.varPackagesItems ?? []).length;
     actions.innerHTML = `
       <button type="button" class="lib-btn lib-btn-xs lib-btn-outline" data-lib-action="verify-all" title="Read every package in full and check it against its checksums — packages unchanged since their last check are skipped">
         <span class="material-symbols-outlined">verified</span>Check all packages</button>
@@ -3261,12 +3261,39 @@ function libRenderMissing() {
     wrap.innerHTML = `<div class="lib-empty">Nothing missing<span class="lib-empty-sub">Every dependency the scanned packages declare is in the scanned folders.</span></div>`;
     return;
   }
-  wrap.innerHTML = `
+  // Where each can be downloaded from: asked once per session (the Hub, then
+  // your saved sources), then drawn again.
+  const ids = rows.map((r) => String(r.id ?? "")).filter(Boolean);
+  const pending = ids.filter((id) => !GET.cache.has(id.toLowerCase()));
+  if (pending.length && !m.resolving) {
+    m.resolving = true;
+    getResolve(pending, { onBatch: () => libIsMissingView() && libRenderMissing() })
+      .catch((e) => addLog(`Missing dependencies: ${String(e)}`))
+      .finally(() => {
+        m.resolving = false;
+        if (libIsMissingView()) libRenderMissing();
+      });
+  }
+  const gettable = libMissingGettable(rows);
+  const bar = `<div class="lib-missing-bar">
+      <span>${
+        pending.length
+          ? `<span class="material-symbols-outlined fm-spin">progress_activity</span> Looking for sources on the Hub and in your saved sources: ${(ids.length - pending.length).toLocaleString()} of ${ids.length.toLocaleString()}…${gettable.length ? ` ${gettable.length} found so far.` : ""}`
+          : `${pkgCount(gettable.length, "package has", "packages have")} a source. Get downloads into AddonPackages, without dependencies.`
+      }</span>
+      ${
+        gettable.length
+          ? `<button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-get-missing>
+               <span class="material-symbols-outlined">download</span>Get all ${gettable.length}</button>`
+          : ""
+      }
+    </div>`;
+  wrap.innerHTML = `${bar}
     <table class="lib-table lib-missing-table">
       <thead><tr>
-        <th style="width:34%">Package</th><th style="width:16%">Version</th>
-        <th style="width:16%">Author</th><th>Needed by</th><th style="width:96px">Status</th>
-        <th style="width:96px" aria-label="Download source"></th>
+        <th style="width:26%">Package</th><th style="width:11%">Version</th>
+        <th style="width:12%">Author</th><th>Needed by</th><th style="width:96px">Status</th>
+        <th style="width:30%">Download</th>
       </tr></thead>
       <tbody>${rows
         .map((row) => {
@@ -3293,25 +3320,35 @@ function libRenderMissing() {
             <td>${escapeHtml(deriveCreatorFromPackageId(id) ?? "—")}</td>
             <td>${users}${more}</td>
             <td>${pill}</td>
-            <td><button type="button" class="lib-small-link" data-lib-add-source="${escapeAttribute(id)}"
-                        title="Add a Pixeldrain, MEGA, MediaFire or direct download link for it">
-                  <span class="material-symbols-outlined">add_link</span>Add link</button></td>
+            <td>${libMissingGetHtml(id)}</td>
           </tr>`;
         })
         .join("")}</tbody>
     </table>`;
 }
 
-// Hands the missing package ids to the Find Dependencies dialog, which looks
-// them up on the Hub and in the imported download links.
-function libFindMissing(ids) {
-  const list = (ids ?? []).filter(Boolean);
-  if (!list.length) return;
-  depStartTextScan();
-  const input = $("dep-scan-text-input");
-  if (!input) return;
-  input.value = list.join("\n");
-  depAnalyzeText().catch((e) => addLog(`Find Dependencies: ${String(e)}`));
+// The missing ids a Get would download: a source found, not queued, not
+// downloaded since.
+function libMissingGettable(rows) {
+  return rows
+    .map((r) => String(r.id ?? ""))
+    .filter((id) => id && GET.cache.get(id.toLowerCase())?.download_url && !findDownloadJob(id) && getLibraryState(id).kind !== "have");
+}
+
+// A Missing row's download cell: where it would come from and Get, or Add link.
+function libMissingGetHtml(id) {
+  const info = GET.cache.get(id.toLowerCase());
+  const job = findDownloadJob(id);
+  const addLink = `<button type="button" class="lib-small-link" data-lib-add-source="${escapeAttribute(id)}"
+        title="Add a Pixeldrain, MEGA, MediaFire or direct download link for it"><span class="material-symbols-outlined">add_link</span>Add link</button>`;
+  if (!info) return `<span class="get-src is-wait">Looking…</span>`;
+  if (getLibraryState(id).kind === "have") return `<span class="get-src is-hub"><span class="material-symbols-outlined">check_circle</span>Downloaded</span>`;
+  if (!info.download_url) return `<div class="lib-missing-get">${getSourceLineHtml(id, info)}${addLink}</div>`;
+  return `<div class="lib-missing-get">${getSourceLineHtml(id, info)}${
+    job
+      ? `<span class="get-queued">${job.status === "downloading" ? "Downloading…" : "Queued"}</span>`
+      : `<button type="button" class="lib-small-link" data-get-id="${escapeAttribute(id)}" title="Download it into AddonPackages (its dependencies aren't downloaded)"><span class="material-symbols-outlined">download</span>Get</button>`
+  }</div>`;
 }
 
 // Shows one package in the grid: leaves the Missing view and searches for it.
@@ -3691,8 +3728,8 @@ function libDetailHeaderHtml(item, details) {
       </div>
       <div class="lib-actions">
         ${
-          (item.damaged || !item.readable) && item.on_hub !== false
-            ? `<button type="button" class="lib-btn lib-btn-gradient lib-btn-full" data-lib-action="redownload" title="Download this version from the Hub again and replace the damaged copy">
+          item.damaged || !item.readable
+            ? `<button type="button" class="lib-btn lib-btn-gradient lib-btn-full" data-lib-action="redownload" title="Download this version again (from the Hub, or your saved sources) and replace the damaged copy">
                 <span class="material-symbols-outlined">download</span>Redownload</button>`
             : ""
         }
@@ -4804,16 +4841,33 @@ async function libVerifyAll() {
 // copy (replace: true keeps the old one until the new one is complete and
 // checked).
 async function libRedownload(items) {
-  const list = (items ?? []).filter((it) => it?.file_path && it.on_hub !== false);
+  const list = (items ?? []).filter((it) => it?.file_path);
   if (!invoke || !list.length) return;
   let queued = 0;
+  let fromSources = 0;
   const gone = [];
   for (const it of list) {
+    const fileName = it.file_name || `${it.package_id}.var`;
     let hit = null;
-    try {
-      hit = await invoke("hub_exact_download", { fileName: it.file_name || `${it.package_id}.var` });
-    } catch (e) {
-      addLog(`Redownload ${it.package_id}: ${String(e)}`);
+    if (it.on_hub !== false) {
+      try {
+        hit = await invoke("hub_exact_download", { fileName });
+        if (hit) hit.host = "hub";
+      } catch (e) {
+        addLog(`Redownload ${it.package_id}: ${String(e)}`);
+      }
+    }
+    // Not on the Hub: a saved source for this exact file.
+    if (!hit) {
+      try {
+        const info = (await getResolve([it.package_id], { fresh: true })).get(String(it.package_id).toLowerCase());
+        if (info?.download_url && String(info.filename || "").toLowerCase() === fileName.toLowerCase()) {
+          hit = { url: info.download_url, filename: info.filename, host: info.host };
+          if (info.host !== "hub") fromSources += 1;
+        }
+      } catch (e) {
+        addLog(`Redownload ${it.package_id}: ${String(e)}`);
+      }
     }
     if (!hit) {
       gone.push(it.package_id);
@@ -4823,7 +4877,7 @@ async function libRedownload(items) {
       packageId: it.package_id,
       url: hit.url,
       filename: it.file_name || hit.filename,
-      host: "hub",
+      host: hit.host || "hub",
       destDir: it.file_path.replace(/[\\/][^\\/]+$/, ""),
       nest: false,
       label: `${it.file_name || hit.filename} (redownload)`,
@@ -4839,10 +4893,15 @@ async function libRedownload(items) {
     });
     if (id != null) queued += 1;
   }
-  if (queued) showToast(`Redownloading ${queued} package${queued === 1 ? "" : "s"} from the Hub.`, "info");
+  if (queued) {
+    showToast(
+      `Redownloading ${pkgCount(queued, "package", "packages")}${fromSources ? ` (${fromSources} from your saved sources)` : " from the Hub"}.`,
+      "info",
+    );
+  }
   if (gone.length) {
     showToast(
-      `${gone.length === 1 ? gone[0] : `${gone.length} packages`} can't be downloaded from the Hub again.`,
+      `${gone.length === 1 ? gone[0] : `${gone.length} packages`}: not on the Hub, and no saved source has ${gone.length === 1 ? "it" : "them"}. Add a link on the Sources page.`,
       "error",
       6000,
     );
@@ -5829,14 +5888,14 @@ function pkgHealth(item, details) {
   const other = deps.filter((d) => d.status === "other_version" && !d.offloaded).length;
   if (details && !details.readable) add("err", "error", "It can't be read: the file is damaged or isn't a package.");
   if (lib && item.damaged) {
-    add("err", "broken_image", `Damaged: ${item.damaged} failed its check.`, item.on_hub !== false ? "redownload" : null);
+    add("err", "broken_image", `Damaged: ${item.damaged} failed its check.`, "redownload");
   }
   if (missing) add("err", "link_off", `${pkgCount(missing, "dependency is", "dependencies are")} missing, so VaM will show errors when it loads.`, "find-deps");
   if (dbOnly) add("warn", "inventory_2", `${pkgCount(dbOnly, "dependency isn't", "dependencies aren't")} installed (only the database knows ${dbOnly === 1 ? "it" : "them"}).`, "find-deps");
   if (lib && item.offloaded) add("warn", "archive", "Offloaded: VaM doesn't load it until you restore it.", "restore");
   if (lib && item.disabled) add("warn", "power_settings_new", "Disabled: VaM doesn't load it.", "enable");
   if (offDeps) add("warn", "archive", `${pkgCount(offDeps, "dependency is", "dependencies are")} offloaded; restore ${offDeps === 1 ? "it" : "them"} so this works in VaM.`, "restore-deps");
-  if (lib && item.on_hub === false) add("warn", "cloud_off", "Not on the Hub: once deleted it can't be downloaded again. Keep a backup.");
+  if (lib && item.on_hub === false) add("warn", "cloud_off", "Not on the Hub: once deleted, only a saved source (Sources page) can bring it back. Keep a backup.");
   if (item.hub_update_version) add("info", "upgrade", `Version ${item.hub_update_version} is on the Hub.`, "hub-update");
   if (lib && item.newer_version) add("info", "history", "A newer version is in your library.");
   if (other) add("info", "swap_horiz", `${pkgCount(other, "dependency is", "dependencies are")} a different version than it asks for.`);
@@ -18408,11 +18467,6 @@ function libRunAction(action, trigger) {
     case "view-missing":
       setVarPackagesFilter("status", "missing");
       break;
-    case "find-missing":
-      libFindMissing(
-        (state.vpMissing?.items ?? []).filter((m) => m.status === "missing").map((m) => m.id),
-      );
-      break;
     case "refresh-missing":
       libLoadMissing();
       break;
@@ -18689,7 +18743,7 @@ function libContextMenu(event, item) {
         ...(item.offloaded
           ? []
           : [{ label: item.disabled ? "Enable" : "Disable…", action: () => libSetDisabled([item], !item.disabled) }]),
-        ...((item.damaged || !item.readable) && item.on_hub !== false
+        ...(item.damaged || !item.readable
           ? [{ label: "Redownload", action: () => libRedownload([item]) }]
           : []),
         ...(item.hub_update_version
@@ -18771,6 +18825,17 @@ function libHandleSharedClick(event) {
   if (addSource) {
     event.stopPropagation();
     sourceOpen({ packageId: addSource.getAttribute("data-lib-add-source") });
+    return true;
+  }
+  const getOne = target.closest?.("[data-get-id]");
+  if (getOne) {
+    event.stopPropagation();
+    getPackages([getOne.getAttribute("data-get-id")]);
+    return true;
+  }
+  if (target.closest?.("[data-lib-get-missing]")) {
+    event.stopPropagation();
+    getPackages(libMissingGettable(state.vpMissing?.items ?? []));
     return true;
   }
   const offload = target.closest?.("[data-lib-offload]");

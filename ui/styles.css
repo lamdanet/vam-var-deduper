@@ -6650,6 +6650,43 @@ input[type="text"]:disabled {
   color: var(--accent-danger);
 }
 
+/* VAR Packages, Missing view: where each can be downloaded from. */
+.lib-missing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.lib-missing-bar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lib-missing-bar .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.lib-missing-get {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lib-missing-get .get-src {
+  flex: 1 1 auto;
+}
+
+.lib-missing-get .lib-small-link {
+  flex: 0 0 auto;
+}
+
 .downloads-summary {
   padding: 8px 14px;
   border-bottom: 1px solid var(--line);
