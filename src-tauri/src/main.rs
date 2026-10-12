@@ -52,7 +52,7 @@ use crate::{
     offload::{plan_offload, start_offload_task},
     sources::{
         add_download_link, inspect_download_link, list_download_links, remove_download_link,
-        search_download_links, search_source_files, start_scan_source_links_task, check_archive_password,
+        search_download_links, search_source_files, list_source_updates, start_scan_source_links_task, check_archive_password,
     },
     packages::{
         delete_var_package, move_var_to_creator_folder,
@@ -206,6 +206,7 @@ fn main() {
             remove_download_link,
             search_download_links,
             search_source_files,
+            list_source_updates,
             start_scan_source_links_task,
             check_archive_password,
             inspect_vam_dir,

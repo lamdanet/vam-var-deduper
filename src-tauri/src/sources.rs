@@ -325,6 +325,40 @@ pub(crate) fn search_source_files(
     .map_err(|e| e.to_string())
 }
 
+/// Installed packages (`installed`: their ids) whose saved sources hold a
+/// newer version: one lookup per family on the existing family index, nothing
+/// stored. The newest saved version per family, its first link's file.
+#[tauri::command(async)]
+pub(crate) fn list_source_updates(
+    installed: Vec<String>,
+    db: State<'_, Db>,
+) -> Result<Vec<crate::models::SourceUpdate>, String> {
+    let mut have: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for id in &installed {
+        let id = id.trim().trim_end_matches(".var");
+        let Some(v) = crate::naming::package_version(id) else { continue };
+        let base = crate::naming::package_base(id).to_ascii_lowercase();
+        let e = have.entry(base).or_insert(0);
+        *e = (*e).max(v as i64);
+    }
+    let mut out = Vec::new();
+    for (base, mine) in have {
+        let links = crate::db::find_download_links(&db, &base).map_err(|e| e.to_string())?;
+        // Newest version first (find_download_links orders them so).
+        if let Some(top) = links.first().filter(|l| l.version.unwrap_or(0) > mine) {
+            out.push(crate::models::SourceUpdate {
+                base,
+                have: mine,
+                newest: top.version.unwrap_or(0),
+                filename: top.filename.clone(),
+                host: top.host.clone(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.base.cmp(&b.base));
+    Ok(out)
+}
+
 // ----------------------------------------------------------------------------
 // Scanning pasted text for links
 // ----------------------------------------------------------------------------

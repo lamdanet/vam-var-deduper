@@ -800,6 +800,19 @@ pub(crate) struct DownloadLinkRow {
     pub(crate) last_error: Option<String>,
 }
 
+/// An installed package whose saved sources hold a newer version.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SourceUpdate {
+    /// The family, lower case ("everlaster.naturalis").
+    pub(crate) base: String,
+    /// The newest version you have.
+    pub(crate) have: i64,
+    /// The newest version a saved link points at, and that file.
+    pub(crate) newest: i64,
+    pub(crate) filename: String,
+    pub(crate) host: String,
+}
+
 /// One file among the saved download links, with its links summed up (for
 /// "Get a package": a row per file, not per link).
 #[derive(Debug, Clone, Serialize)]
