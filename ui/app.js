@@ -4340,10 +4340,10 @@ function libUsedBySectionHtml(item, details) {
   const users = details.used_by ?? [];
   if (!users.length) return "";
   const rows = users.map(
-    (u) => `<button type="button" class="lib-user-row" data-lib-reveal="${escapeAttribute(u.file_path)}" data-lib-reveal-id="${escapeAttribute(u.package_id)}">
+    (u) => `<div class="lib-user-line"><button type="button" class="lib-user-row" data-lib-reveal="${escapeAttribute(u.file_path)}" data-lib-reveal-id="${escapeAttribute(u.package_id)}">
         <span class="lib-user-name">${escapeHtml(libTitle(u))}</span>
         <span class="lib-user-by">by ${escapeHtml(deriveCreatorFromPackageId(u.package_id) ?? "—")}</span>
-      </button>`,
+      </button>${hubLinkHtml(u.package_id)}</div>`,
   );
   return `
     <section class="lib-ds">
@@ -4564,6 +4564,15 @@ function libDetailHeaderHtml(item, details) {
         <button type="button" class="lib-btn lib-btn-accent lib-btn-full" data-lib-action="open-details" title="Its pictures, content, dependencies and files">
           <span class="material-symbols-outlined">space_dashboard</span>Open details
         </button>
+        ${
+          item.hub_resource_id
+            ? `<button type="button" class="lib-btn lib-btn-outline lib-btn-full" data-lib-action="view-hub" title="${
+                item.on_hub === false ? "This version isn't on the Hub: open the package's Hub page (its newest version)" : "Open its page in the Hub"
+              }">
+                <span class="material-symbols-outlined">explore</span>${item.on_hub === false ? "View on Hub (newer version)" : "View on Hub"}
+              </button>`
+            : ""
+        }
         <div class="lib-actions-row">
           <button type="button" class="lib-btn lib-btn-destructive" data-lib-action="delete">
             <span class="material-symbols-outlined">delete</span>Delete · ${escapeHtml(formatBytesLocal(item.size_bytes))}
@@ -4586,12 +4595,6 @@ function libDetailHeaderHtml(item, details) {
           <button type="button" class="lib-icon-btn" data-lib-action="explorer" title="Show in Explorer">
             <span class="material-symbols-outlined">folder_open</span>
           </button>
-          ${
-            item.hub_resource_id
-              ? `<button type="button" class="lib-icon-btn" data-lib-action="view-hub" title="View on Hub">
-                  <span class="material-symbols-outlined">explore</span></button>`
-              : ""
-          }
         </div>
         <p class="lib-aside" data-lib-frees="${escapeAttribute(item.file_path)}">${usedLine}</p>
         <p class="lib-aside lib-role-line">${

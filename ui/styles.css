@@ -21757,3 +21757,15 @@ button.vpx-seg:hover {
 .vp-col-actions .hub-link .material-symbols-outlined {
   font-size: 20px;
 }
+
+/* VAR Packages details, "Used by": the row, then its Hub button. */
+.lib-user-line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+}
+
+.lib-user-line .lib-user-row {
+  flex: 1 1 auto;
+}
