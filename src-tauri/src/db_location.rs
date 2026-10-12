@@ -41,6 +41,9 @@ struct Location {
 }
 
 fn location_file(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("VVD_DATA_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir).join(LOCATION_FILE));
+    }
     app.path().app_config_dir().ok().map(|d| d.join(LOCATION_FILE))
 }
 
@@ -59,8 +62,12 @@ fn write_location(app: &tauri::AppHandle, loc: &Location) -> Result<()> {
     fs::write(&path, serde_json::to_vec_pretty(loc)?).with_context(|| format!("failed to write {}", path.display()))
 }
 
-/// The default folder: the app's data folder.
+/// The default folder: the app's data folder (VVD_DATA_DIR stands in for it
+/// when testing a move, so the real database is never touched).
 pub(crate) fn default_dir(app: &tauri::AppHandle) -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("VVD_DATA_DIR").filter(|d| !d.is_empty()) {
+        return Ok(PathBuf::from(dir));
+    }
     app.path().app_data_dir().context("failed to resolve app data dir")
 }
 
@@ -158,7 +165,8 @@ pub(crate) fn start_move_database_task(
     let current = CURRENT.get().cloned().ok_or("the database isn't open yet")?;
     let default = default_dir(&app).map_err(|e| e.to_string())?;
     let dir = match target_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
-        Some(d) => PathBuf::from(d),
+        // Stored the way Windows writes paths, whichever slashes it came with.
+        Some(d) => PathBuf::from(d.replace('/', "\\")),
         None => default.clone(),
     };
     fs::create_dir_all(&dir).map_err(|e| format!("Couldn't use {}: {e}", dir.display()))?;
