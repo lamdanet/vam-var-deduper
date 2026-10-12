@@ -31,6 +31,15 @@ release time, it fills it with the commit messages since the last release.
   - The **Hub**'s search shows what your sources have that the Hub doesn't.
 
 ### Changed
+- **The database is about a third of its size, and faster**: each package
+  name and folder is now stored once instead of in every one of millions of
+  rows. A 1.9 GB index becomes about 0.6 GB with nothing lost (every row
+  checked). The first start after updating converts it once, in a minute or
+  two, in a small window that shows its progress; the old file is copied
+  aside first as `vam_var_deduper.before-lean.db` (delete it once you're
+  happy). Faster with it: Fix Missing's lookups by path (2.9 s to 0.06 s),
+  the Resource List's category counts, deep pages and name search (from
+  0.5 to 2 s down to a few hundredths)
 - **Clean and Fix show their progress**: while Run Fixes or Clean writes a
   package, the bar says what it's doing (backing up, writing, putting it in
   place), how much is done, how long it has run and about how long is left.
