@@ -773,6 +773,21 @@ body.sidebar-collapsed .app-sidebar {
   margin: 12px 4px;
 }
 
+/* Experimental pages (debug builds only): a small heading over them. */
+.sidebar-group-label {
+  margin: 0 0 6px;
+  padding: 0 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+body.sidebar-collapsed .sidebar-group-label {
+  display: none;
+}
+
 .sidebar-footer {
   flex: 0 0 auto;
   padding-top: 12px;
@@ -874,6 +889,9 @@ body.sidebar-collapsed .sidebar-user {
 @media (max-width: 900px) {
   .app-sidebar {
     width: 68px;
+  }
+  .sidebar-group-label {
+    display: none;
   }
   .app-sidebar .sidebar-user-text {
     display: none;
@@ -21595,4 +21613,25 @@ button.vpx-seg:hover {
   .toast {
     transform: none !important;
   }
+}
+
+/* Database → Resources: the Resource List's controls, filters and table. */
+.db-res {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.db-res.hidden {
+  display: none;
+}
+
+.db-res .resource-list-controls-row .resource-list-count {
+  align-self: center;
+  white-space: nowrap;
+}
+
+/* The Resources table (and its duplicates panel) needs the page's full width. */
+.build-db-view:has(#db-tab-panel-resources:not(.hidden)) {
+  max-width: none;
 }

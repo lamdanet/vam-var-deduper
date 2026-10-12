@@ -742,12 +742,14 @@ pub(crate) fn format_bytes_command(size: u64) -> String {
 }
 
 /// Settings > About: the version (Cargo.toml is the only place it's set) and
-/// the release notes, built into the exe so they match this build.
+/// the release notes, built into the exe so they match this build. `debug`:
+/// a debug build, which also lists the experimental pages.
 #[tauri::command]
 pub(crate) fn app_info() -> serde_json::Value {
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "changelog": include_str!("../../CHANGELOG.md"),
+        "debug": cfg!(debug_assertions),
     })
 }
 

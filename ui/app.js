@@ -9011,13 +9011,13 @@ function pkgMoreMenu(event) {
       : []),
     {
       label: "Send to",
-      submenu: [
+      submenu: sendToEntries([
         { label: "Clean VARs", action: () => sendVarToTargetPage("clean-vars", item.file_path) },
         { label: "Clean VARs, as the source", action: () => sendVarToTargetPage("clean-many", item.file_path) },
         { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", item.file_path) },
         { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", item.file_path) },
-        { label: "Dependency Usage", action: () => sendVarToTargetPage("dependency-usage", item.file_path) },
-      ],
+        { label: "Dependency Usage", page: "dependency-usage", action: () => sendVarToTargetPage("dependency-usage", item.file_path) },
+      ]),
     },
     { label: "Copy path", action: () => navigator.clipboard?.writeText(item.file_path).catch(() => {}) },
     { separator: true },
@@ -19967,13 +19967,13 @@ function libContextMenu(event, item) {
             ]),
         {
           label: "Send to",
-          submenu: [
+          submenu: sendToEntries([
             { label: "Clean VARs", action: () => sendVarToTargetPage("clean-vars", filePath) },
             { label: "Clean VARs, as the source", action: () => sendVarToTargetPage("clean-many", filePath) },
             { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", filePath) },
             { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", filePath) },
-            { label: "Dependency Usage", action: () => sendVarToTargetPage("dependency-usage", filePath) },
-          ],
+            { label: "Dependency Usage", page: "dependency-usage", action: () => sendVarToTargetPage("dependency-usage", filePath) },
+          ]),
         },
         { separator: true },
         { label: t("varPackagesImagesOpen"), action: () => vpImagesOpen(filePath) },
@@ -23872,9 +23872,31 @@ async function togglePackageFavorite(packageId) {
 // Package Explorer and the VAR Packages right-click menu. `page`:
 // "clean-vars" (made smaller) | "clean-many" (the source others use) |
 // "fix-missing" | "internalize-resources" | "dependency-usage".
+// Dependency Usage, Reclaim Space and Unique Resources are experimental:
+// only a debug build lists them (under "Experimental" in the sidebar, and in
+// the Send to menus). A release build never shows them.
+const EXPERIMENTAL_PAGES = new Set(["dependency-usage", "reclaim-space", "unique-resources"]);
+
+async function setupExperimentalPages() {
+  if (!invoke) return;
+  try {
+    const info = await invoke("app_info");
+    state.experimental = Boolean(info?.debug);
+  } catch (_e) {
+    state.experimental = false;
+  }
+  $("sidebar-experimental")?.classList.toggle("hidden", !state.experimental);
+}
+
+// A Send to menu's entries, without the experimental pages in a release build.
+function sendToEntries(entries) {
+  return entries.filter((e) => state.experimental || !EXPERIMENTAL_PAGES.has(e.page));
+}
+
 function sendVarToTargetPage(page, path) {
   const target = String(path || "").trim();
   if (!target) return;
+  if (EXPERIMENTAL_PAGES.has(page) && !state.experimental) return;
 
   if (page === "fix-missing" || page === "missing-resources") {
     fmOpen(target, { scan: true });
@@ -24363,19 +24385,23 @@ const dbPkgs = {
   sort: { key: "name", dir: "asc" },
 };
 
+// The Database page's tabs: Build, Packages, and Resources (every file the
+// database records; it was the Resource List page).
+const DB_TABS = ["build", "packages", "resources"];
+
 function setDatabaseTab(tab) {
-  dbPkgs.tab = tab === "packages" ? "packages" : "build";
+  dbPkgs.tab = DB_TABS.includes(tab) ? tab : "build";
   document.querySelectorAll("[data-db-tab]").forEach((btn) => {
     const on = btn.getAttribute("data-db-tab") === dbPkgs.tab;
     btn.classList.toggle("active", on);
     btn.setAttribute("aria-selected", String(on));
   });
-  $("db-tab-panel-build")?.classList.toggle("hidden", dbPkgs.tab !== "build");
-  $("db-tab-panel-packages")?.classList.toggle("hidden", dbPkgs.tab !== "packages");
+  for (const key of DB_TABS) $(`db-tab-panel-${key}`)?.classList.toggle("hidden", dbPkgs.tab !== key);
   if (dbPkgs.tab === "packages") {
     if (!dbPkgs.loadedOnce) dbPkgsLoadCreators();
     dbPkgsRefresh();
   }
+  if (dbPkgs.tab === "resources") window.__refreshResourceListView?.();
 }
 
 function dbPkgsVisible() {
@@ -24388,7 +24414,11 @@ function dbPkgsRefreshIfVisible() {
   if (dbPkgsVisible()) dbPkgsRefresh();
 }
 
-window.__refreshDatabasePackages = dbPkgsRefreshIfVisible;
+// On entering the Database page: refresh the tab that's open.
+window.__refreshDatabasePackages = () => {
+  dbPkgsRefreshIfVisible();
+  if (dbPkgs.tab === "resources") window.__refreshResourceListView?.();
+};
 
 function dbPkgsSerializeFilters() {
   const f = dbPkgs.filters;
@@ -28402,6 +28432,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDownloadLinksImport();
   setupDownloadsManager();
   hideIconLigatures(document);
+  setupExperimentalPages();
   setupSettingsTabs();
   setupDbLocation();
   setupSettingsAutosave();
@@ -29037,9 +29068,6 @@ window.addEventListener("DOMContentLoaded", async () => {
       const node = $(id);
       if (node) node.textContent = value;
     };
-    setText("sidebar-resource-list-label", t("resourceListNav"));
-    setText("resource-list-title", t("resourceListTitle"));
-    setText("resource-list-subtitle", t("resourceListSubtitle"));
     setText("resource-list-refresh-label", t("resourceListRefresh"));
     setText("resource-list-filter-bar-label", t("resourceListFiltersLabel") || t("varPackagesFiltersLabel"));
     setText("resource-list-filter-clear", t("resourceListFilterClearAll"));

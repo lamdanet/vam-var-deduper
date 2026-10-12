@@ -86,10 +86,6 @@
                 <span class="material-symbols-outlined">space_dashboard</span>
                 <span class="sidebar-label">Package Explorer</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="resource-list">
-                <span class="material-symbols-outlined">data_object</span>
-                <span class="sidebar-label" id="sidebar-resource-list-label">Resource List</span>
-              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="fix-missing">
                 <span class="material-symbols-outlined">healing</span>
                 <span class="sidebar-label">Fix Missing</span>
@@ -98,19 +94,27 @@
                 <span class="material-symbols-outlined">download_for_offline</span>
                 <span class="sidebar-label">Internalize Resources</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="dependency-usage">
-                <span class="material-symbols-outlined">donut_small</span>
-                <span class="sidebar-label">Dependency Usage</span>
-              </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="reclaim-space">
-                <span class="material-symbols-outlined">savings</span>
-                <span class="sidebar-label">Reclaim Space</span>
-              </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="unique-resources">
-                <span class="material-symbols-outlined">category</span>
-                <span class="sidebar-label">Unique Resources</span>
-              </a>
             </nav>
+            <!-- Experimental pages: shown in debug builds only (app.js,
+                 setupExperimentalPages); a release build never lists them. -->
+            <div id="sidebar-experimental" class="sidebar-experimental hidden">
+              <div class="sidebar-divider"></div>
+              <p class="sidebar-group-label">Experimental</p>
+              <nav class="sidebar-nav" aria-label="Experimental">
+                <a class="sidebar-link" href="#" data-sidebar-link="dependency-usage">
+                  <span class="material-symbols-outlined">donut_small</span>
+                  <span class="sidebar-label">Dependency Usage</span>
+                </a>
+                <a class="sidebar-link" href="#" data-sidebar-link="reclaim-space">
+                  <span class="material-symbols-outlined">savings</span>
+                  <span class="sidebar-label">Reclaim Space</span>
+                </a>
+                <a class="sidebar-link" href="#" data-sidebar-link="unique-resources">
+                  <span class="material-symbols-outlined">category</span>
+                  <span class="sidebar-label">Unique Resources</span>
+                </a>
+              </nav>
+            </div>
             <div class="sidebar-divider"></div>
             <nav class="sidebar-nav">
               <a class="sidebar-link" href="#" data-sidebar-link="settings">
@@ -140,6 +144,10 @@
           <button id="db-tab-packages" class="mode-button" type="button" role="tab" aria-selected="false" data-db-tab="packages">
             <span class="material-symbols-outlined">database</span>
             <span>Packages</span>
+          </button>
+          <button id="db-tab-resources" class="mode-button" type="button" role="tab" aria-selected="false" data-db-tab="resources">
+            <span class="material-symbols-outlined">data_object</span>
+            <span>Resources</span>
           </button>
         </div>
 
@@ -521,6 +529,117 @@
               <div class="var-packages-pagination-controls" id="db-pkgs-pagination-controls"></div>
             </div>
           </article>
+        </div>
+        <!-- Resources tab: every file the database records, across all
+             packages (it was the Resource List page). -->
+        <div id="db-tab-panel-resources" class="db-tab-panel db-res hidden">
+        <article class="card resource-list-controls">
+          <div class="resource-list-controls-row">
+            <span class="resource-list-count" id="resource-list-count">0 Resources</span>
+            <button id="resource-list-refresh-button" class="primary-button" type="button">
+              <span class="material-symbols-outlined">sync</span>
+              <span id="resource-list-refresh-label">Refresh</span>
+            </button>
+            <div class="resource-list-search">
+              <span class="material-symbols-outlined input-leading-icon">search</span>
+              <input
+                id="resource-list-filter"
+                type="search"
+                placeholder="Search by package prefix or CRC32 (8 hex)…"
+              />
+              <button id="resource-list-filter-button" class="primary-button" type="button">
+                <span class="material-symbols-outlined">search</span>
+                <span id="resource-list-filter-button-label">Search</span>
+              </button>
+              <button id="resource-list-filter-clear-button" class="ghost-button hidden" type="button">
+                <span id="resource-list-filter-clear-button-label">Clear</span>
+              </button>
+            </div>
+          </div>
+        </article>
+
+        <div class="resource-list-filter-bar" id="resource-list-filter-bar">
+          <span class="rl-filter-label" id="resource-list-filter-bar-label">Filters:</span>
+          <div class="rl-filter-buttons">
+            <div class="rl-filter-dropdown" data-rl-filter="category">
+              <button type="button" class="rl-filter-chip rl-filter-trigger" data-rl-trigger="category">
+                <span class="rl-filter-chip-label" id="resource-list-filter-category-label">Category: All</span>
+                <span class="material-symbols-outlined rl-filter-chevron">expand_more</span>
+              </button>
+              <div class="rl-filter-menu rl-filter-menu-search hidden" data-rl-menu="category" role="menu">
+                <input type="text" class="rl-filter-menu-search-input" data-rl-menu-search="category" placeholder="Search…" />
+                <div class="rl-filter-menu-list" data-rl-menu-list="category"></div>
+              </div>
+            </div>
+            <div class="rl-filter-dropdown" data-rl-filter="size">
+              <button type="button" class="rl-filter-chip rl-filter-trigger" data-rl-trigger="size">
+                <span class="rl-filter-chip-label" id="resource-list-filter-size-label">Size: All</span>
+                <span class="material-symbols-outlined rl-filter-chevron">expand_more</span>
+              </button>
+              <div class="rl-filter-menu hidden" data-rl-menu="size" role="menu"></div>
+            </div>
+            <button type="button" class="rl-filter-clear hidden" id="resource-list-filter-clear">Clear All</button>
+          </div>
+        </div>
+
+        <div class="resource-list-body" id="resource-list-body">
+          <article class="card resource-list-table-card">
+            <div id="resource-list-progress" class="resource-list-progress hidden" aria-hidden="true">
+              <div class="resource-list-progress-bar"></div>
+            </div>
+            <div class="resource-list-table-wrap">
+              <table class="resource-list-table">
+                <thead>
+                  <tr>
+                    <th class="rl-col-icon" id="resource-list-th-icon">Type</th>
+                    <th class="rl-col-name" id="resource-list-th-name">Resource</th>
+                    <th class="rl-col-cat" id="resource-list-th-category">Category</th>
+                    <th class="rl-col-crc" id="resource-list-th-crc">CRC32</th>
+                    <th class="rl-col-package" id="resource-list-th-package">Package</th>
+                    <th class="rl-col-size" id="resource-list-th-size">Size</th>
+                  </tr>
+                </thead>
+                <tbody id="resource-list-tbody">
+                  <tr class="resource-list-empty-row">
+                    <td colspan="6" id="resource-list-empty">
+                      No resources indexed. Build the database first.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="resource-list-pagination" class="resource-list-pagination hidden">
+              <span class="resource-list-pagination-summary" id="resource-list-pagination-summary"></span>
+              <div class="resource-list-pagination-controls" id="resource-list-pagination-controls"></div>
+            </div>
+          </article>
+
+          <article id="resource-list-side-panel" class="card resource-list-side-panel hidden">
+            <header class="resource-list-side-head">
+              <div class="resource-list-side-title-row">
+                <h3 id="resource-list-side-title">Appears In</h3>
+                <button
+                  type="button"
+                  class="icon-button resource-list-side-close"
+                  id="resource-list-side-close"
+                  aria-label="Close"
+                >
+                  <span class="material-symbols-outlined">close</span>
+                </button>
+              </div>
+              <p class="resource-list-side-subtitle" id="resource-list-side-subtitle">
+                Every package containing this hash.
+              </p>
+              <div class="resource-list-side-meta" id="resource-list-side-meta"></div>
+            </header>
+            <div class="resource-list-side-body" id="resource-list-side-body">
+              <p class="resource-list-side-empty" id="resource-list-side-empty">
+                Select a row to inspect duplicates.
+              </p>
+              <ul class="resource-list-side-list" id="resource-list-side-list"></ul>
+            </div>
+          </article>
+        </div>
         </div>
       </section>
 
@@ -1259,127 +1378,6 @@
             </div>
           </article>
         </section>
-      </section>
-
-      <!-- Resource List View (hidden by default; revealed by sidebar Resource List link) -->
-      <section id="resource-list-view" class="app-main resource-list-view hidden">
-        <header class="resource-list-header">
-          <div class="resource-list-title-row">
-            <h1 class="resource-list-title" id="resource-list-title">Resource List</h1>
-            <span class="resource-list-count" id="resource-list-count">0 Resources</span>
-          </div>
-          <p class="resource-list-subtitle" id="resource-list-subtitle">
-            Browse every indexed file across your local database. Sort, filter, and inspect
-            duplicates without picking a single package first.
-          </p>
-        </header>
-
-        <article class="card resource-list-controls">
-          <div class="resource-list-controls-row">
-            <button id="resource-list-refresh-button" class="primary-button" type="button">
-              <span class="material-symbols-outlined">sync</span>
-              <span id="resource-list-refresh-label">Refresh</span>
-            </button>
-            <div class="resource-list-search">
-              <span class="material-symbols-outlined input-leading-icon">search</span>
-              <input
-                id="resource-list-filter"
-                type="search"
-                placeholder="Search by package prefix or CRC32 (8 hex)…"
-              />
-              <button id="resource-list-filter-button" class="primary-button" type="button">
-                <span class="material-symbols-outlined">search</span>
-                <span id="resource-list-filter-button-label">Search</span>
-              </button>
-              <button id="resource-list-filter-clear-button" class="ghost-button hidden" type="button">
-                <span id="resource-list-filter-clear-button-label">Clear</span>
-              </button>
-            </div>
-          </div>
-        </article>
-
-        <div class="resource-list-filter-bar" id="resource-list-filter-bar">
-          <span class="rl-filter-label" id="resource-list-filter-bar-label">Filters:</span>
-          <div class="rl-filter-buttons">
-            <div class="rl-filter-dropdown" data-rl-filter="category">
-              <button type="button" class="rl-filter-chip rl-filter-trigger" data-rl-trigger="category">
-                <span class="rl-filter-chip-label" id="resource-list-filter-category-label">Category: All</span>
-                <span class="material-symbols-outlined rl-filter-chevron">expand_more</span>
-              </button>
-              <div class="rl-filter-menu rl-filter-menu-search hidden" data-rl-menu="category" role="menu">
-                <input type="text" class="rl-filter-menu-search-input" data-rl-menu-search="category" placeholder="Search…" />
-                <div class="rl-filter-menu-list" data-rl-menu-list="category"></div>
-              </div>
-            </div>
-            <div class="rl-filter-dropdown" data-rl-filter="size">
-              <button type="button" class="rl-filter-chip rl-filter-trigger" data-rl-trigger="size">
-                <span class="rl-filter-chip-label" id="resource-list-filter-size-label">Size: All</span>
-                <span class="material-symbols-outlined rl-filter-chevron">expand_more</span>
-              </button>
-              <div class="rl-filter-menu hidden" data-rl-menu="size" role="menu"></div>
-            </div>
-            <button type="button" class="rl-filter-clear hidden" id="resource-list-filter-clear">Clear All</button>
-          </div>
-        </div>
-
-        <div class="resource-list-body" id="resource-list-body">
-          <article class="card resource-list-table-card">
-            <div id="resource-list-progress" class="resource-list-progress hidden" aria-hidden="true">
-              <div class="resource-list-progress-bar"></div>
-            </div>
-            <div class="resource-list-table-wrap">
-              <table class="resource-list-table">
-                <thead>
-                  <tr>
-                    <th class="rl-col-icon" id="resource-list-th-icon">Type</th>
-                    <th class="rl-col-name" id="resource-list-th-name">Resource</th>
-                    <th class="rl-col-cat" id="resource-list-th-category">Category</th>
-                    <th class="rl-col-crc" id="resource-list-th-crc">CRC32</th>
-                    <th class="rl-col-package" id="resource-list-th-package">Package</th>
-                    <th class="rl-col-size" id="resource-list-th-size">Size</th>
-                  </tr>
-                </thead>
-                <tbody id="resource-list-tbody">
-                  <tr class="resource-list-empty-row">
-                    <td colspan="6" id="resource-list-empty">
-                      No resources indexed. Build the database first.
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div id="resource-list-pagination" class="resource-list-pagination hidden">
-              <span class="resource-list-pagination-summary" id="resource-list-pagination-summary"></span>
-              <div class="resource-list-pagination-controls" id="resource-list-pagination-controls"></div>
-            </div>
-          </article>
-
-          <article id="resource-list-side-panel" class="card resource-list-side-panel hidden">
-            <header class="resource-list-side-head">
-              <div class="resource-list-side-title-row">
-                <h3 id="resource-list-side-title">Appears In</h3>
-                <button
-                  type="button"
-                  class="icon-button resource-list-side-close"
-                  id="resource-list-side-close"
-                  aria-label="Close"
-                >
-                  <span class="material-symbols-outlined">close</span>
-                </button>
-              </div>
-              <p class="resource-list-side-subtitle" id="resource-list-side-subtitle">
-                Every package containing this hash.
-              </p>
-              <div class="resource-list-side-meta" id="resource-list-side-meta"></div>
-            </header>
-            <div class="resource-list-side-body" id="resource-list-side-body">
-              <p class="resource-list-side-empty" id="resource-list-side-empty">
-                Select a row to inspect duplicates.
-              </p>
-              <ul class="resource-list-side-list" id="resource-list-side-list"></ul>
-            </div>
-          </article>
-        </div>
       </section>
 
       <!-- Internalize Resources: copy the files a package uses from other
@@ -2428,11 +2426,10 @@
             var settings = document.getElementById("settings-view");
             var buildDb = document.getElementById("build-db-view");
             var varPackages = document.getElementById("var-packages-view");
-            var resourceList = document.getElementById("resource-list-view");
             var reclaim = document.getElementById("reclaim-space-view");
             var uniqueResources = document.getElementById("unique-resources-view");
             var internalizeResources = document.getElementById("internalize-resources-view");
-            if (!settings || !buildDb || !varPackages || !resourceList || !reclaim || !uniqueResources || !internalizeResources) return;
+            if (!settings || !buildDb || !varPackages || !reclaim || !uniqueResources || !internalizeResources) return;
             // Hub (after VaM Backstage's Hub page) is hidden with the rest.
             var hubView = document.getElementById("hub-view");
             if (hubView) hubView.classList.add("hidden");
@@ -2449,7 +2446,6 @@
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
-            resourceList.classList.add("hidden");
             reclaim.classList.add("hidden");
             uniqueResources.classList.add("hidden");
             internalizeResources.classList.add("hidden");
@@ -2481,9 +2477,6 @@
             } else if (route === "var-packages") {
               varPackages.classList.remove("hidden");
               if (window.__refreshVarPackagesView) window.__refreshVarPackagesView();
-            } else if (route === "resource-list") {
-              resourceList.classList.remove("hidden");
-              if (window.__refreshResourceListView) window.__refreshResourceListView();
             } else if (route === "reclaim-space") {
               reclaim.classList.remove("hidden");
               if (window.__refreshReclaimSpaceView) window.__refreshReclaimSpaceView();
