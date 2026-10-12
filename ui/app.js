@@ -4939,7 +4939,7 @@ async function libHubUpdate(items) {
       nest: false,
       label: `${hit.filename} (update)`,
       priority: "direct",
-      autoDeps: true,
+      autoDeps: false,
       onDone: (status) => {
         if (status === "done") {
           addLog(`Updated ${it.package_id} → ${stem}`);
@@ -9369,7 +9369,7 @@ async function fmDownload(pkgId) {
     host: a.host,
     destDir,
     label: a.filename,
-    autoDeps: true,
+    autoDeps: false,
     onDone: (status) => {
       if (token !== FM.token) return;
       const ok = status === "done" || status === "exists";
@@ -22914,7 +22914,7 @@ async function depDownloadOne(pkg, dest) {
     destDir,
     label: it.filename || pkg,
     priority: "dependency",
-    autoDeps: true,
+    autoDeps: false,
     onProgress: depScanSyncJob,
     onDone: (status, info) => {
       const row = DEP_SCAN.items.find((x) => x.pkg === pkg);
@@ -25857,22 +25857,24 @@ function hubActionHtml(r, { big = false, compact = false } = {}) {
         return `<button type="button" class="${cls} hub-btn-install" data-hub-act="download" data-hub-rid="${rid}">
           <span class="material-symbols-outlined">download</span><span class="hub-btn-text">Download</span></button>`;
       }
-      // Details panel: Download All (the package + its missing dependencies)
-      // in one click, plus the picker beside it to choose files instead.
+      // Details panel: Download is the package alone. Its missing
+      // dependencies are an option beside it (+ N), and the picker chooses
+      // files.
       const detail = HUB.details.get(String(r.resource_id));
       const missing = detail ? hubMissingDeps(detail) : [];
-      const size = detail ? hubFilesSize(detail) + missing.reduce((sum, d) => sum + d.size, 0) : 0;
-      const label = missing.length ? `Download All` : "Download";
-      const title = missing.length
-        ? `The package and its ${missing.length} missing ${missing.length === 1 ? "dependency" : "dependencies"}`
-        : "Download the package";
-      const main = `<button type="button" class="${cls} hub-btn-install" data-hub-act="download-all" data-hub-rid="${rid}" title="${escapeAttribute(title)}">
-          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">${label}${
-            size ? ` · ${escapeHtml(formatBytesLocal(size))}` : ""
-          }</span></button>`;
+      const size = detail ? hubFilesSize(detail) : 0;
+      const depsSize = missing.reduce((sum, d) => sum + d.size, 0);
+      const main = `<button type="button" class="${cls} hub-btn-install" data-hub-act="download-one" data-hub-rid="${rid}" title="Download the package (not its dependencies)">
+          <span class="material-symbols-outlined">download</span><span class="hub-btn-text">Download${size ? ` · ${escapeHtml(formatBytesLocal(size))}` : ""}</span></button>`;
+      const withDeps = missing.length
+        ? `<button type="button" class="lib-btn lib-btn-outline hub-btn-deps" data-hub-act="download-all" data-hub-rid="${rid}"
+             aria-label="Download with its ${missing.length} missing ${missing.length === 1 ? "dependency" : "dependencies"}"
+             title="${escapeAttribute(`Download with dependencies: the package and its ${missing.length} missing ${missing.length === 1 ? "dependency" : "dependencies"}${depsSize ? ` (${formatBytesLocal(depsSize)} more)` : ""}, and what they need in turn`)}">
+             <span class="material-symbols-outlined">account_tree</span>+ ${missing.length}</button>`
+        : "";
       const deps = detail ? hubDependencyList(detail).length : 0;
       if (!deps) return main;
-      return `<div class="hub-btn-row">${main}<button type="button" class="lib-btn lib-btn-outline hub-btn-pick" data-hub-act="download" data-hub-rid="${rid}" title="Choose what to download">
+      return `<div class="hub-btn-row">${main}${withDeps}<button type="button" class="lib-btn lib-btn-outline hub-btn-pick" data-hub-act="download" data-hub-rid="${rid}" title="Choose what to download">
           <span class="material-symbols-outlined">checklist</span></button></div>`;
     }
   }
@@ -26093,13 +26095,14 @@ function hubDependencyList(detail) {
   return out;
 }
 
-// Dependencies Download All fetches: not on disk in any version (one that is
-// already has VaM fall back to it), and with a source to download from.
+// The dependencies "+ N dependencies" fetches: not on disk in any version (one
+// that is already has VaM fall back to it), and with a source to download from.
 function hubMissingDeps(detail) {
   return hubDependencyList(detail).filter((d) => !d.installed && d.resolution !== "fallback" && (d.url || d.packageName));
 }
 
-// The package's own files plus every missing dependency, no picker.
+// With dependencies (the option beside Download): the package's own files
+// plus every missing dependency, and what those need in turn, no picker.
 async function hubDownloadAll(rid) {
   try {
     const detail = await hubGetDetail(String(rid));
@@ -26542,7 +26545,7 @@ async function hubOnPageDownload(event) {
     nest: false,
     label: stem,
     priority: dep ? "dependency" : "direct",
-    autoDeps: true,
+    autoDeps: false,
     depsDir: rid ? hubJoinPath(hubResourceDir(rid, baseDir), "deps") : destDir,
     onDone: (status) => {
       if (status !== "done") return;
@@ -27154,6 +27157,7 @@ function hubRunAction(btn) {
   const r = HUB.details.get(rid) || HUB.rows.get(rid) || HUB.wishlist.get(rid)?.snapshot;
   if (!r) return;
   if (act === "download") hubOpenDownloadPicker(rid);
+  else if (act === "download-one") hubDownload(rid, { files: null });
   else if (act === "download-all") hubDownloadAll(rid);
   else if (act === "cancel") hubCancelDownloads(rid);
   else if (act === "library") hubShowInLibrary(r);

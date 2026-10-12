@@ -11803,6 +11803,19 @@ button.lib-dep-ref:hover {
   flex: 1 1 auto;
 }
 
+/* Hub details: the option to download the package's dependencies too. */
+.lib-btn.hub-btn-deps {
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.lib-btn.hub-btn-deps .material-symbols-outlined {
+  font-size: 16px;
+}
+
 .lib-btn.hub-btn-pick {
   flex: 0 0 auto;
   width: 36px;
