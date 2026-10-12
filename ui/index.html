@@ -231,12 +231,13 @@
           </div>
         </article>
 
-        <!-- Download Links (Pixeldrain / MediaFire mirror DB) -->
-        <article class="card build-db-card">
+        <!-- Download Links (Pixeldrain / MediaFire mirror lists): shown on the
+             Sources page, Add by hand tab (app.js moves it there). -->
+        <article class="card build-db-card hidden" id="dl-links-card">
           <div class="build-db-card-head build-db-card-head-split">
             <div class="build-db-card-head-left">
               <span class="material-symbols-outlined build-db-card-icon">link</span>
-              <h3 class="build-db-card-title">Download Links</h3>
+              <h3 class="build-db-card-title">Import a list</h3>
             </div>
             <div class="build-db-status-pill">
               <span id="dl-links-count">0</span>&nbsp;<span>links</span>
@@ -244,10 +245,9 @@
           </div>
           <div class="build-db-card-body">
             <p class="reclaim-help">
-              Import community Pixeldrain / MediaFire mirror lists so Find Dependencies / Scan Dependencies
-              can find sources for packages that aren't on the VaM Hub. Point at a <code>_Download_Links</code> folder (one
-              <code>.txt</code> per creator) or a single text file of
-              <code>Creator.Package.N.var&nbsp;&nbsp;https://…</code> lines.
+              Import community Pixeldrain / MediaFire mirror lists, so every page can download packages that aren't on
+              the VaM Hub. Point at a <code>_Download_Links</code> folder (one <code>.txt</code> per creator) or a single
+              text file of <code>Creator.Package.N.var&nbsp;&nbsp;https://…</code> lines.
             </p>
             <div class="build-db-field">
               <label class="build-db-field-label" for="dl-links-folder">Links folder</label>
@@ -278,7 +278,7 @@
             <div class="build-db-actions-row">
               <p class="reclaim-help" id="dl-links-status"></p>
               <button id="dl-links-clear" class="ghost-button" type="button">
-                <span class="material-symbols-outlined">delete</span><span>Clear links</span>
+                <span class="material-symbols-outlined">delete</span><span>Forget all links…</span>
               </button>
             </div>
             <div id="dl-links-progress" class="build-db-progress hidden">

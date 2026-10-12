@@ -1490,7 +1490,7 @@ function getSourceLineHtml(id, info) {
   if (!info.download_url) {
     return info.error
       ? `<span class="get-src is-none" title="${escapeAttribute(info.error)}"><span class="material-symbols-outlined">cloud_off</span>Couldn't reach the Hub, and no saved source</span>`
-      : `<span class="get-src is-none"><span class="material-symbols-outlined">block</span>No source: add a link on the Sources page</span>`;
+      : `<span class="get-src is-none"><span class="material-symbols-outlined">block</span>No source: <button type="button" class="get-addlink" data-get-addlink="${escapeAttribute(id)}" title="Open Sources, Add by hand, with its name filled in">add a link</button></span>`;
   }
   const got = String(info.filename || "").replace(/\.var$/i, "");
   const want = getVersionOf(id);
@@ -1574,6 +1574,16 @@ async function getPackages(ids, { onDone = null, replace = false } = {}) {
   if (queued) showToast(`${pkgCount(queued, "download", "downloads")} queued into AddonPackages`, "success");
   getRenderPanel();
   return queued;
+}
+
+// Opens the Downloads panel with `id` typed in its box (Sources' Get it).
+function getOpenWith(id) {
+  if (!$("downloads-popover")?.classList.contains("open")) window.__toggleDownloads?.();
+  const input = $("get-input");
+  if (!input) return;
+  input.value = id;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.focus();
 }
 
 // Pages that show what you have, after a Get landed.
@@ -1725,6 +1735,11 @@ function setupGetPackage() {
     if (open) {
       closeDownloadsPanel();
       return void pkgOpen({ package_id: open.getAttribute("data-get-open") });
+    }
+    const addLink = e.target.closest?.("[data-get-addlink]");
+    if (addLink) {
+      closeDownloadsPanel();
+      return void sourcesAddByHand(addLink.getAttribute("data-get-addlink"));
     }
     const one = e.target.closest?.("[data-get-id]");
     if (one) return void getPackages([one.getAttribute("data-get-id")]);
@@ -2134,7 +2149,7 @@ window.__refreshBuildDbStats = () => {
 };
 
 // ============================================================
-// Build Database → Download Links importer
+// Download Links importer (Sources → Add by hand; was on the Database page)
 // ============================================================
 
 function refreshDownloadLinksCount() {
@@ -2142,7 +2157,10 @@ function refreshDownloadLinksCount() {
   invoke("get_download_links_count")
     .then((n) => {
       const el = $("dl-links-count");
-      if (el) el.textContent = String(n ?? 0);
+      if (el) {
+        el.dataset.n = String(n ?? 0);
+        el.textContent = Number(n ?? 0).toLocaleString();
+      }
     })
     .catch(() => {});
 }
@@ -2254,6 +2272,11 @@ function setupDownloadLinksImport() {
   if (clearBtn) {
     clearBtn.addEventListener("click", async () => {
       if (!invoke) return;
+      const n = Number($("dl-links-count")?.dataset.n || 0);
+      const ok = await showAppConfirm(
+        `Forget all ${n ? n.toLocaleString() + " " : ""}saved download links? Every page stops downloading from them; this can't be undone.`,
+      );
+      if (!ok) return;
       try {
         await invoke("clear_download_links");
         setStatus("Cleared all imported links.");
@@ -16613,6 +16636,12 @@ function setupExtract() {
 const SRC = {
   packageId: "",
   onSaved: null,
+  // The form lives in the window, or in Sources' Add by hand tab (moved, not
+  // copied: one form, its listeners and ids).
+  card: null,
+  importCard: null,
+  inTab: false,
+  existingTimer: null,
   token: 0,
   inspectTimer: null,
   info: null,
@@ -16764,6 +16793,19 @@ function linkHealthHtml(link) {
   return "";
 }
 
+// In the tab (no package given), the package is the file named: its saved
+// links show above the form.
+function srcFollowFileName() {
+  if (!SRC.inTab) return;
+  clearTimeout(SRC.existingTimer);
+  SRC.existingTimer = setTimeout(() => {
+    const name = ($("src-file")?.value || "").trim().replace(/\.var$/i, "");
+    SRC.packageId = /\.\d+$/.test(name) ? name : "";
+    if (SRC.packageId) srcRenderExisting();
+    else $("src-existing")?.classList.add("hidden");
+  }, 300);
+}
+
 function srcSetError(msg) {
   vpSetText("src-error", msg || "");
 }
@@ -16852,6 +16894,7 @@ function srcInspectSoon() {
     if (file && info?.filename && (SRC.fileAuto || !file.value.trim())) {
       file.value = info.filename;
       SRC.fileAuto = true;
+      srcFollowFileName();
     }
     if (info?.folder_files?.length) {
       SRC.folderFiles = info.folder_files;
@@ -16864,12 +16907,62 @@ function srcInspectSoon() {
   }, 450);
 }
 
+// Moves the form into the window ("modal") or Sources' Add by hand tab ("tab").
+function srcDock(where) {
+  SRC.card = SRC.card ?? document.querySelector(".src-card");
+  const card = SRC.card;
+  if (!card) return;
+  if (where === "tab") {
+    const slot = $("sources-add-slot");
+    if (!slot) return;
+    slot.appendChild(card);
+    SRC.inTab = true;
+    srcReset({ packageId: "" });
+  } else {
+    $("src-backdrop")?.appendChild(card);
+    SRC.inTab = false;
+  }
+}
+
+// Empties the form for a package ("" in the tab: any package).
+function srcReset({ packageId = "", fileName = "", onSaved = null } = {}) {
+  const id = String(packageId || "").trim().replace(/\.var$/i, "");
+  SRC.packageId = id;
+  SRC.onSaved = onSaved;
+  SRC.info = null;
+  SRC.folderFiles = null;
+  SRC.folderPick = -1;
+  srcRenderFolder();
+  SRC.token += 1;
+  const versioned = /\.\d+$/.test(id);
+  vpSetText(
+    "src-sub",
+    !id
+      ? "For any package: paste its link, and the file name fills itself when the host says it."
+      : versioned
+        ? `For ${id}`
+        : `For ${srcFamily(id)} (any version — name the exact file below)`,
+  );
+  const url = $("src-url");
+  if (url) url.value = "";
+  const file = $("src-file");
+  if (file) file.value = fileName || (versioned ? `${id}.var` : "");
+  // A prefill is only a guess: the file name the link turns out to serve
+  // replaces it, until the user types their own.
+  SRC.fileAuto = true;
+  srcSetError("");
+  srcRenderInfo();
+  $("src-existing")?.classList.add("hidden");
+  if (id) srcRenderExisting();
+}
+
 // Opens the dialog for one package. `onSaved(row)` runs after a link is saved
 // (Scan Dependencies uses it to make the row downloadable at once).
 async function sourceOpen({ packageId, fileName = "", onSaved = null }) {
   if (!invoke) return;
   const id = String(packageId || "").trim().replace(/\.var$/i, "");
   if (!id) return;
+  srcDock("modal");
   SRC.packageId = id;
   SRC.onSaved = onSaved;
   SRC.info = null;
@@ -16900,6 +16993,12 @@ async function sourceOpen({ packageId, fileName = "", onSaved = null }) {
 function sourceClose() {
   SRC.token += 1;
   clearTimeout(SRC.inspectTimer);
+  // In the tab the form stays, empty for the next link.
+  if (SRC.inTab) {
+    srcReset({ packageId: "" });
+    sourcesLoadSaved();
+    return;
+  }
   $("src-backdrop")?.classList.add("hidden");
 }
 
@@ -17072,6 +17171,7 @@ function setupSources() {
   $("src-file")?.addEventListener("input", () => {
     SRC.fileAuto = false;
     srcSetError("");
+    srcFollowFileName();
   });
   for (const id of ["src-url", "src-file"]) {
     $(id)?.addEventListener("keydown", (e) => {
@@ -17152,6 +17252,14 @@ const SOURCES = {
   savedLoading: false,
   savedSel: null,
   savedTimer: null,
+  // "all" | "failing" (only links whose last download failed), and how many fail.
+  savedFilter: "all",
+  savedFailing: 0,
+  // Files (lower case) ticked to forget.
+  savedTicked: new Set(),
+  forgetting: false,
+  // Add by hand: the package it was opened for.
+  addFor: "",
   // File name (lower case) -> { loading, rows, error }: every link saved for it.
   links: new Map(),
 };
@@ -17164,7 +17272,8 @@ function sourcesView() {
 }
 
 function sourcesMode() {
-  return fmStoreGet(SOURCES_MODE, "find") === "saved" ? "saved" : "find";
+  const mode = fmStoreGet(SOURCES_MODE, "find");
+  return mode === "saved" || mode === "add" ? mode : "find";
 }
 
 function sourcesStem(filename) {
@@ -17314,12 +17423,12 @@ function sourcesModesHtml() {
   const total = SOURCES.savedTotal;
   const tab = (k, icon, title, sub) => `<button type="button" role="tab" class="cv-mode${mode === k ? " is-active" : ""}" aria-selected="${mode === k}" data-sources-mode="${k}">
       <span class="material-symbols-outlined">${icon}</span><span class="cv-mode-text"><b>${title}</b><small>${sub}</small></span></button>`;
-  return `<nav class="cv-modes" role="tablist" aria-label="Sources">${tab("find", "travel_explore", "Find in a post", "Paste a post or links; save the .var files they hold")}${tab(
+  return `<nav class="cv-modes sources-modes" role="tablist" aria-label="Sources">${tab("find", "travel_explore", "Find in a post", "Paste a post or links; save the .var files they hold")}${tab(
     "saved",
     "bookmarks",
     "Saved sources",
     total ? `${pkgCount(total, "link", "links")} downloads can use` : "The links downloads use",
-  )}</nav>`;
+  )}${tab("add", "add_link", "Add by hand", "One link, or import a list of links")}</nav>`;
 }
 
 function sourcesRender() {
@@ -17327,6 +17436,10 @@ function sourcesRender() {
   if (!view) return;
   if (sourcesMode() === "saved") {
     sourcesRenderSavedPage();
+    return;
+  }
+  if (sourcesMode() === "add") {
+    sourcesRenderAddPage();
     return;
   }
   view.innerHTML = `${sourcesModesHtml()}
@@ -17854,7 +17967,7 @@ function sourcesFitPanel() {
   card.classList.toggle("is-open", Boolean(sel) && SOURCES.sheetOpen);
   card.classList.toggle("is-empty", !sel);
   const grid = view.querySelector(".sources-grid");
-  const bar = saved ? null : $("sources-bar");
+  const bar = $(saved ? "sources-saved-bar" : "sources-bar");
   const barH = bar && !bar.classList.contains("hidden") ? Math.round(bar.getBoundingClientRect().height) + 12 : 0;
   const pos = getComputedStyle(card).position;
   if (pos === "fixed") {
@@ -18172,13 +18285,15 @@ function sourcesRenderSavedPage() {
               </div>
             </div>
             <p class="panel-subtitle" id="sources-saved-subtitle"></p>
+            <div class="fm-list-tools" id="sources-saved-tools"></div>
           </div>
         </div>
         <div id="sources-saved-list" class="group-list" role="list" aria-label="Saved sources"></div>
         <div id="sources-saved-foot"></div>
       </article>
       <article class="panel card fm-detail-card sources-detail-card" id="sources-saved-detail"></article>
-    </section>`;
+    </section>
+    <div class="cm-bar sources-bar hidden" id="sources-saved-bar"></div>`;
   $("sources-saved-search").addEventListener("input", (e) => {
     SOURCES.savedQuery = e.target.value.trim();
     SOURCES.savedLimit = 300;
@@ -18189,13 +18304,110 @@ function sourcesRenderSavedPage() {
   sourcesRenderSavedDetail();
 }
 
+// The filter pills, and the tick for every file shown.
+function sourcesRenderSavedTools() {
+  const host = $("sources-saved-tools");
+  if (!host) return;
+  const files = sourcesSavedFiles();
+  const pills = [
+    ["all", "All", SOURCES.savedFilter === "all" ? SOURCES.savedTotal : null],
+    ["failing", "Failing links", SOURCES.savedFailing],
+  ]
+    .filter(([k, , n]) => k === "all" || n || SOURCES.savedFilter === k)
+    .map(
+      ([k, label, n]) =>
+        `<button type="button" class="fm-filter${SOURCES.savedFilter === k ? " is-active" : ""}" data-sources-saved-filter="${k}">${label}${n != null ? ` <small>${Number(n).toLocaleString()}</small>` : ""}</button>`,
+    )
+    .join("");
+  const nTicked = files.filter((f) => SOURCES.savedTicked.has(f.key)).length;
+  const all = files.length > 0 && nTicked === files.length;
+  host.innerHTML = `<div class="fm-filter-row">${pills}</div>
+    ${
+      files.length
+        ? `<div class="cm-bulk"><label class="cm-bulk-tick"><input type="checkbox" id="sources-saved-tick-all" ${all ? "checked" : ""} /><span>${
+            all ? `Untick the ${files.length} shown` : `Tick the ${files.length} shown`
+          }</span></label></div>`
+        : ""
+    }`;
+  const box = $("sources-saved-tick-all");
+  if (box) box.indeterminate = nTicked > 0 && !all;
+}
+
+// The bar: the ticked files, and Forget.
+function sourcesRenderSavedBar() {
+  const host = $("sources-saved-bar");
+  if (!host) return;
+  const n = SOURCES.savedTicked.size;
+  host.classList.toggle("hidden", !n && !SOURCES.forgetting);
+  if (!n && !SOURCES.forgetting) {
+    host.innerHTML = "";
+    return;
+  }
+  const failing = SOURCES.savedFilter === "failing";
+  host.innerHTML = `<span class="fm-ring">${pkgRing(1, "var(--accent-danger)", { size: 38, track: "var(--line)" })}<b>${n}</b></span>
+     <span class="cm-bar-text"><span><b>${pkgCount(n, "file", "files")} ticked</b></span><small>${
+       SOURCES.forgetting ? "Forgetting…" : failing ? "Forget removes only their failing links." : "Forget removes every link saved for them."
+     }</small></span>
+     <button type="button" class="ghost-button fm-small" data-sources-act="saved-untick" ${SOURCES.forgetting ? "disabled" : ""}>Untick all</button>
+     <button type="button" class="ghost-button cm-bar-go sources-forget-go" data-sources-act="saved-forget" ${SOURCES.forgetting ? "disabled" : ""}><span class="material-symbols-outlined">delete</span>${
+       failing ? "Forget their failing links…" : "Forget their links…"
+     }</button>`;
+}
+
+// Forgets the ticked files' links (only the failing ones in that filter).
+async function sourcesForgetTicked() {
+  const keys = [...SOURCES.savedTicked];
+  if (!keys.length || SOURCES.forgetting) return;
+  const failing = SOURCES.savedFilter === "failing";
+  const names = sourcesSavedFiles()
+    .filter((f) => SOURCES.savedTicked.has(f.key))
+    .map((f) => f.filename);
+  const ok = await showAppConfirm(
+    `Forget ${failing ? "the failing links" : "every link"} saved for ${pkgCount(names.length, "file", "files")}? Downloads won't use ${failing ? "them" : "those links"} any more; you can add them again from a post.`,
+  );
+  if (!ok) return;
+  SOURCES.forgetting = true;
+  sourcesRenderSavedBar();
+  let removed = 0;
+  let failed = 0;
+  for (const filename of names) {
+    let links = [];
+    try {
+      const rows = await invoke("list_download_links", { packageId: sourcesStem(filename) });
+      links = (rows ?? []).filter((l) => String(l.filename).toLowerCase() === filename.toLowerCase() && (!failing || Number(l.fail_count) > 0));
+    } catch (e) {
+      failed += 1;
+      addLog(`Sources: ${filename} — ${String(e)}`);
+    }
+    for (const l of links) {
+      try {
+        if (await invoke("remove_download_link", { filename: l.filename, url: l.url })) removed += 1;
+      } catch (e) {
+        failed += 1;
+        addLog(`Sources: ${filename} — ${String(e)}`);
+      }
+    }
+    SOURCES.links.delete(filename.toLowerCase());
+  }
+  SOURCES.forgetting = false;
+  SOURCES.savedTicked.clear();
+  if (!sourcesSavedFiles().some((f) => f.key === SOURCES.savedSel)) SOURCES.savedSel = null;
+  showToast(`Forgot ${pkgCount(removed, "link", "links")}${failed ? ` · ${failed} couldn't be forgotten, see Console` : ""}`, failed ? "error" : "success");
+  if (typeof refreshDownloadLinksCount === "function") refreshDownloadLinksCount();
+  await sourcesLoadSaved();
+}
+
 function sourcesRenderSaved() {
   const host = $("sources-saved-list");
   if (!host) return;
+  sourcesRenderSavedTools();
+  sourcesRenderSavedBar();
   const files = sourcesSavedFiles();
   const subtitle = $("sources-saved-subtitle");
   if (subtitle) {
-    subtitle.textContent = SOURCES.savedQuery
+    subtitle.textContent = SOURCES.savedFilter === "failing"
+      ? `${pkgCount(SOURCES.savedTotal, "link", "links")} whose last download failed. A failing link is tried last; forget the dead ones.`
+      : SOURCES.savedQuery
       ? `${pkgCount(SOURCES.savedTotal, "link matches", "links match")}, the newest first`
       : SOURCES.savedTotal
         ? `${pkgCount(SOURCES.savedTotal, "link", "links")}, the newest first. A new link never replaces the ones already saved; when a download through one fails, the file's other links are tried in turn.`
@@ -18212,7 +18424,13 @@ function sourcesRenderSaved() {
   }
   if (!files.length) {
     host.className = "group-list empty";
-    host.innerHTML = SOURCES.savedLoading ? "Loading…" : SOURCES.savedQuery ? "No saved source matches." : "No sources saved yet. Find some in a post on the first tab.";
+    host.innerHTML = SOURCES.savedLoading
+      ? "Loading…"
+      : SOURCES.savedFilter === "failing"
+        ? "No failing link."
+        : SOURCES.savedQuery
+          ? "No saved source matches."
+          : "No sources saved yet. Find some in a post on the first tab.";
     return;
   }
   host.className = "group-list";
@@ -18224,9 +18442,11 @@ function sourcesRenderSaved() {
       const worked = f.links.some((l) => l.last_ok);
       const zip = f.links.some((l) => l.archive_entry);
       const focus = f.key === SOURCES.savedSel;
-      return `<div class="group-row fm-row sources-row sources-saved-row${focus ? " is-focus" : ""}" data-sources-saved="${escapeAttribute(f.key)}" role="listitem" tabindex="${focus ? 0 : -1}" ${
+      const ticked = SOURCES.savedTicked.has(f.key);
+      return `<div class="group-row fm-row sources-row sources-saved-row${focus ? " is-focus" : ""}${ticked ? " is-forget" : ""}" data-sources-saved="${escapeAttribute(f.key)}" role="listitem" tabindex="${focus ? 0 : -1}" ${
         focus ? 'aria-current="true"' : ""
       }>
+          <label class="cm-tick" title="Tick to forget its links"><input type="checkbox" data-sources-saved-tick="${escapeAttribute(f.key)}" ${ticked ? "checked" : ""} aria-label="Tick ${escapeAttribute(f.filename)}" /></label>
           <span class="sources-row-icon${zip ? " is-zip" : ""}"><span class="material-symbols-outlined">${zip ? "folder_zip" : "deployed_code"}</span></span>
           <span class="fm-row-text"><span class="fm-row-name" title="${escapeAttribute(f.filename)}">${escapeHtml(f.filename)}</span>
             <span class="sources-row-meta">${hosts.map((h) => `<span class="sources-mirror">${escapeHtml(h)}</span>`).join("")}${
@@ -18259,7 +18479,11 @@ function sourcesRenderSavedDetail() {
           ${sourcesInLibrary(f.filename) ? `<span class="cm-pkg-chips"><span class="chip fm-chip-good">In library</span></span>` : ""}</div>
         <div class="cm-pkg-acts">${sourcesSheetClose()}</div>
       </div>
-      ${sourcesInLibrary(f.filename) ? `<div class="fm-hero-acts sources-acts">${sourcesLibraryActsHtml(f.filename)}</div>` : ""}
+      <div class="fm-hero-acts sources-acts">${
+        sourcesInLibrary(f.filename)
+          ? sourcesLibraryActsHtml(f.filename)
+          : `<button type="button" class="ghost-button fm-small" data-sources-act="get-in-downloads" data-sources-file="${escapeAttribute(f.filename)}" title="Open the Downloads panel with it, to get it into AddonPackages"><span class="material-symbols-outlined">download</span>Get it in Downloads</button>`
+      }</div>
       <h3 class="cm-files-h">Its links <small>${links.length}</small></h3>
       <p class="cm-files-cap">Downloads use them in this order: links that worked first, failing ones last.</p>
       <div class="sources-links">${links.map((l) => sourcesSavedLinkHtml(l, { remove: true })).join("")}</div>
@@ -18285,12 +18509,17 @@ async function sourcesLoadSaved() {
   SOURCES.savedLoading = true;
   if (sourcesMode() === "saved") sourcesRenderSaved();
   try {
+    const failing = SOURCES.savedFilter === "failing";
     const [rows, total] = await invoke("search_download_links", {
       query: SOURCES.savedQuery || null,
       limit: SOURCES.savedLimit,
+      failing,
     });
     SOURCES.saved = Array.isArray(rows) ? rows : [];
     SOURCES.savedTotal = Number(total) || 0;
+    // How many fail, for the filter pill (the whole count, one row read).
+    const [, nFailing] = failing ? [null, total] : await invoke("search_download_links", { query: SOURCES.savedQuery || null, limit: 1, failing: true });
+    SOURCES.savedFailing = Number(nFailing) || 0;
   } catch (e) {
     addLog(`Sources: ${String(e)}`);
   }
@@ -18303,9 +18532,11 @@ async function sourcesLoadSaved() {
   } else if (!SOURCES.result && !SOURCES.running) {
     sourcesRenderDetails();
   }
-  view.querySelectorAll('[data-sources-mode="saved"] .cv-mode-text small').forEach((el) => {
-    el.textContent = SOURCES.savedTotal ? `${pkgCount(SOURCES.savedTotal, "link", "links")} downloads can use` : "The links downloads use";
-  });
+  if (SOURCES.savedFilter !== "failing" && !SOURCES.savedQuery) {
+    view.querySelectorAll('[data-sources-mode="saved"] .cv-mode-text small').forEach((el) => {
+      el.textContent = SOURCES.savedTotal ? `${pkgCount(SOURCES.savedTotal, "link", "links")} downloads can use` : "The links downloads use";
+    });
+  }
 }
 
 async function sourcesForget(filename, url) {
@@ -18325,10 +18556,44 @@ async function sourcesForget(filename, url) {
 
 function sourcesSetMode(mode) {
   if (mode === sourcesMode()) return;
+  if (sourcesMode() === "add") srcDock("modal");
   fmStoreSet(SOURCES_MODE, mode);
   SOURCES.sheetOpen = false;
   sourcesRender();
   if (mode === "saved") sourcesLoadSaved();
+}
+
+// ---- Add by hand -------------------------------------------------------------------------
+// The Add download source form (the same one other pages open in a window,
+// moved here, not copied) and the community link-list import (moved from the
+// Database page).
+
+function sourcesRenderAddPage() {
+  const view = sourcesView();
+  if (!view) return;
+  view.innerHTML = `${sourcesModesHtml()}
+    <section class="dashboard-grid fm-top sources-add-grid">
+      <article class="card sources-add-card">
+        <header class="card-eyebrow">One link</header>
+        <div id="sources-add-slot"></div>
+      </article>
+      <div id="sources-import-slot" class="sources-import-slot"></div>
+    </section>`;
+  srcDock("tab");
+  const imp = SRC.importCard ?? $("dl-links-card");
+  if (imp) {
+    SRC.importCard = imp;
+    imp.classList.remove("hidden");
+    $("sources-import-slot")?.appendChild(imp);
+    refreshDownloadLinksCount();
+  }
+}
+
+// Opens Add by hand for a package (its file name filled in).
+function sourcesAddByHand(packageId = "") {
+  fmStoreSet(SOURCES_MODE, "add");
+  SOURCES.addFor = String(packageId || "").replace(/\.var$/i, "");
+  document.querySelector('[data-sidebar-link="sources"]')?.click();
 }
 
 // ---- Events -------------------------------------------------------------------------------
@@ -18353,6 +18618,12 @@ function sourcesOnClick(e) {
   if ((el = q("[data-sources-filter]"))) {
     SOURCES.filter = el.getAttribute("data-sources-filter");
     return sourcesRefresh();
+  }
+  if ((el = q("[data-sources-saved-filter]"))) {
+    SOURCES.savedFilter = el.getAttribute("data-sources-saved-filter");
+    SOURCES.savedTicked.clear();
+    SOURCES.savedLimit = 300;
+    return void sourcesLoadSaved();
   }
   if ((el = q("[data-sources-toggle]"))) {
     const key = el.getAttribute("data-sources-toggle");
@@ -18398,6 +18669,13 @@ function sourcesOnClick(e) {
       case "saved-more":
         SOURCES.savedLimit += 300;
         return void sourcesLoadSaved();
+      case "saved-untick":
+        SOURCES.savedTicked.clear();
+        return sourcesRenderSaved();
+      case "saved-forget":
+        return void sourcesForgetTicked();
+      case "get-in-downloads":
+        return getOpenWith(sourcesStem(file));
       default:
         return;
     }
@@ -18433,6 +18711,19 @@ function sourcesOnChange(e) {
   if (t.id === "sources-tick-shown") {
     for (const r of SOURCES.rows.filter(sourcesVisible)) r.checked = t.checked;
     return sourcesRefresh();
+  }
+  if (t.matches?.("[data-sources-saved-tick]")) {
+    const key = t.getAttribute("data-sources-saved-tick");
+    if (t.checked) SOURCES.savedTicked.add(key);
+    else SOURCES.savedTicked.delete(key);
+    return sourcesRenderSaved();
+  }
+  if (t.id === "sources-saved-tick-all") {
+    for (const f of sourcesSavedFiles()) {
+      if (t.checked) SOURCES.savedTicked.add(f.key);
+      else SOURCES.savedTicked.delete(f.key);
+    }
+    return sourcesRenderSaved();
   }
 }
 
@@ -18531,6 +18822,16 @@ function setupSourcesPage() {
   const view = sourcesView();
   if (!view) return;
   window.__refreshSourcesView = () => {
+    // Opened from another page for one package: Add by hand, its name filled in.
+    if (sourcesMode() === "add") {
+      sourcesRender();
+      if (SOURCES.addFor) {
+        srcReset({ packageId: SOURCES.addFor });
+        SOURCES.addFor = "";
+      }
+      sourcesLoadSaved();
+      return;
+    }
     sourcesRender();
     hubLoadLocal().then(() => {
       // The library may have changed since the scan: In library follows it.

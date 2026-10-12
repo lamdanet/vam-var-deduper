@@ -6611,6 +6611,16 @@ input[type="text"]:disabled {
   font-style: italic;
 }
 
+.get-addlink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .get-src-warn {
   color: var(--accent-warn);
   font-weight: 600;
@@ -13074,10 +13084,6 @@ button.lib-dep-ref:hover {
   border-left-color: transparent;
 }
 
-.sources-view .fm-row.group-row.sources-saved-row {
-  grid-template-columns: 30px minmax(0, 1fr) auto;
-}
-
 .sources-view .fm-row.group-row.sources-row.is-ticked {
   border-left-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 7%, transparent);
@@ -13247,6 +13253,51 @@ button.lib-dep-ref:hover {
 
 .sources-detail-card .fm-none-line {
   margin: 0 20px 16px;
+}
+
+/* ---- Three tabs ---- */
+.sources-view .sources-modes {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* ---- Add by hand: the form and the import, in the page ---- */
+.sources-add-grid {
+  align-items: start;
+}
+
+.sources-view .src-card {
+  width: auto;
+  max-height: none;
+  padding: 0 20px 20px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sources-view .src-card .hub-dl-headtext h3,
+.sources-view #src-cancel {
+  display: none;
+}
+
+.sources-import-slot > .build-db-card {
+  height: 100%;
+  margin: 0;
+}
+
+/* ---- Saved: ticked to forget ---- */
+.sources-view .fm-row.group-row.sources-saved-row {
+  grid-template-columns: 22px 30px minmax(0, 1fr) auto;
+}
+
+.sources-view .fm-row.group-row.sources-saved-row.is-forget {
+  border-left-color: var(--accent-danger);
+  background: color-mix(in srgb, var(--accent-danger) 6%, transparent);
+}
+
+.sources-forget-go {
+  border-color: color-mix(in srgb, var(--accent-danger) 55%, var(--line));
+  color: var(--accent-danger);
 }
 
 /* ---- Problem cards ---- */
