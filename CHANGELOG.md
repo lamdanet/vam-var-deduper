@@ -11,6 +11,15 @@ release time, it fills it with the commit messages since the last release.
 ## [Unreleased]
 
 ### Added
+- **View on Hub from every page**: wherever a package is shown and it's on the
+  Hub, a Hub button (compass) opens its page in the app's Hub. That covers
+  dependency rows (missing ones too) in VAR Packages and Package Explorer, the
+  Missing and "Newer in your sources" lists, Package Explorer for a package
+  opened by name, Fix Missing, Internalize Resources, Clean VARs, the
+  Database's Packages and Resources tabs (and their right-click menus),
+  Downloads and Sources. Find Dependencies' Hub chip now opens the Hub page in
+  the app instead of the browser. Versionless and ".latest" names open the
+  newest version's page
 - **Choose where the database lives**: Settings → Database → Location shows the
   file (Default, or Custom folder), moves it to another folder, and back to the
   default. A move copies it there (compacted), flushes and checks the copy,
