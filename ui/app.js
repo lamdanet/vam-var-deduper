@@ -30817,6 +30817,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   })();
 
   renderLogs();
-  // Clean VARs is the landing page.
-  document.querySelector('[data-sidebar-link="clean-by-file"]')?.click();
+  // VAR Packages, your library, is the landing page.
+  document.querySelector('[data-sidebar-link="var-packages"]')?.click();
 });

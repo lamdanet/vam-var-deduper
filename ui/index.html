@@ -61,18 +61,16 @@
             <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Toggle sidebar">
               <span class="material-symbols-outlined" id="sidebar-toggle-icon">menu_open</span>
             </button>
-            <nav class="sidebar-nav">
-              <a class="sidebar-link active" href="#" data-sidebar-link="clean-by-file">
-                <span class="material-symbols-outlined">compress</span>
-                <span class="sidebar-label">Clean VARs</span>
-              </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="build-db">
-                <span class="material-symbols-outlined">storage</span>
-                <span class="sidebar-label">Database</span>
-              </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="var-packages">
+            <!-- Your library first, then keeping it in shape. VAR Packages is
+                 the page the app opens on (app.js). -->
+            <nav class="sidebar-nav" aria-label="Library">
+              <a class="sidebar-link active" href="#" data-sidebar-link="var-packages">
                 <span class="material-symbols-outlined">inventory_2</span>
                 <span class="sidebar-label" id="sidebar-var-packages-label">VAR Packages</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="pkg-explorer">
+                <span class="material-symbols-outlined">space_dashboard</span>
+                <span class="sidebar-label">Package Explorer</span>
               </a>
               <a class="sidebar-link" href="#" data-sidebar-link="hub">
                 <span class="material-symbols-outlined">explore</span>
@@ -82,17 +80,24 @@
                 <span class="material-symbols-outlined">link</span>
                 <span class="sidebar-label">Sources</span>
               </a>
-              <a class="sidebar-link" href="#" data-sidebar-link="pkg-explorer">
-                <span class="material-symbols-outlined">space_dashboard</span>
-                <span class="sidebar-label">Package Explorer</span>
-              </a>
+            </nav>
+            <div class="sidebar-divider"></div>
+            <nav class="sidebar-nav" aria-label="Upkeep">
               <a class="sidebar-link" href="#" data-sidebar-link="fix-missing">
                 <span class="material-symbols-outlined">healing</span>
                 <span class="sidebar-label">Fix Missing</span>
               </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="clean-by-file">
+                <span class="material-symbols-outlined">compress</span>
+                <span class="sidebar-label">Clean VARs</span>
+              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="internalize-resources">
                 <span class="material-symbols-outlined">download_for_offline</span>
                 <span class="sidebar-label">Internalize Resources</span>
+              </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="build-db">
+                <span class="material-symbols-outlined">storage</span>
+                <span class="sidebar-label">Database</span>
               </a>
             </nav>
             <!-- Experimental pages: shown in debug builds only (app.js,
