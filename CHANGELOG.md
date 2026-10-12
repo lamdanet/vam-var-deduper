@@ -15,6 +15,15 @@ release time, it fills it with the commit messages since the last release.
   package, the bar says what it's doing (backing up, writing, putting it in
   place), how much is done, how long it has run and about how long is left.
   Clean many shows the same for each package as well as the whole
+- **Sources, redesigned like the other pages**: two tabs, Find in a post and
+  Saved sources. The post sits beside its numbers (files found, new, in your
+  library, protected zips, and what couldn't be read), with the posts you
+  pasted lately to start from. The files found are listed by the post's
+  groups; selecting one shows its mirrors, its zip's password and the links
+  already saved for it. A bar at the bottom keeps the ticked count and Save
+  in reach, and a long scan can be stopped. Saved sources lists each saved
+  file once; select it to see all its links, how each has fared, and forget
+  one
 
 ### Fixed
 - A `.var` that isn't a package (often a Hub login page saved by a download
