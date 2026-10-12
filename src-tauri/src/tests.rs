@@ -6578,6 +6578,41 @@ fn the_same_link_written_differently_is_saved_once() {
 }
 
 #[test]
+fn saved_files_are_searched_one_row_per_file() {
+    let db = crate::db::open_in_memory().expect("db");
+    let line = |l: &str| crate::tasks::parse_link_line(l).unwrap();
+    crate::db::insert_download_links(
+        &db,
+        &[
+            line("Ramsess.Ram-Hair_22.2.var https://pixeldrain.com/u/AAA111"),
+            line("Ramsess.Ram-Hair_22.2.var https://www.mediafire.com/file/bbb222/Ramsess.Ram-Hair_22.2.var/file"),
+            line("Ramsess.Ram-Hair_21.1.var https://pixeldrain.com/u/CCC333"),
+            line("Other.Thing_22.1.var https://pixeldrain.com/u/DDD444"),
+        ],
+    )
+    .unwrap();
+    // A file with two links is one row, its hosts summed up; "_" is a
+    // character, not a wildcard ("Hair_2" doesn't match "Thing_22").
+    let (rows, total) = crate::db::search_source_files(&db, "Ram-Hair_2", 0, 50).unwrap();
+    assert_eq!(total, 2);
+    let r22 = rows.iter().find(|r| r.filename == "Ramsess.Ram-Hair_22.2.var").expect("22.2");
+    assert_eq!(r22.links, 2);
+    assert!(r22.hosts.contains("pixeldrain") && r22.hosts.contains("mediafire"), "{}", r22.hosts);
+    assert!(!r22.worked && r22.failing == 0);
+    // Paged: one row at a time, the total unchanged.
+    let (page, total) = crate::db::search_source_files(&db, "ram-hair", 1, 1).unwrap();
+    assert_eq!((page.len(), total), (1, 2));
+    // A failed download marks the file's link failing; the failing filter finds it.
+    let url = crate::db::links_for_file(&db, "Ramsess.Ram-Hair_21.1.var")[0].url.clone();
+    crate::db::record_link_result(&db, "Ramsess.Ram-Hair_21.1.var", &url, Some("404"));
+    let (rows, _) = crate::db::search_source_files(&db, "Hair_21", 0, 50).unwrap();
+    assert_eq!(rows[0].failing, 1);
+    let (failing, n) = crate::db::search_download_links(&db, "", 50, true).unwrap();
+    assert_eq!((failing.len(), n), (1, 1));
+    assert_eq!(failing[0].filename, "Ramsess.Ram-Hair_21.1.var");
+}
+
+#[test]
 fn dependency_scan_prefers_the_copy_in_the_first_scan_folder() {
     use crate::tasks::build_dependency_items;
     use std::collections::{BTreeMap, BTreeSet};
