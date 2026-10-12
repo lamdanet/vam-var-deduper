@@ -175,7 +175,7 @@ pub(crate) fn extract_vaj_self_paths(vaj_path: &str, raw: &[u8]) -> BTreeSet<Str
         .collect()
 }
 
-fn apply_effective_resource_sizes(
+pub(crate) fn apply_effective_resource_sizes(
     resource_refs: &mut [ResourceRef],
     support_paths: &BTreeMap<String, BTreeSet<String>>,
 ) {
@@ -193,6 +193,24 @@ fn apply_effective_resource_sizes(
             .sum::<u64>();
         resource.effective_size = resource.size + support_bytes;
     }
+}
+
+/// The files a path loads with it that its name alone tells — a `.vam`'s
+/// `.vab` and same-stem textures, a `.vmi`'s `.vmb` — as the scan pairs them
+/// (it also reads a `.vaj`'s contents, which a listing can't). Keyed by the
+/// path, for `apply_effective_resource_sizes`.
+pub(crate) fn support_paths_by_name(internal_path: &str) -> BTreeMap<String, BTreeSet<String>> {
+    let mut out = BTreeMap::new();
+    let ext = internal_path.rsplit('.').next().unwrap_or("");
+    let sibling = |new_ext: &str| Path::new(internal_path).with_extension(new_ext).to_string_lossy().replace('\\', "/");
+    if ext.eq_ignore_ascii_case("vam") {
+        let mut set = same_stem_texture_paths(internal_path);
+        set.insert(sibling("vab"));
+        out.insert(internal_path.to_string(), set);
+    } else if ext.eq_ignore_ascii_case("vmi") {
+        out.insert(internal_path.to_string(), BTreeSet::from([sibling("vmb")]));
+    }
+    out
 }
 
 pub(crate) fn same_stem_texture_paths(path: &str) -> BTreeSet<String> {

@@ -236,6 +236,98 @@ pub(crate) fn inspect_remote(url: &str, candidates: &[String]) -> Result<(Vec<Ar
 }
 
 
+/// One file in a remote zip's central directory.
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteFile {
+    pub(crate) name: String,
+    pub(crate) crc32: u32,
+    pub(crate) size: u64,
+}
+
+/// A remote zip's length and files.
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteListing {
+    pub(crate) len: u64,
+    pub(crate) files: Vec<RemoteFile>,
+}
+
+/// The files of the zip (a `.var`) at `url`: path, CRC32 and size each, read
+/// from its central directory alone through range requests — never by
+/// downloading it (a host that won't serve parts of files is an error). The
+/// zip crate finds the directory; its entries are read here, because the
+/// crate's own per-file access also reads each file's local header, which on
+/// a big package is a request per file.
+pub(crate) fn remote_zip_listing(url: &str) -> Result<RemoteListing, String> {
+    let reader = if crate::mega::is_mega(url) {
+        crate::mega::open_download(url).and_then(HttpRangeReader::open_mega)?
+    } else if crate::sources::is_mediafire_page(url) {
+        crate::sources::mediafire_direct(url).and_then(|direct| HttpRangeReader::open(&direct))?
+    } else {
+        HttpRangeReader::open(url)?
+    };
+    let len = reader.len;
+    let zip = zip::ZipArchive::new(reader).map_err(|e| format!("not a readable .zip: {e}"))?;
+    let start = zip.central_directory_start();
+    let mut reader = zip.into_inner();
+    reader.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    let files = read_central_directory(&mut reader)?;
+    Ok(RemoteListing { len, files })
+}
+
+/// The entries of a zip's central directory, read from its start until the
+/// next record isn't one (`PK\x01\x02`). Sizes past 4 GB come from the
+/// Zip64 extra field.
+fn read_central_directory<R: Read>(reader: &mut R) -> Result<Vec<RemoteFile>, String> {
+    let mut out = Vec::new();
+    let mut head = [0u8; 46];
+    loop {
+        if reader.read_exact(&mut head).is_err() || head[..4] != [0x50, 0x4b, 0x01, 0x02] {
+            break;
+        }
+        let u16_at = |i: usize| u16::from_le_bytes([head[i], head[i + 1]]) as usize;
+        let u32_at = |i: usize| u32::from_le_bytes([head[i], head[i + 1], head[i + 2], head[i + 3]]);
+        let crc32 = u32_at(16);
+        let compressed = u32_at(20);
+        let mut size = u32_at(24) as u64;
+        let (name_len, extra_len, comment_len) = (u16_at(28), u16_at(30), u16_at(32));
+        let mut name = vec![0u8; name_len];
+        let mut extra = vec![0u8; extra_len];
+        let mut comment = vec![0u8; comment_len];
+        reader.read_exact(&mut name).map_err(|e| e.to_string())?;
+        reader.read_exact(&mut extra).map_err(|e| e.to_string())?;
+        reader.read_exact(&mut comment).map_err(|e| e.to_string())?;
+        if size == 0xFFFF_FFFF {
+            // Zip64: the extra field 0x0001 holds the uncompressed size first.
+            let mut i = 0;
+            while i + 4 <= extra.len() {
+                let tag = u16::from_le_bytes([extra[i], extra[i + 1]]);
+                let len = u16::from_le_bytes([extra[i + 2], extra[i + 3]]) as usize;
+                if tag == 0x0001 && len >= 8 && i + 12 <= extra.len() {
+                    size = u64::from_le_bytes(extra[i + 4..i + 12].try_into().expect("8 bytes"));
+                    break;
+                }
+                i += 4 + len;
+            }
+        }
+        let _ = compressed;
+        out.push(RemoteFile { name: String::from_utf8_lossy(&name).into_owned(), crc32, size });
+    }
+    if out.is_empty() {
+        return Err("the archive's file list is empty or unreadable".to_string());
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+pub(crate) fn central_directory_for_test(path: &Path) -> Result<Vec<RemoteFile>, String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let zip = zip::ZipArchive::new(io::BufReader::new(file)).map_err(|e| e.to_string())?;
+    let start = zip.central_directory_start();
+    let mut reader = zip.into_inner();
+    reader.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    read_central_directory(&mut reader)
+}
+
 // ----------------------------------------------------------------------------
 // Session cache
 // ----------------------------------------------------------------------------

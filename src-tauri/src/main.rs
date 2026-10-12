@@ -24,6 +24,7 @@ mod offload;
 mod packages;
 mod roles;
 mod scan;
+mod source_index;
 mod sources;
 mod tasks;
 #[cfg(test)]
@@ -254,6 +255,7 @@ fn main() {
             search_source_files,
             list_source_updates,
             start_scan_source_links_task,
+            source_index::start_index_sources_task,
             check_archive_password,
             inspect_vam_dir,
             get_hub_package_meta,

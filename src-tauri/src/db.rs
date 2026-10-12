@@ -1709,6 +1709,11 @@ pub(crate) fn get_scene_image_package_ids(conn: &Connection) -> Result<HashSet<S
     Ok(out)
 }
 
+/// A path's category id (by its folder and extension), for writers outside db.rs.
+pub(crate) fn category_for_path(category_ids: &HashMap<&'static str, i64>, internal_path: &str) -> Option<i64> {
+    category_id_for_path(category_ids, internal_path)
+}
+
 fn category_id_for_path(
     category_ids: &HashMap<&'static str, i64>,
     internal_path: &str,

@@ -442,6 +442,8 @@ pub(crate) struct ProgressPayload {
     pub(crate) verify_result: Option<crate::integrity::IntegrityResponse>,
     #[serde(default)]
     pub(crate) source_scan_result: Option<crate::sources::SourceScanResult>,
+    #[serde(default)]
+    pub(crate) source_index_result: Option<crate::source_index::SourceIndexReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
