@@ -13,9 +13,16 @@ release time, it fills it with the commit messages since the last release.
 ### Added
 - **Choose where the database lives**: Settings → Database → Location shows the
   file (Default, or Custom folder), moves it to another folder, and back to the
-  default. A move copies it there (compacted), checks the copy, then restarts
-  the app to use it; the old file is removed after the restart. A folder that
-  already has a database asks whether to use it or replace it
+  default. A move copies it there (compacted), flushes and checks the copy,
+  then restarts the app to use it. The old file stays until the new one has
+  started twice (or "Delete it now"). A folder that already has a database
+  asks once: use the one there, or replace it with yours (the one there is
+  kept beside it as `.replaced.db`), with both databases' sizes and counts.
+  Network drives, OneDrive / Dropbox / Google Drive folders and too little
+  free space are refused; removable and FAT32 drives get a warning. No move
+  starts while something runs, and nothing starts during one. If the folder
+  isn't there at start (a drive unplugged), the app asks: try again, use the
+  default folder for now, or quit
 - **Six more themes** from the Stitch specs: Emerald Flow, Glacier Frost,
   Indigo Pulse and Crimson Solar (light), Violet Pulse and Solar Core (dark),
   each with its own gradient buttons, focus colour and tag colours
@@ -44,10 +51,16 @@ release time, it fills it with the commit messages since the last release.
   or to a zip holding the .var, are added once downloaded
 
 ### Changed
-- **Settings, laid out like the other pages**: four tabs (Folders, Appearance,
+- **Settings, laid out like the other pages**: four tabs (Library, Appearance,
   Database, About), each setting a card. Changes save as you make them (no
-  Save button); each card has Reset to default, and Reset all settings to
-  default lists what changes before it does
+  Save button): "Saved." shows once they're written, or why they weren't.
+  Each card has Reset to default ("At default" when there's nothing to
+  reset), and Reset all settings to default lists what changes before it
+  does. Themes come in Classic and Obsidian groups
+- **Easier with a keyboard or a screen reader**: dialogs take the focus and
+  give it back, keyboard focus shows as a clear outline in every theme, the
+  Settings tabs and theme cards work with the arrow keys, and statuses,
+  progress and errors are announced. Error messages stay until closed
 - **The database is about a third of its size, and faster**: each package
   name and folder is now stored once instead of in every one of millions of
   rows. A 1.9 GB index becomes about 0.6 GB with nothing lost (every row
@@ -84,6 +97,14 @@ release time, it fills it with the commit messages since the last release.
   1,161 missing dependencies of a large library took about 70 s, now 24 s
 
 ### Fixed
+- Hint text, gradient buttons and warning colours that were too faint to read
+  in several themes (Violet Pulse's buttons faded to white on pale pink; the
+  Clear database button was pale pink on the light themes)
+- The offload folder no longer shows up under Additional VAR folders, and a
+  new offload folder is scanned straight away
+- Settings no longer drops options it doesn't show when it saves, and a
+  settings file cut short by a crash falls back to its last good copy
+- "Set in Settings" opens the tab with the VaM directory
 - A `.var` that isn't a package (often a Hub login page saved by a download
   that ran while logged out) no longer stops a check: it's skipped and listed
   in the warnings, which say what it is so you can download it again
