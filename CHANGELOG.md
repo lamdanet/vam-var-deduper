@@ -51,6 +51,10 @@ release time, it fills it with the commit messages since the last release.
   or to a zip holding the .var, are added once downloaded
 
 ### Changed
+- **The app opens on VAR Packages**, your library, and the sidebar is in two
+  groups: your library (VAR Packages, Package Explorer, Hub, Sources), then
+  keeping it in shape (Fix Missing, Clean VARs, Internalize Resources,
+  Database)
 - **Resource List is now a tab of the Database page** (Database → Resources),
   next to Packages: every file the database records, with the same search,
   filters and duplicates panel
