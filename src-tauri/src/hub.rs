@@ -182,6 +182,16 @@ pub(crate) fn resolve_download_urls(
     client: &reqwest::blocking::Client,
     ids: &[String],
 ) -> (HashMap<String, HubResolution>, Option<String>) {
+    resolve_download_urls_with(client, ids, true)
+}
+
+/// `resolve_download_urls`, with the second pass optional: it costs one
+/// request per id the batch didn't answer, so long lists skip it.
+pub(crate) fn resolve_download_urls_with(
+    client: &reqwest::blocking::Client,
+    ids: &[String],
+    retry_bases: bool,
+) -> (HashMap<String, HubResolution>, Option<String>) {
     let mut out: HashMap<String, HubResolution> = HashMap::new();
     let mut first_error: Option<String> = None;
 
@@ -227,7 +237,7 @@ pub(crate) fn resolve_download_urls(
     // Second pass: retry the unresolved ones against the version-stripped base
     // (the hub sometimes only answers the bare family name).
     for (q, id) in &query_for {
-        if out.contains_key(id) {
+        if !retry_bases || out.contains_key(id) {
             continue;
         }
         let base = strip_version(q);

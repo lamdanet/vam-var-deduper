@@ -4909,9 +4909,11 @@ fn resolve_one_source(db: &Db, package_id: &str) -> VarSourceInfo {
     info
 }
 
-/// Where each of `package_ids` can be downloaded from: the VaM Hub first (one
-/// batched request), then the saved sources. Nothing is stored. A Hub that
+/// Where each of `package_ids` can be downloaded from: the VaM Hub first
+/// (batched requests), then the saved sources. Nothing is stored. A Hub that
 /// can't be reached leaves `error` set on the ids no saved source covers.
+/// Short lists also retry each miss by its family name on the Hub; long ones
+/// (a library's missing dependencies) skip that, one request per id.
 #[tauri::command]
 pub(crate) async fn resolve_var_sources(
     package_ids: Vec<String>,
@@ -4926,7 +4928,7 @@ pub(crate) async fn resolve_var_sources(
     let hub_ids = ids.clone();
     let (hub, hub_err) = crate::library::on_hub_thread(move || {
         Ok(match crate::hub::hub_client() {
-            Ok(client) => crate::hub::resolve_download_urls(&client, &hub_ids),
+            Ok(client) => crate::hub::resolve_download_urls_with(&client, &hub_ids, hub_ids.len() <= 10),
             Err(e) => (std::collections::HashMap::new(), Some(e.to_string())),
         })
     })
