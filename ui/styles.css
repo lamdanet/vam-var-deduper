@@ -12597,78 +12597,97 @@ button.lib-dep-ref:hover {
 }
 
 /* =========================================================
-   Sources page
+   Sources page — laid out like the other pages (sources* in app.js):
+   the post and its numbers, the list with a panel, a bar with Save.
+   Purple marks what will be saved; amber a zip that needs its password.
    ========================================================= */
-.sources-view {
-  gap: 20px;
-}
 
-.sources-card {
+/* ---- The post ---- */
+.sources-source-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-}
-
-.sources-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.sources-card-head h3 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.sources-card-head small {
-  font-weight: 400;
-  color: var(--lib-text-3);
+  gap: 10px;
 }
 
 .sources-text {
   width: 100%;
   box-sizing: border-box;
-  min-height: 110px;
+  min-height: 132px;
   resize: vertical;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: 10px;
   background: var(--surface);
   color: var(--text);
-  font: 12px/1.5 var(--lib-mono, ui-monospace, monospace);
+  font: 12px/1.5 var(--font-mono, ui-monospace, monospace);
 }
 
-.sources-row {
-  display: flex;
+.sources-text:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.sources-source-body .action-row {
+  margin-top: 0;
+}
+
+.sources-kbd {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.sources-progress-end {
+  display: inline-flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
 }
 
-.sources-password {
-  flex: 1 1 260px;
-}
-
-.sources-search {
-  flex: 0 1 280px;
-}
-
-.sources-results {
+/* ---- The numbers card ---- */
+.sources-hosts {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.sources-summary {
-  margin: 0;
-  font-size: 12px;
-  color: var(--lib-text-2);
+.sources-start-saved {
+  margin-top: 10px;
+}
+
+.sources-start-saved > .material-symbols-outlined {
+  color: var(--primary);
+  font-size: 20px;
+}
+
+.details-card > .sources-saved-line,
+.details-card > .sources-issues {
+  margin-inline: 20px;
+}
+
+.details-card > .sources-issues {
+  margin-bottom: 16px;
+}
+
+.details-card > .du-note:last-child {
+  margin-bottom: 16px;
+}
+
+/* ---- The list ---- */
+.sources-group {
+  border-bottom: 1px solid var(--line);
+}
+
+.sources-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px 8px 14px;
+  background: color-mix(in srgb, var(--surface-3) 45%, transparent);
+}
+
+.sources-group-head .cm-tick {
+  flex: 0 0 auto;
 }
 
 .sources-group-title {
@@ -12676,175 +12695,81 @@ button.lib-dep-ref:hover {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  font-size: 13px;
+}
+
+.sources-group-title b {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sources-group-title .material-symbols-outlined {
-  font-size: 16px;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 17px;
 }
 
-.sources-group-pw {
-  flex: 0 1 220px;
-}
-
-.sources-lock {
-  font-size: 12px;
-  vertical-align: -2px;
-  color: var(--lib-warning);
-}
-
-.sources-result-actions {
-  justify-content: flex-end;
-}
-
-.sources-selection {
-  margin-right: auto;
-  font-size: 12px;
-  color: var(--lib-text-2);
-}
-
-.sources-problems {
-  font-size: 12px;
-  color: var(--lib-text-2);
-}
-
-.sources-problems summary {
-  cursor: pointer;
-  color: var(--lib-warning);
-}
-
-.sources-problems ul {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
-
-.sources-problem-link {
-  font-family: var(--lib-mono, ui-monospace, monospace);
-}
-
-.sources-saved {
-  max-height: 480px;
-  overflow-y: auto;
-}
-
-.sources-saved-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sources-saved-row .hub-dl-main {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* Sources page: results toolbar, groups, rows. */
-.sources-hint {
-  margin: 0;
-}
-
-.sources-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm, 6px);
-  background: var(--surface);
-}
-
-.sources-select-all {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.sources-filters {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.sources-filter {
-  padding: 4px 10px;
-  border: 0;
-  background: transparent;
-  color: var(--lib-text-2);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sources-filter + .sources-filter {
-  border-left: 1px solid var(--line);
-}
-
-.sources-filter small {
-  color: var(--lib-text-3);
-}
-
-.sources-filter.active {
-  background: color-mix(in srgb, var(--lib-accent) 14%, transparent);
-  color: var(--lib-accent);
-}
-
-.sources-toolbar .sources-summary {
+.sources-group-sum {
   margin-left: auto;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
-.sources-group {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm, 6px);
-  background: var(--surface);
-  overflow: hidden;
-}
-
-.sources-group-head {
+.sources-group-pws {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 8px 10px;
-  background: color-mix(in srgb, var(--lib-hover) 35%, transparent);
-  border-bottom: 1px solid var(--line);
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent-warn) 6%, transparent);
 }
 
-.sources-group-check {
+.sources-group-pws.is-panel {
+  margin: 0 20px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent-warn) 40%, var(--line));
+  border-radius: 10px;
+}
+
+.sources-pw-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.sources-pw-row .input-with-icon {
+  flex: 1 1 160px;
+  max-width: 260px;
+}
+
+.sources-pw-name {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
-  flex: 1 1 240px;
-  cursor: pointer;
+  max-width: 280px;
+  font-size: 12px;
 }
 
-.sources-group-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
+.sources-pw-name .material-symbols-outlined {
+  flex: 0 0 auto;
+  color: var(--accent-warn);
+  font-size: 15px;
 }
 
-.sources-group-pw {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 1 auto;
-}
-
-.sources-group-pw .input-with-icon {
-  width: 200px;
+.sources-pw-name small {
+  flex: 0 0 auto;
+  color: var(--text-dim);
 }
 
 .sources-pw-state {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
-  color: var(--lib-text-3);
+  color: var(--text-dim);
+  font-size: 11.5px;
   white-space: nowrap;
 }
 
@@ -12853,116 +12778,202 @@ button.lib-dep-ref:hover {
 }
 
 .sources-pw-state.is-ok {
-  color: var(--lib-success, #22c55e);
+  color: var(--accent-success);
 }
 
 .sources-pw-state.is-bad {
-  color: var(--lib-error, #ef4444);
+  color: var(--accent-danger);
 }
 
 .sources-pw-state.is-warn {
-  color: var(--lib-warning);
+  color: var(--accent-warn);
 }
 
-.sources-res-row {
-  display: flex;
-  align-items: center;
+/* A row: its tick, icon, name and mirrors, size and status. */
+.sources-view .fm-row.group-row.sources-row {
+  grid-template-columns: 22px 30px minmax(0, 1fr) auto;
   gap: 10px;
-  padding: 6px 10px;
-  font-size: 12px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  border-left-color: transparent;
 }
 
-.sources-res-row + .sources-res-row {
-  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+.sources-view .fm-row.group-row.sources-saved-row {
+  grid-template-columns: 30px minmax(0, 1fr) auto;
 }
 
-.sources-res-row:hover {
-  background: color-mix(in srgb, var(--lib-hover) 30%, transparent);
+.sources-view .fm-row.group-row.sources-row.is-ticked {
+  border-left-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
 }
 
-.sources-res-row.is-dim .hub-dl-name {
-  color: var(--lib-text-3);
+.sources-row.is-focus {
+  outline: 1px solid var(--primary);
+  outline-offset: -1px;
 }
 
-.sources-res-row .hub-dl-main {
-  flex: 1 1 auto;
-  min-width: 0;
+.sources-row.is-have .fm-row-name {
+  color: var(--text-muted);
 }
 
-.sources-status {
-  flex: 0 0 auto;
-  min-width: 78px;
-  text-align: right;
+.sources-view .cm-tick input,
+.sources-view .cm-bulk-tick input,
+.sources-view .cm-tick-big input {
+  accent-color: var(--primary);
 }
 
-.sources-row-acts {
-  display: inline-flex;
-  gap: 2px;
-  flex: 0 0 auto;
+.sources-row-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text-dim);
 }
 
-.sources-result-actions {
-  position: sticky;
-  bottom: 0;
-  padding: 10px 0 2px;
-  background: var(--surface-2);
+.sources-row-icon .material-symbols-outlined {
+  font-size: 17px;
 }
 
-/* Sources: mirrors, per-zip passwords, problem cards. */
+.sources-row-icon.is-locked {
+  background: color-mix(in srgb, var(--accent-warn) 14%, transparent);
+  color: var(--accent-warn);
+}
+
+.sources-row-icon.is-big {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+}
+
+.sources-row-icon.is-big .material-symbols-outlined {
+  font-size: 28px;
+}
+
 .sources-row-meta {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  min-width: 0;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.sources-row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .sources-mirror {
+  flex: 0 0 auto;
   padding: 0 6px;
-  border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 10px;
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 10.5px;
   line-height: 16px;
-  color: var(--lib-text-3);
 }
 
 .sources-mirror.is-primary {
-  border-color: color-mix(in srgb, var(--lib-accent) 45%, transparent);
-  color: var(--lib-accent);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  color: var(--primary);
 }
 
-.sources-group-pws {
+.sources-fold-all {
+  display: inline-flex;
+  gap: 14px;
+}
+
+.sources-fold-all .fm-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.sources-fold-all .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.sources-saved-foot {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ---- The panel ---- */
+.sources-file-name {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.sources-view .cm-tick-big.is-on {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
+  background: color-mix(in srgb, var(--primary) 9%, var(--surface));
+}
+
+.sources-view .cm-tick-big.is-on b {
+  color: var(--primary);
+}
+
+.sources-acts {
+  margin: 0 20px 12px;
+}
+
+.sources-links {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin: 4px 20px 12px;
+}
+
+.sources-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--lib-warning) 5%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
 }
 
-.sources-group-pws .sources-group-pw {
-  flex-wrap: wrap;
+.sources-link > .sources-mirror {
+  margin-top: 2px;
 }
 
-.sources-pw-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 160px;
-  max-width: 320px;
+.sources-link-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sources-link-url {
   overflow: hidden;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
 }
 
-.sources-pw-name .material-symbols-outlined {
-  font-size: 15px;
+.sources-link-text small {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
 }
 
-.sources-pw-name small {
-  color: var(--lib-text-3);
+.sources-forget:hover {
+  color: var(--accent-danger);
 }
 
+.sources-detail-card .fm-none-line {
+  margin: 0 20px 16px;
+}
+
+/* ---- Problem cards ---- */
 .sources-issues {
   display: flex;
   flex-direction: column;
@@ -12975,42 +12986,42 @@ button.lib-dep-ref:hover {
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-left-width: 3px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: 10px;
   background: var(--surface);
 }
 
 .sources-issue.is-warn {
-  border-left-color: var(--lib-warning);
+  border-left-color: var(--accent-warn);
 }
 
 .sources-issue.is-bad {
-  border-left-color: var(--lib-error, #ef4444);
+  border-left-color: var(--accent-danger);
 }
 
 .sources-issue.is-muted {
-  border-left-color: var(--lib-text-3);
+  border-left-color: var(--text-dim);
 }
 
 .sources-issue-icon {
   flex: 0 0 auto;
+  color: var(--text-dim);
   font-size: 20px;
-  color: var(--lib-text-3);
 }
 
 .sources-issue.is-warn .sources-issue-icon {
-  color: var(--lib-warning);
+  color: var(--accent-warn);
 }
 
 .sources-issue.is-bad .sources-issue-icon {
-  color: var(--lib-error, #ef4444);
+  color: var(--accent-danger);
 }
 
 .sources-issue-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  flex: 1 1 auto;
 }
 
 .sources-issue-title {
@@ -13019,8 +13030,8 @@ button.lib-dep-ref:hover {
 }
 
 .sources-issue-text {
+  color: var(--text-muted);
   font-size: 12px;
-  color: var(--lib-text-2);
 }
 
 .sources-chips {
@@ -13033,29 +13044,29 @@ button.lib-dep-ref:hover {
 .sources-chip {
   padding: 1px 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--lib-hover) 70%, transparent);
+  background: var(--surface-3);
+  color: var(--text-muted);
   font-size: 11px;
-  color: var(--lib-text-2);
 }
 
 .sources-issue-more summary {
+  color: var(--primary);
+  font-size: 11.5px;
   cursor: pointer;
-  font-size: 11px;
-  color: var(--lib-accent);
 }
 
 .sources-issue-list {
   max-height: 200px;
-  overflow-y: auto;
   margin-top: 4px;
+  overflow-y: auto;
 }
 
 .sources-issue-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
-  color: var(--lib-text-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
 
 .sources-issue-what {
@@ -13071,46 +13082,12 @@ button.lib-dep-ref:hover {
   align-items: center;
   gap: 6px;
   margin: 0;
-  font-size: 11px;
-  color: var(--lib-text-3);
+  color: var(--text-dim);
+  font-size: 11.5px;
 }
 
 .sources-ignored .material-symbols-outlined {
   font-size: 14px;
-}
-
-/* Sources: folding packs. */
-.sources-fold {
-  display: inline-flex;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--lib-text-2);
-  cursor: pointer;
-}
-
-.sources-group.is-folded .sources-group-head {
-  border-bottom: 0;
-}
-
-.sources-group-sum {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--lib-text-3);
-  white-space: nowrap;
-}
-
-.sources-group-check {
-  flex: 0 1 auto;
-}
-
-.sources-fold-all {
-  display: inline-flex;
-  gap: 10px;
-}
-
-.sources-fold-all .lib-small-link {
-  font-size: 11px;
 }
 
 /* A saved link's track record. */
@@ -13137,11 +13114,34 @@ button.lib-dep-ref:hover {
   color: var(--lib-error, #ef4444);
 }
 
-.sources-all-saved {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--lib-success, #22c55e);
+/* ---- Narrower windows ---- */
+@media (max-width: 1180px) {
+  /* The panel is a sheet above the bar, shown when a file is picked. */
+  .sources-grid .panel.card.fm-detail-card:not(.is-open) {
+    display: none;
+  }
+
+  .sources-view .cm-sheet-close {
+    display: grid;
+  }
+}
+
+@media (max-width: 1000px) {
+  .sources-view .du-numbers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sources-view .fm-row.group-row.sources-row:not(.sources-saved-row) {
+    grid-template-columns: 22px 30px minmax(0, 1fr);
+  }
+
+  .sources-view .sources-row:not(.sources-saved-row) .sources-row-right {
+    grid-column: 3;
+  }
+
+  .sources-group-sum {
+    display: none;
+  }
 }
 
 /* =========================================================
