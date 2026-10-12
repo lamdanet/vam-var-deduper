@@ -11,6 +11,14 @@ release time, it fills it with the commit messages since the last release.
 ## [Unreleased]
 
 ### Added
+- **Choose where the database lives**: Settings → Database → Location shows the
+  file (Default, or Custom folder), moves it to another folder, and back to the
+  default. A move copies it there (compacted), checks the copy, then restarts
+  the app to use it; the old file is removed after the restart. A folder that
+  already has a database asks whether to use it or replace it
+- **Six more themes** from the Stitch specs: Emerald Flow, Glacier Frost,
+  Indigo Pulse and Crimson Solar (light), Violet Pulse and Solar Core (dark),
+  each with its own gradient buttons, focus colour and tag colours
 - **Get a package from your saved sources, on the pages that need it**: every
   page downloads a package by name the same way (the VaM Hub first, then the
   links on the Sources page), straight into AddonPackages and without its
@@ -36,6 +44,9 @@ release time, it fills it with the commit messages since the last release.
   or to a zip holding the .var, are added once downloaded
 
 ### Changed
+- **Settings, laid out like the other pages**: four tabs (Folders, Appearance,
+  Database, About), each setting a card, Save and Discard in the bar at the
+  bottom of the Folders tab
 - **The database is about a third of its size, and faster**: each package
   name and folder is now stored once instead of in every one of millions of
   rows. A 1.9 GB index becomes about 0.6 GB with nothing lost (every row
