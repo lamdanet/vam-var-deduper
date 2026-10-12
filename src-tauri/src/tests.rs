@@ -944,7 +944,14 @@ fn db_open_in_memory_applies_v4_schema() {
         .expect("collect tables");
 
     assert!(table_names.iter().any(|name| name == "packages"));
-    assert!(table_names.iter().any(|name| name == "resources"));
+    // v22, the lean layout: the rows and their folders are tables, and
+    // `resources` is the view that gives back the old columns.
+    assert!(table_names.iter().any(|name| name == "res_rows"));
+    assert!(table_names.iter().any(|name| name == "dirs"));
+    let view: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = 'resources'", [], |_| Ok(true))
+        .unwrap_or(false);
+    assert!(view, "resources should be a view over res_rows");
     assert!(table_names.iter().any(|name| name == "creators"));
     assert!(table_names.iter().any(|name| name == "categories"));
 
@@ -978,14 +985,14 @@ fn db_open_in_memory_applies_v4_schema() {
     let unique_index_present: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_master
-             WHERE type = 'index' AND name = 'uq_resources_package_internal_path'",
+             WHERE type = 'index' AND name = 'uq_res_rows_pkg_dir_name'",
             [],
             |_| Ok(true),
         )
         .unwrap_or(false);
     assert!(
         unique_index_present,
-        "uq_resources_package_internal_path index should exist"
+        "uq_res_rows_pkg_dir_name (one row per package and path) should exist"
     );
 
     // All 12 seeded categories should be present.
@@ -6575,6 +6582,177 @@ fn the_same_link_written_differently_is_saved_once() {
     // A genuinely different link for the file: kept beside the first.
     assert_eq!(crate::db::insert_download_links(&db, &[line("Acid.Look.3.var https://pixeldrain.com/u/ZzZ99")]).unwrap(), 1);
     assert_eq!(crate::db::links_for_file(&db, "Acid.Look.3.var").len(), 2);
+}
+
+// A resource row as the tests write and read it: id, package, path, size,
+// effective size, CRC.
+type ResRow<'a> = (i64, &'a str, &'a str, i64, i64, Option<i64>);
+type ResRowOwned = (i64, String, String, i64, i64, Option<i64>);
+
+#[test]
+fn the_lean_conversion_keeps_every_row_and_backs_up_first() {
+    use rusqlite::Connection;
+    let dir = std::env::temp_dir().join(format!("vvd_lean_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("vam_var_deduper.db");
+    // A v21 database as it was: package ids and whole paths in every row.
+    let rows: Vec<ResRow> = vec![
+        (1, "Acme.Look.1", "Custom/Atom/Person/Morphs/female/a.vmi", 10, 10, Some(111)),
+        (2, "Acme.Look.1", "Custom/Atom/Person/Morphs/female/a.vmb", 2000, 900, Some(222)),
+        (5, "Beta.Hair.2", "meta.json", 3, 3, Some(333)),
+        (6, "Beta.Hair.2", "Custom/Hair/Female/Beta/灵梦/hair.vam", 7, 7, None),
+        (7, "Beta.Hair.2", "Saves/scene/Beta/shot.JPG", 9, 9, Some(444)),
+        // Its package row was lost once (foreign keys were off).
+        (9, "Lost.Pack.1", "Custom/Assets/lost.assetbundle", 5, 5, Some(555)),
+    ];
+    {
+        let conn = Connection::open(&path).expect("open");
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             CREATE TABLE categories (category_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE creators (creator_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, flag INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE packages (package_id TEXT PRIMARY KEY, file_path TEXT NOT NULL UNIQUE, size_bytes INTEGER NOT NULL,
+                 modified_ns TEXT NOT NULL, scene_image_path TEXT, last_scanned_at INTEGER NOT NULL,
+                 creator_id INTEGER REFERENCES creators(creator_id));
+             CREATE TABLE resources (id INTEGER PRIMARY KEY AUTOINCREMENT, package_id TEXT NOT NULL, internal_path TEXT NOT NULL,
+                 size INTEGER NOT NULL, effective_size INTEGER, crc32 INTEGER, category_id INTEGER REFERENCES categories(category_id),
+                 FOREIGN KEY (package_id) REFERENCES packages(package_id) ON DELETE CASCADE);
+             CREATE UNIQUE INDEX uq_resources_package_internal_path ON resources(package_id, internal_path);
+             INSERT INTO packages VALUES ('Acme.Look.1', 'C:/v/Acme.Look.1.var', 100, '1', NULL, 0, NULL);
+             INSERT INTO packages VALUES ('Beta.Hair.2', 'C:/v/Beta.Hair.2.var', 200, '2', NULL, 0, NULL);
+             PRAGMA user_version = 21;",
+        )
+        .expect("old schema");
+        for (id, pkg, p, size, eff, crc) in &rows {
+            conn.execute(
+                "INSERT INTO resources (id, package_id, internal_path, size, effective_size, crc32) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![id, pkg, p, size, eff, crc],
+            )
+            .expect("row");
+        }
+        // Rows were deleted after id 12 was handed out: new ones go on from 13.
+        conn.execute("UPDATE sqlite_sequence SET seq = 12 WHERE name = 'resources'", []).expect("seq");
+    }
+
+    let db = crate::db::open_file(&path).expect("convert");
+    assert!(dir.join("vam_var_deduper.before-lean.db").is_file(), "the old file is copied first");
+    {
+        let conn = db.conn.lock().expect("lock");
+        let mut stmt = conn
+            .prepare("SELECT id, package_id, internal_path, size, effective_size, crc32 FROM resources ORDER BY id")
+            .expect("prepare");
+        let got: Vec<ResRowOwned> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+            .expect("query")
+            .collect::<std::result::Result<_, _>>()
+            .expect("rows");
+        let want: Vec<ResRowOwned> = rows
+            .iter()
+            .map(|(id, pkg, p, size, eff, crc)| (*id, pkg.to_string(), p.to_string(), *size, *eff, *crc))
+            .collect();
+        assert_eq!(got, want, "every row, field for field");
+        // The lost package got a placeholder row instead of its files being dropped.
+        let placeholder: String = conn
+            .query_row("SELECT file_path FROM packages WHERE package_id = 'Lost.Pack.1'", [], |r| r.get(0))
+            .expect("placeholder");
+        assert_eq!(placeholder, "manifest:Lost.Pack.1");
+        // effective_size is stored only where it differs.
+        let stored: i64 = conn.query_row("SELECT COUNT(effective_size) FROM res_rows", [], |r| r.get(0)).expect("count");
+        assert_eq!(stored, 1);
+        // Numbering goes on after the old counter.
+        conn.execute(
+            "INSERT INTO resources (package_id, internal_path, size, effective_size, crc32) VALUES ('Acme.Look.1', 'new.json', 1, 1, 9)",
+            [],
+        )
+        .expect("insert");
+        let id: i64 = conn.query_row("SELECT id FROM resources WHERE internal_path = 'new.json'", [], |r| r.get(0)).expect("id");
+        assert_eq!(id, 13);
+        // Deleting a package still takes its rows with it.
+        conn.execute("DELETE FROM packages WHERE package_id = 'Acme.Look.1'", []).expect("delete");
+        let left: i64 = conn.query_row("SELECT COUNT(*) FROM res_rows", [], |r| r.get(0)).expect("left");
+        assert_eq!(left, 4);
+        // The scene image filter finds the upper-case .JPG under Saves/scene/.
+        let scenes = crate::db::get_scene_image_package_ids(&conn).expect("scenes");
+        assert!(scenes.contains("Beta.Hair.2") && scenes.len() == 1, "{scenes:?}");
+    }
+    // Upserts through the writer: a second write of a path updates it.
+    {
+        let mut conn = db.conn.lock().expect("lock");
+        let r = |p: &str, crc: u32, size: u64| crate::models::ResourceRef {
+            package_id: "Beta.Hair.2".into(),
+            package_file: "C:/v/Beta.Hair.2.var".into(),
+            internal_path: p.into(),
+            crc32: Some(crc),
+            size,
+            effective_size: size,
+        };
+        crate::db::replace_resources(&mut conn, "Beta.Hair.2", &[r("meta.json", 999, 30), r("Custom/new/x.vmi", 1, 1)]).expect("upsert");
+        let (crc, size): (i64, i64) = conn
+            .query_row("SELECT crc32, size FROM resources WHERE package_id = 'Beta.Hair.2' AND internal_path = 'meta.json'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .expect("updated");
+        assert_eq!((crc, size), (999, 30));
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM resources WHERE package_id = 'Beta.Hair.2'", [], |r| r.get(0)).expect("n");
+        assert_eq!(n, 4);
+    }
+    drop(db);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Converts a copy of a real database (VVD_LEAN_COPY=path) with the app's own
+/// code and reports the time and size. Run with
+/// `cargo test --release lean_conversion_of_a_real_copy -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs VVD_LEAN_COPY pointing at a copy of a real database"]
+fn lean_conversion_of_a_real_copy() {
+    let path = std::path::PathBuf::from(std::env::var("VVD_LEAN_COPY").expect("VVD_LEAN_COPY"));
+    let before = fs::metadata(&path).expect("copy").len();
+    let started = std::time::Instant::now();
+    let db = crate::db::open_file(&path).expect("convert");
+    let secs = started.elapsed().as_secs_f64();
+    let rows: i64 = db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM res_rows", [], |r| r.get(0)).unwrap();
+    drop(db);
+    let after = fs::metadata(&path).unwrap().len();
+    println!("converted {rows} rows in {secs:.1} s: {:.0} MB -> {:.0} MB", before as f64 / 1e6, after as f64 / 1e6);
+}
+
+/// The app's SQLite on a converted copy (VVD_LEAN_COPY): a query's plan and time.
+#[test]
+#[ignore = "needs VVD_LEAN_COPY pointing at a converted copy"]
+fn lean_query_plans_on_a_real_copy() {
+    let path = std::env::var("VVD_LEAN_COPY").expect("VVD_LEAN_COPY");
+    let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    conn.execute_batch("PRAGMA cache_size = -262144; PRAGMA mmap_size = 1073741824;").unwrap();
+    println!("sqlite {}", rusqlite::version());
+    let sql = std::env::var("VVD_SQL").unwrap_or_else(|_| "SELECT 1".into());
+    let mut plan = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    let rows: Vec<String> = plan.query_map([], |r| r.get::<_, String>(3)).unwrap().map(|r| r.unwrap()).collect();
+    println!("{}", rows.join("
+"));
+    for _ in 0..3 {
+        let t = std::time::Instant::now();
+        let n = conn.prepare(&sql).unwrap().query_map([], |_| Ok(())).unwrap().count();
+        println!("{n} rows in {:?}", t.elapsed());
+    }
+}
+
+#[test]
+fn a_path_splits_into_folder_and_name_as_sql_does() {
+    let conn = rusqlite::Connection::open_in_memory().expect("db");
+    for p in ["Custom/Atom/a.vmi", "meta.json", "Saves/scene/", "a/b/c/灵梦.png", "", "/x"] {
+        let (dir, name) = crate::db::split_internal_path(p);
+        let (sql_dir, sql_name): (String, String) = conn
+            .query_row(
+                "SELECT rtrim(?1, replace(?1, '/', '')), substr(?1, length(rtrim(?1, replace(?1, '/', ''))) + 1)",
+                [p],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("split");
+        assert_eq!((dir, name), (sql_dir.as_str(), sql_name.as_str()), "{p}");
+        assert_eq!(format!("{dir}{name}"), p);
+    }
 }
 
 #[test]
