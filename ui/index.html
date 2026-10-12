@@ -788,6 +788,9 @@
         <div class="lib-layout">
           <!-- Explore: the folder tree (rendered by app.js). -->
           <aside class="lib-folders hidden" id="lib-folders" aria-label="Folders"></aside>
+          <button type="button" class="lib-pane-close is-folders" data-lib-panel-close="folders" title="Close the folder tree" aria-label="Close the folder tree">
+            <span class="material-symbols-outlined">chevron_left</span>
+          </button>
           <!-- Centre: toolbar + grid / table -->
           <div class="lib-center">
             <!-- Explore: the open folder and its subfolders. -->
@@ -820,6 +823,16 @@
                 </button>
                 <button class="lib-view-btn" type="button" data-lib-view="table" title="Table">
                   <span class="material-symbols-outlined">view_list</span>
+                </button>
+              </div>
+              <!-- Show or hide the folder tree (Explore) and the details panel;
+                   on a narrow window they slide over the grid instead. -->
+              <div class="lib-panel-toggles">
+                <button class="lib-icon-btn lib-panel-btn hidden" type="button" id="lib-toggle-folders" data-lib-panel="folders" aria-pressed="true">
+                  <span class="material-symbols-outlined">left_panel_close</span>
+                </button>
+                <button class="lib-icon-btn lib-panel-btn" type="button" id="lib-toggle-detail" data-lib-panel="detail" aria-pressed="true">
+                  <span class="material-symbols-outlined">right_panel_close</span>
                 </button>
               </div>
             </div>
@@ -900,6 +913,9 @@
           <div class="lib-resize" data-lib-resize="detail" aria-hidden="true"></div>
           <!-- Details / selection panel -->
           <aside class="lib-detail" id="lib-detail"></aside>
+          <button type="button" class="lib-pane-close is-detail" data-lib-panel-close="detail" title="Close the details" aria-label="Close the details">
+            <span class="material-symbols-outlined">chevron_right</span>
+          </button>
         </div>
 
         <footer class="lib-statusbar" id="lib-statusbar"></footer>

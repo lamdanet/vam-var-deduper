@@ -3471,6 +3471,116 @@ function libSetView(view) {
   renderVarPackages();
 }
 
+// ---- Panels: the folder tree and the details ------------------------------------
+// Each can be hidden (the toolbar's panel buttons, remembered). When the
+// window can't fit both beside a usable grid, they stop taking its width and
+// slide over it instead: clicking a package slides its details in, the
+// folder tree opens from its button, and Esc or the edge button closes them.
+
+const LIB_NARROW_GRID = 560;
+const LIB_PANELS = {
+  folders: libStoreGet("vp.lib.showFolders", "1") !== "0",
+  detail: libStoreGet("vp.lib.showDetail", "1") !== "0",
+  narrow: false,
+  open: { folders: false, detail: false },
+};
+
+function libExploreOn() {
+  return !$("lib-folders")?.classList.contains("hidden");
+}
+
+function libPanelShown(which) {
+  return LIB_PANELS.narrow ? LIB_PANELS.open[which] : LIB_PANELS[which];
+}
+
+function libPanelsApply() {
+  const view = $("var-packages-view");
+  if (!view) return;
+  const n = LIB_PANELS.narrow;
+  view.classList.toggle("is-narrow", n);
+  view.classList.toggle("hide-folders", !n && !LIB_PANELS.folders);
+  view.classList.toggle("hide-detail", !n && !LIB_PANELS.detail);
+  view.classList.toggle("folders-open", n && LIB_PANELS.open.folders);
+  view.classList.toggle("detail-open", n && LIB_PANELS.open.detail);
+  const sync = (id, which, open, close, name) => {
+    const b = $(id);
+    if (!b) return;
+    const on = libPanelShown(which);
+    b.classList.toggle("is-on", on);
+    b.setAttribute("aria-pressed", String(on));
+    b.title = `${on ? "Hide" : "Show"} ${name}`;
+    b.setAttribute("aria-label", b.title);
+    const icon = b.querySelector(".material-symbols-outlined");
+    if (icon) icon.textContent = on ? close : open;
+  };
+  $("lib-toggle-folders")?.classList.toggle("hidden", !libExploreOn());
+  sync("lib-toggle-folders", "folders", "left_panel_open", "left_panel_close", "the folder tree");
+  sync("lib-toggle-detail", "detail", "right_panel_open", "right_panel_close", "the details");
+  requestAnimationFrame(() => libApplyLayout());
+}
+
+// Narrow or not: the grid's width with both panels beside it.
+function libPanelsMeasure() {
+  const layout = document.querySelector("#var-packages-view .lib-layout");
+  if (!layout || !layout.clientWidth) return;
+  const docked = (libExploreOn() && LIB_PANELS.folders ? 250 : 0) + (LIB_PANELS.detail ? Number(state.vpDetailWidth) || 340 : 0);
+  const narrow = layout.clientWidth - docked < LIB_NARROW_GRID;
+  if (narrow !== LIB_PANELS.narrow) {
+    LIB_PANELS.narrow = narrow;
+    LIB_PANELS.open = { folders: false, detail: false };
+  }
+  libPanelsApply();
+}
+
+function libPanelToggle(which) {
+  if (LIB_PANELS.narrow) {
+    const open = !LIB_PANELS.open[which];
+    LIB_PANELS.open = { folders: false, detail: false };
+    LIB_PANELS.open[which] = open;
+    libPanelsApply();
+    return;
+  }
+  LIB_PANELS[which] = !LIB_PANELS[which];
+  libStoreSet(which === "folders" ? "vp.lib.showFolders" : "vp.lib.showDetail", LIB_PANELS[which] ? "1" : "0");
+  // Hiding one may give the grid room to keep the other beside it.
+  libPanelsMeasure();
+}
+
+// A package clicked on a narrow window: its details slide in.
+function libPanelsShowDetail() {
+  if (!LIB_PANELS.narrow || LIB_PANELS.open.detail) return;
+  LIB_PANELS.open = { folders: false, detail: true };
+  libPanelsApply();
+}
+
+function libPanelsClose(which = null) {
+  if (!LIB_PANELS.narrow) return false;
+  const was = which ? LIB_PANELS.open[which] : LIB_PANELS.open.folders || LIB_PANELS.open.detail;
+  if (!was) return false;
+  if (which) LIB_PANELS.open[which] = false;
+  else LIB_PANELS.open = { folders: false, detail: false };
+  libPanelsApply();
+  return true;
+}
+
+function setupLibPanels() {
+  document.querySelectorAll("[data-lib-panel]").forEach((b) =>
+    b.addEventListener("click", () => libPanelToggle(b.getAttribute("data-lib-panel"))),
+  );
+  document.querySelectorAll("[data-lib-panel-close]").forEach((b) =>
+    b.addEventListener("click", () => libPanelsClose(b.getAttribute("data-lib-panel-close"))),
+  );
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || state.pendingDialog) return;
+    if ($("var-packages-view")?.classList.contains("hidden")) return;
+    if (document.querySelector(".dialog-backdrop:not(.hidden), [data-lib-dd-menu]:not(.hidden)")) return;
+    libPanelsClose();
+  });
+  const layout = document.querySelector("#var-packages-view .lib-layout");
+  if (layout && typeof ResizeObserver === "function") new ResizeObserver(() => libPanelsMeasure()).observe(layout);
+  libPanelsMeasure();
+}
+
 function libApplyPaneWidths() {
   const view = $("var-packages-view");
   if (!view) return;
@@ -3495,6 +3605,7 @@ function setupLibResizeHandles() {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
         libStoreSet(LIB_STORE.detailWidth, state.vpDetailWidth);
+        libPanelsMeasure();
       };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
@@ -4167,6 +4278,7 @@ function libMissingGetHtml(id) {
 
 // Shows one package in the grid: leaves the Missing view and searches for it.
 function libRevealPackage(filePath, packageId) {
+  libPanelsShowDetail();
   const loaded = (state.varPackagesItems ?? []).find((it) => it.file_path === filePath);
   if (loaded && !libIsMissingView()) {
     vpSelectOnly(loaded);
@@ -20446,6 +20558,8 @@ function vpxApplyTabUi() {
   $("lib-folders")?.classList.toggle("hidden", !exploring);
   $("lib-crumbs")?.classList.toggle("hidden", !exploring);
   vpxRender();
+  // The folder tree comes or goes: the grid may fit the panels now, or not.
+  libPanelsMeasure();
 }
 
 // A package's own folder, opened in Explore with the package selected.
@@ -20519,6 +20633,10 @@ function vpxRenderTree() {
           .map((f) => row(f, 0))
           .join("");
   const keepFocus = document.activeElement?.id === "vpx-find";
+  // Unfolding a folder re-renders the tree: it stays where it was scrolled,
+  // and the fold button keeps the keyboard focus.
+  const scrollTop = host.querySelector(".vpx-tree")?.scrollTop ?? 0;
+  const focusToggle = document.activeElement?.closest?.("#lib-folders [data-vpx-toggle]")?.getAttribute("data-vpx-toggle");
   host.innerHTML = `
     <div class="vpx-head"><span>Folders</span>
       <button type="button" class="lib-icon-btn" data-vpx-act="fold-all" title="Fold every folder"><span class="material-symbols-outlined">unfold_less</span></button></div>
@@ -20527,12 +20645,20 @@ function vpxRenderTree() {
     <div class="vpx-foot">
       <button type="button" class="lib-btn lib-btn-sm vpx-outside-btn" data-vpx-act="open-outside" title="Browse a folder that isn't in your library, without adding it"><span class="material-symbols-outlined">create_new_folder</span>Open a folder…</button>
     </div>`;
+  const tree = host.querySelector(".vpx-tree");
+  if (tree) tree.scrollTop = scrollTop;
+  if (focusToggle) host.querySelector(`[data-vpx-toggle="${CSS.escape(focusToggle)}"]`)?.focus({ preventScroll: true });
   if (keepFocus) {
     const input = $("vpx-find");
     input?.focus();
     input?.setSelectionRange(input.value.length, input.value.length);
   }
-  host.querySelector(".vpx-row.is-current")?.scrollIntoView({ block: "nearest" });
+  // Bring the open folder into view only when it's a different folder, not
+  // on every fold or unfold (that pulled the tree back to it each time).
+  if (VPX.treeShown !== VPX.folder) {
+    VPX.treeShown = VPX.folder;
+    host.querySelector(".vpx-row.is-current")?.scrollIntoView({ block: "nearest" });
+  }
 }
 
 function vpxRootLabel(path) {
@@ -20658,7 +20784,11 @@ function setupVarPackagesExplore() {
     }
     if ((el = q("[data-vpx-open]"))) {
       VPX.query = "";
+      // Picked from the sliding folder tree: it gets out of the way. (Asked
+      // before opening: that re-renders the tree and detaches this button.)
+      const fromTree = Boolean(el.closest("#lib-folders"));
       vpxOpenFolder(el.getAttribute("data-vpx-open"));
+      if (fromTree) libPanelsClose("folders");
       return;
     }
     if (!(el = q("[data-vpx-act]"))) return;
@@ -20900,6 +21030,7 @@ function setupLibraryView() {
       vpToggleSelect(item);
     } else {
       vpSelectOnly(item);
+      libPanelsShowDetail();
     }
   });
   scroll?.addEventListener("dblclick", (event) => {
@@ -28622,6 +28753,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupDownloadsManager();
   hideIconLigatures(document);
   setupExperimentalPages();
+  setupLibPanels();
   setupHubLinks();
   setupSettingsTabs();
   setupDbLocation();

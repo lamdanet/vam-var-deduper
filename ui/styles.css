@@ -21813,3 +21813,92 @@ button.vpx-seg:hover {
 .lib-user-line .lib-user-row {
   flex: 1 1 auto;
 }
+
+/* VAR Packages: the folder tree and the details panel, hidden or sliding
+   over the grid on a narrow window (libPanelsApply in app.js). */
+.lib-panel-toggles {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--lib-border);
+}
+.lib-panel-btn.hidden {
+  display: none;
+}
+.lib-panel-btn.is-on {
+  color: var(--lib-text);
+}
+#var-packages-view .lib-layout {
+  position: relative;
+}
+#var-packages-view.hide-folders .lib-folders,
+#var-packages-view.hide-detail .lib-detail,
+#var-packages-view.hide-detail .lib-resize {
+  display: none;
+}
+.lib-pane-close {
+  display: none;
+}
+#var-packages-view.is-narrow .lib-resize {
+  display: none;
+}
+#var-packages-view.is-narrow .lib-folders,
+#var-packages-view.is-narrow .lib-detail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 30;
+  box-shadow: var(--bs-overlay-shadow, 0 12px 36px rgba(0, 0, 0, 0.45));
+}
+#var-packages-view.is-narrow .lib-folders {
+  left: 0;
+}
+#var-packages-view.is-narrow .lib-detail {
+  right: 0;
+  max-width: calc(100% - 56px);
+}
+#var-packages-view.is-narrow:not(.folders-open) .lib-folders,
+#var-packages-view.is-narrow:not(.detail-open) .lib-detail {
+  display: none;
+}
+/* The drawer's close button, on its inner edge. */
+#var-packages-view.is-narrow.folders-open .lib-pane-close.is-folders,
+#var-packages-view.is-narrow.detail-open .lib-pane-close.is-detail {
+  position: absolute;
+  top: 10px;
+  z-index: 31;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--lib-border);
+  border-radius: 999px;
+  background: var(--lib-elevated);
+  color: var(--lib-text);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+#var-packages-view.is-narrow.folders-open .lib-pane-close.is-folders {
+  left: calc(250px - 14px);
+}
+#var-packages-view.is-narrow.detail-open .lib-pane-close.is-detail {
+  right: calc(min(var(--lib-detail-w, 340px), 100% - 56px) - 14px);
+}
+
+/* VAR Packages toolbar: when space runs short, the selection hint shrinks
+   (with an ellipsis) so the view and panel buttons always stay in view. */
+.lib-toolbar > * {
+  flex-shrink: 0;
+}
+.lib-toolbar > .lib-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lib-toolbar > .lib-spacer {
+  flex: 1 1 0;
+  min-width: 0;
+}
