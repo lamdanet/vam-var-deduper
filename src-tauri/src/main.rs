@@ -5,6 +5,7 @@ mod clean_many;
 mod clean_var;
 mod config;
 mod db;
+mod db_location;
 mod dep_usage;
 mod disable;
 mod dropin;
@@ -256,6 +257,8 @@ fn main() {
             list_source_updates,
             start_scan_source_links_task,
             source_index::start_index_sources_task,
+            db_location::db_location_info,
+            db_location::start_move_database_task,
             check_archive_password,
             inspect_vam_dir,
             get_hub_package_meta,

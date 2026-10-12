@@ -9,14 +9,13 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection};
-use tauri::Manager;
 
 use crate::{
     models::{DbFindRef, DownloadLinkRow, ResourceRef, SourceFileRow},
     naming::{self, SEEDED_CATEGORIES},
 };
 
-const DB_FILE_NAME: &str = "vam_var_deduper.db";
+pub(crate) const DB_FILE_NAME: &str = "vam_var_deduper.db";
 pub(crate) const SCHEMA_VERSION: i32 = 22;
 
 /// Number of additional read-only connections opened against the same file.
@@ -223,17 +222,10 @@ impl Db {
     }
 }
 
+/// The database file: the folder chosen in Settings, else the app's data
+/// folder (db_location.rs; VVD_DB_PATH overrides it for testing).
 fn db_path(app: &tauri::AppHandle) -> Result<PathBuf> {
-    // For testing a build on a copy of a database: VVD_DB_PATH names the file.
-    if let Some(path) = std::env::var_os("VVD_DB_PATH").filter(|p| !p.is_empty()) {
-        return Ok(PathBuf::from(path));
-    }
-    let dir = app
-        .path()
-        .app_data_dir()
-        .context("failed to resolve app data dir")?;
-    fs::create_dir_all(&dir).context("failed to create app data dir")?;
-    Ok(dir.join(DB_FILE_NAME))
+    crate::db_location::db_path(app)
 }
 
 pub(crate) fn open(app: &tauri::AppHandle) -> Result<Db> {
@@ -282,7 +274,10 @@ pub(crate) fn open_with_progress(app: &tauri::AppHandle, progress: Progress) -> 
             .context("failed to compact the database after the lean conversion")?;
     }
     let readers = ReadPool::open_from_path(&path, READ_POOL_SIZE)?;
-    Db::finalize(conn, readers)
+    let db = Db::finalize(conn, readers)?;
+    // A move's old file goes now that the new one has opened.
+    crate::db_location::opened(app, &path);
+    Ok(db)
 }
 
 /// Copies the database file aside before the lean conversion, never over an

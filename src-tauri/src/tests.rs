@@ -6817,6 +6817,32 @@ fn a_saved_source_is_indexed_from_its_listing() {
 }
 
 #[test]
+fn a_moved_database_is_checked_before_it_is_used() {
+    let dir = std::env::temp_dir().join(format!("vvd_dbmove_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("vam_var_deduper.db");
+    {
+        let db = crate::db::open_file(&path).expect("open");
+        let conn = db.conn.lock().unwrap();
+        crate::db::upsert_package(&conn, "A.Pack.1", "C:/a.var", 1, 1, None).unwrap();
+        conn.execute(
+            "INSERT INTO resources (package_id, internal_path, size, effective_size, crc32) VALUES ('A.Pack.1', 'x/y.json', 1, 1, 5)",
+            [],
+        )
+        .unwrap();
+        // The copy a move makes.
+        conn.execute("VACUUM INTO ?1", [dir.join("copy.db").display().to_string()]).unwrap();
+    }
+    assert_eq!(crate::db_location::check_database_for_test(&dir.join("copy.db")), Ok((1, 1)));
+    // Another app's SQLite file isn't taken for ours.
+    let other = dir.join("other.db");
+    rusqlite::Connection::open(&other).unwrap().execute_batch("CREATE TABLE t (x);").unwrap();
+    assert!(crate::db_location::check_database_for_test(&other).is_err());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_path_splits_into_folder_and_name_as_sql_does() {
     let conn = rusqlite::Connection::open_in_memory().expect("db");
     for p in ["Custom/Atom/a.vmi", "meta.json", "Saves/scene/", "a/b/c/灵梦.png", "", "/x"] {
