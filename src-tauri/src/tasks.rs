@@ -4909,6 +4909,60 @@ fn resolve_one_source(db: &Db, package_id: &str) -> VarSourceInfo {
     info
 }
 
+/// Where each of `package_ids` can be downloaded from: the VaM Hub first (one
+/// batched request), then the saved sources. Nothing is stored. A Hub that
+/// can't be reached leaves `error` set on the ids no saved source covers.
+#[tauri::command]
+pub(crate) async fn resolve_var_sources(
+    package_ids: Vec<String>,
+    db: State<'_, Db>,
+) -> Result<Vec<(String, VarSourceInfo)>, String> {
+    let ids: Vec<String> = package_ids
+        .iter()
+        .map(|id| id.trim().trim_end_matches(".var").to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    // The Hub client blocks: on its own thread, never a tokio worker.
+    let hub_ids = ids.clone();
+    let (hub, hub_err) = crate::library::on_hub_thread(move || {
+        Ok(match crate::hub::hub_client() {
+            Ok(client) => crate::hub::resolve_download_urls(&client, &hub_ids),
+            Err(e) => (std::collections::HashMap::new(), Some(e.to_string())),
+        })
+    })
+    .await?;
+    let out = ids
+        .into_iter()
+        .map(|id| {
+            let mut info = VarSourceInfo {
+                download_url: None,
+                filename: None,
+                file_size: None,
+                host: None,
+                error: None,
+            };
+            if let Some(r) = hub.get(&id) {
+                info.download_url = Some(r.download_url.clone());
+                info.filename = Some(r.filename.clone());
+                info.file_size = r.file_size;
+                info.host = Some("hub".to_string());
+            } else {
+                let base = dependency_package_base(&id).to_ascii_lowercase();
+                if let Some(link) = pick_db_link(&db, &base, wanted_version(&id)) {
+                    info.download_url = Some(link.url);
+                    info.filename = Some(link.filename);
+                    info.host = Some(link.host);
+                    info.file_size = link.size.map(|s| s as u64);
+                } else {
+                    info.error = hub_err.clone();
+                }
+            }
+            (id, info)
+        })
+        .collect();
+    Ok(out)
+}
+
 fn finish_resolve_var_source_task(
     tasks: &Arc<Mutex<HashMap<u64, ProgressPayload>>>,
     task_id: u64,

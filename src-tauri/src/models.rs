@@ -800,6 +800,22 @@ pub(crate) struct DownloadLinkRow {
     pub(crate) last_error: Option<String>,
 }
 
+/// One file among the saved download links, with its links summed up (for
+/// "Get a package": a row per file, not per link).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SourceFileRow {
+    pub(crate) filename: String,
+    /// How many links are saved for it.
+    pub(crate) links: i64,
+    /// Its hosts, comma-separated ("pixeldrain,mega").
+    pub(crate) hosts: String,
+    pub(crate) size: Option<i64>,
+    /// A download through one of its links has worked.
+    pub(crate) worked: bool,
+    /// How many of its links failed last time.
+    pub(crate) failing: i64,
+}
+
 impl DownloadLinkRow {
     /// 0 worked (and hasn't failed since), 1 untried, 2 worked once but
     /// failing now, 3 never worked and failing — lower is tried first.

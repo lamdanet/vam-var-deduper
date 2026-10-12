@@ -306,6 +306,25 @@ pub(crate) fn search_download_links(
         .map_err(|e| e.to_string())
 }
 
+/// Saved files whose name contains `query`, a row per file (the newest
+/// first), `limit` from `offset`; with how many files match. For "Get a
+/// package": what you could download from your sources.
+#[tauri::command(async)]
+pub(crate) fn search_source_files(
+    query: Option<String>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+    db: State<'_, Db>,
+) -> Result<(Vec<crate::models::SourceFileRow>, u64), String> {
+    crate::db::search_source_files(
+        &db,
+        query.as_deref().unwrap_or("").trim(),
+        offset.unwrap_or(0),
+        limit.unwrap_or(50).min(500),
+    )
+    .map_err(|e| e.to_string())
+}
+
 // ----------------------------------------------------------------------------
 // Scanning pasted text for links
 // ----------------------------------------------------------------------------

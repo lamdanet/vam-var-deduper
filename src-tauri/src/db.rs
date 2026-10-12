@@ -12,7 +12,7 @@ use rusqlite::{params, Connection};
 use tauri::Manager;
 
 use crate::{
-    models::{DbFindRef, DownloadLinkRow, ResourceRef},
+    models::{DbFindRef, DownloadLinkRow, ResourceRef, SourceFileRow},
     naming::{self, SEEDED_CATEGORIES},
 };
 
@@ -1082,6 +1082,39 @@ pub(crate) fn search_download_links(db: &Db, query: &str, limit: u32) -> Result<
                 last_ok: r.get(8)?,
                 fail_count: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
                 last_error: r.get(10)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((rows, total.max(0) as u64))
+}
+
+/// Saved files whose name contains `query` (case-insensitive; all when
+/// empty), one row per file with its links summed up, the newest first, at
+/// most `limit` from `offset`; and how many files match in all. Reads the
+/// table as it is: nothing is cached or indexed for this.
+pub(crate) fn search_source_files(db: &Db, query: &str, offset: u32, limit: u32) -> Result<(Vec<SourceFileRow>, u64)> {
+    let handle = db.read()?;
+    let pattern = format!("%{}%", query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let total: i64 = handle.query_row(
+        "SELECT COUNT(DISTINCT lower(filename)) FROM download_links WHERE filename LIKE ?1 ESCAPE '\\'",
+        params![pattern],
+        |r| r.get(0),
+    )?;
+    let mut stmt = handle.prepare(
+        "SELECT MIN(filename), COUNT(*), GROUP_CONCAT(DISTINCT host), MAX(size),
+                MAX(last_ok IS NOT NULL), SUM(COALESCE(fail_count, 0) > 0)
+         FROM download_links WHERE filename LIKE ?1 ESCAPE '\\'
+         GROUP BY lower(filename) ORDER BY MAX(id) DESC LIMIT ?2 OFFSET ?3",
+    )?;
+    let rows = stmt
+        .query_map(params![pattern, limit, offset], |r| {
+            Ok(SourceFileRow {
+                filename: r.get(0)?,
+                links: r.get(1)?,
+                hosts: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                size: r.get(3)?,
+                worked: r.get::<_, i64>(4)? != 0,
+                failing: r.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

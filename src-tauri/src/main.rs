@@ -52,7 +52,7 @@ use crate::{
     offload::{plan_offload, start_offload_task},
     sources::{
         add_download_link, inspect_download_link, list_download_links, remove_download_link,
-        search_download_links, start_scan_source_links_task, check_archive_password,
+        search_download_links, search_source_files, start_scan_source_links_task, check_archive_password,
     },
     packages::{
         delete_var_package, move_var_to_creator_folder,
@@ -61,7 +61,7 @@ use crate::{
     },
     tasks::{
         start_analyze_text_dependencies_task, start_analyze_var_dependencies_task,
-        start_download_one_task, start_import_download_links_task, get_download_links_count,
+        start_download_one_task, resolve_var_sources, start_import_download_links_task, get_download_links_count,
         clear_download_links, open_url, start_resolve_var_source_task,
         start_apply_internalize_task, start_apply_missing_resources_fix_task, cancel_task, pause_task,
         clear_database, clear_task, export_vam_bundle, export_var_resource,
@@ -160,6 +160,7 @@ fn main() {
             start_analyze_var_dependencies_task,
             start_analyze_text_dependencies_task,
             start_download_one_task,
+            resolve_var_sources,
             start_import_download_links_task,
             get_download_links_count,
             clear_download_links,
@@ -204,6 +205,7 @@ fn main() {
             list_download_links,
             remove_download_link,
             search_download_links,
+            search_source_files,
             start_scan_source_links_task,
             check_archive_password,
             inspect_vam_dir,
