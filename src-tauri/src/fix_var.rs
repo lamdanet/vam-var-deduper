@@ -325,80 +325,44 @@ fn pkg_contains_path(pkg: &PreparedPackage, path: &str) -> bool {
 /// matches. The first hit is intentional — we only need *a* plausible CRC
 /// candidate so the candidate ranker can prefer CRC-equal local matches.
 /// A CRC and size for each of `paths`, from any indexed package that has a
-/// file there (the first row found, like a `LIMIT 1` per path). One pass
-/// over `resources` for all of them.
+/// file there (its first row, as a `LIMIT 1` per path). Each path is its
+/// folder (`dirs`) and file name: a lookup on the folder index, not a pass
+/// over the whole table.
 fn lookup_crcs_by_paths(
     conn: &rusqlite::Connection,
     paths: &[String],
 ) -> Result<HashMap<String, (u32, u64)>> {
-    lookup_crcs_in_rows(conn, paths, i64::MIN, i64::MAX)
-}
-
-/// The same lookup, split into row ranges read at once on the read
-/// connections: each reads its share of the table, so the whole takes about
-/// a third of the time with three (1.2 s → 0.6 s on 4.9 million rows). Ranges
-/// merge in row order, so a path's first row wins as in one query.
-fn lookup_crcs_by_paths_split(db: &Db, paths: &[String]) -> Result<HashMap<String, (u32, u64)>> {
-    let parts = db.read_parallelism();
-    let (lo, hi): (i64, i64) = db.read()?.query_row(
-        "SELECT COALESCE(MIN(rowid), 0), COALESCE(MAX(rowid), 0) FROM resources",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    if parts <= 1 || hi <= lo {
-        let conn = db.read()?;
-        return lookup_crcs_by_paths(&conn, paths);
-    }
-    let step = (hi - lo) / parts as i64 + 1;
-    let results: Vec<Result<HashMap<String, (u32, u64)>>> = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..parts as i64)
-            .map(|i| {
-                let first = lo + i * step;
-                s.spawn(move || {
-                    let conn = db.read()?;
-                    lookup_crcs_in_rows(&conn, paths, first, first + step - 1)
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| Err(anyhow!("a crc32 lookup thread failed"))))
-            .collect()
-    });
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT crc32, size FROM res_rows
+             WHERE dir = (SELECT dir_id FROM dirs WHERE path = ?1) AND name = ?2 AND crc32 IS NOT NULL
+             ORDER BY id LIMIT 1",
+        )
+        .context("failed to prepare the crc32 lookup by internal_path")?;
     let mut found = HashMap::new();
-    for part in results {
-        for (path, hit) in part? {
-            found.entry(path).or_insert(hit);
+    for path in paths {
+        let (dir, name) = crate::db::split_internal_path(path);
+        let hit = stmt
+            .query_row(rusqlite::params![dir, name], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .context("failed to look up crc32 by internal_path")?;
+        if let Some((crc, size)) = hit {
+            found.insert(path.clone(), (crc as u32, size.max(0) as u64));
         }
     }
     Ok(found)
 }
 
-fn lookup_crcs_in_rows(
-    conn: &rusqlite::Connection,
-    paths: &[String],
-    first: i64,
-    last: i64,
-) -> Result<HashMap<String, (u32, u64)>> {
-    let wanted = serde_json::to_string(paths).context("failed to encode the paths")?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT internal_path, crc32, size FROM resources
-             WHERE crc32 IS NOT NULL AND internal_path IN (SELECT value FROM json_each(?1))
-               AND rowid BETWEEN ?2 AND ?3",
-        )
-        .context("failed to prepare the crc32 lookup by internal_path")?;
-    let rows = stmt
-        .query_map(rusqlite::params![wanted, first, last], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
-        })
-        .context("failed to look up crc32 by internal_path")?;
-    let mut found = HashMap::new();
-    for row in rows {
-        let (path, crc, size) = row.context("failed to read a crc32 row")?;
-        found.entry(path).or_insert((crc as u32, size.max(0) as u64));
-    }
-    Ok(found)
+/// The same lookup on a read connection. It used to split a pass over the
+/// whole table across the read connections; with the folder index each path
+/// is a few rows, so one connection does it.
+fn lookup_crcs_by_paths_split(db: &Db, paths: &[String]) -> Result<HashMap<String, (u32, u64)>> {
+    let conn = db.read()?;
+    lookup_crcs_by_paths(&conn, paths)
 }
 
 pub(crate) fn is_text_path(internal_path: &str) -> bool {

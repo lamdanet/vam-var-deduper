@@ -2083,13 +2083,10 @@ pub(crate) fn build_db_package_where(
         // index (~40 ms). NOT IN is NULL-safe here — resources.package_id is
         // NOT NULL. Unqualified `internal_path` binds to the inner `resources`
         // row, so the shared predicate drops in verbatim.
-        let id_set = format!(
-            "(SELECT package_id FROM resources WHERE {})",
-            db::SCENE_IMAGE_PREDICATE_SQL,
-        );
+        let pkg_set = format!("({})", db::SCENE_IMAGE_PKGS_SQL);
         match scene {
-            "with" => clauses.push(format!("p.package_id IN {id_set}")),
-            "without" => clauses.push(format!("p.package_id NOT IN {id_set}")),
+            "with" => clauses.push(format!("p.pkg IN {pkg_set}")),
+            "without" => clauses.push(format!("p.pkg NOT IN {pkg_set}")),
             _ => {}
         }
     }
@@ -2352,7 +2349,8 @@ fn build_resource_list_where(
     {
         // Format detection picks the fastest indexed path:
         //   * 8 hex chars → exact CRC32 match (idx_resources_crc32).
-        //   * else        → prefix match on package_id (idx_resources_package).
+        //   * else        → prefix match on package_id: the matching packages
+        //     (82k rows), then their rows on the (pkg, dir, name) index.
         let is_hex = |s: &str| s.bytes().all(|b| b.is_ascii_hexdigit());
         if needle.len() == 8 && is_hex(needle) {
             if let Ok(crc) = u32::from_str_radix(needle, 16) {
@@ -2367,7 +2365,7 @@ fn build_resource_list_where(
                     .replace('%', "\\%")
                     .replace('_', "\\_")
             );
-            clauses.push("r.package_id LIKE ? ESCAPE '\\'".to_string());
+            clauses.push("r.pkg IN (SELECT pkg FROM packages WHERE package_id LIKE ? ESCAPE '\\')".to_string());
             params.push(Value::Text(pattern));
         }
     }
@@ -2379,8 +2377,7 @@ fn build_resource_list_where(
         .filter(|s| !s.is_empty())
     {
         clauses.push(
-            "EXISTS (SELECT 1 FROM categories cat WHERE cat.category_id = r.category_id AND cat.name = ?)"
-                .to_string(),
+            "r.category_id = (SELECT category_id FROM categories WHERE name = ?)".to_string(),
         );
         params.push(Value::Text(category.to_string()));
     }
@@ -2462,7 +2459,7 @@ pub(crate) fn list_resources_from_db(
         // multi-million-row tables.
         0
     } else {
-        let count_sql = format!("SELECT COUNT(*) FROM resources r{}", where_sql);
+        let count_sql = format!("SELECT COUNT(*) FROM res_rows r{}", where_sql);
         let mut stmt = conn.prepare(&count_sql).map_err(|err| err.to_string())?;
         let bound_refs: Vec<&dyn rusqlite::ToSql> =
             where_params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
@@ -2471,14 +2468,20 @@ pub(crate) fn list_resources_from_db(
             .max(0) as u64
     };
 
+    // The page's ids first, off the narrow res_rows (or a filter's index),
+    // in id order as before: skipping to a deep page reads them, not the
+    // joined rows (row 2,000,000 in 15 ms). Unfiltered, the table itself is
+    // walked in id order: with the limit a parameter, SQLite would otherwise
+    // read every id off a small index and sort them all (1.2 s a page).
+    let scan = if where_sql.is_empty() { " NOT INDEXED" } else { "" };
     let select_sql = format!(
         "SELECT r.id, r.package_id, p.file_path, r.internal_path, r.crc32, \
                 r.size, r.effective_size, cat.name \
-         FROM resources r \
+         FROM (SELECT r.id FROM res_rows r{scan}{where_sql} ORDER BY r.id LIMIT ? OFFSET ?) pg \
+         CROSS JOIN resources r ON r.id = pg.id \
          LEFT JOIN categories cat ON cat.category_id = r.category_id \
-         LEFT JOIN packages   p   ON p.package_id    = r.package_id\
-         {where_sql} \
-         LIMIT ? OFFSET ?",
+         LEFT JOIN packages   p   ON p.package_id    = r.package_id \
+         ORDER BY r.id",
         where_sql = where_sql
     );
     let mut stmt = conn.prepare(&select_sql).map_err(|err| err.to_string())?;
@@ -2534,7 +2537,7 @@ pub(crate) fn count_resources_from_db(
 
     let (where_sql, where_params) = build_resource_list_where(&search, &filters);
 
-    let count_sql = format!("SELECT COUNT(*) FROM resources r{}", where_sql);
+    let count_sql = format!("SELECT COUNT(*) FROM res_rows r{}", where_sql);
     let mut stmt = conn.prepare(&count_sql).map_err(|err| err.to_string())?;
     let bound_refs: Vec<&dyn rusqlite::ToSql> =
         where_params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
@@ -6037,7 +6040,7 @@ fn run_backfill_sizes(
     let mut was_cancelled = false;
     {
         let mut stmt = tx.prepare(
-            "UPDATE resources SET size = ?1, effective_size = ?1
+            "UPDATE res_rows SET size = ?1, effective_size = NULL
              WHERE crc32 = ?2 AND size = 0",
         )?;
         for (i, (crc, size)) in crc_sizes.iter().enumerate() {
@@ -6331,7 +6334,8 @@ pub(crate) fn find_db_candidates_for_broken_ref(
         let sql = "SELECT r.package_id, p.file_path, r.internal_path, r.size \
                    FROM resources r \
                    LEFT JOIN packages p ON p.package_id = r.package_id \
-                   WHERE r.internal_path = ?1 \
+                   WHERE r.dir = (SELECT dir_id FROM dirs WHERE path = rtrim(?1, replace(?1, '/', ''))) \
+                     AND r.name = substr(?1, length(rtrim(?1, replace(?1, '/', ''))) + 1) \
                      AND (?2 = '' OR r.package_id != ?2) \
                      AND (?3 = '' OR LOWER(r.package_id) LIKE ?3 \
                                   OR LOWER(r.internal_path) LIKE ?3) \
