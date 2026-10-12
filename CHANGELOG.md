@@ -29,6 +29,11 @@ release time, it fills it with the commit messages since the last release.
   - **Package Explorer** gets missing dependencies with one click, and opens
     any package by name, with Download.
   - The **Hub**'s search shows what your sources have that the Hub doesn't.
+- **Saving a source adds its package to the database when it's new**: its
+  file list (paths, CRCs, sizes) is read through the link without downloading
+  it, a few seconds a package in the background. So Fix Missing, Clean VARs
+  and the Resource List can use it before you download it. Links inside a zip,
+  or to a zip holding the .var, are added once downloaded
 
 ### Changed
 - **The database is about a third of its size, and faster**: each package
