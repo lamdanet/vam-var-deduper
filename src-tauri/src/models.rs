@@ -16,7 +16,10 @@ pub(crate) const KEEP_ALL_VALUE: &str = "__KEEP_ALL__";
 pub(crate) const CONFIG_FILE_NAME: &str = "vam_var_deduper.config.json";
 pub(crate) const DEFAULT_LANGUAGE: &str = "en_US";
 
+// A field missing from the file takes its default, so an older or partial
+// file still loads instead of resetting every setting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct AppConfig {
     pub(crate) language: String,
     pub(crate) theme: String,

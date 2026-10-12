@@ -279,7 +279,7 @@ pub(crate) fn start_package_usage_task(
         .as_ref()
         .map(|c| c.items.clone())
         .ok_or_else(|| "The package list isn't loaded yet: open VAR Packages once, then try again.".to_string())?;
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state.tasks.lock().map_err(|_| "task state poisoned".to_string())?;
         guard.insert(task_id, new_progress_payload("package_usage_starting", "Finding the packages that use it"));

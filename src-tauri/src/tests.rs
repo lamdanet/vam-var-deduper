@@ -6843,6 +6843,48 @@ fn a_moved_database_is_checked_before_it_is_used() {
 }
 
 #[test]
+fn database_move_refuses_folders_a_sync_client_copies() {
+    use std::path::Path;
+    let synced = |p: &str| crate::db_location::synced_by_for_test(Path::new(p));
+    assert_eq!(synced(r"C:\Users\me\OneDrive\VaM"), Some("OneDrive"));
+    assert_eq!(synced(r"C:\Users\me\OneDrive - Contoso\db"), Some("OneDrive"));
+    assert_eq!(synced(r"D:\Dropbox\db"), Some("Dropbox"));
+    assert_eq!(synced(r"G:\My Drive\db"), Some("Google Drive"));
+    assert_eq!(synced(r"D:\VaM\data"), None);
+    // A folder merely named like one isn't taken for it.
+    assert_eq!(synced(r"D:\onedrive-backups-old\db"), None);
+}
+
+#[test]
+fn small_files_are_written_whole_and_a_broken_one_falls_back_to_its_last_copy() {
+    let dir = std::env::temp_dir().join(format!("vvd_atomic_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let path = dir.join("settings.json");
+    let parse = |t: &str| serde_json::from_str::<serde_json::Value>(t).ok();
+    // Missing: the caller's defaults.
+    assert_eq!(crate::utils::read_file_with_backup(&path, parse), None);
+    crate::utils::write_file_atomic(&path, br#"{"v":1}"#).unwrap();
+    crate::utils::write_file_atomic(&path, br#"{"v":2}"#).unwrap();
+    assert!(!dir.join("settings.json.tmp").exists());
+    assert_eq!(crate::utils::read_file_with_backup(&path, parse), Some(serde_json::json!({"v": 2})));
+    // A half-written file: the last good one comes back.
+    fs::write(&path, br#"{"v":"#).unwrap();
+    assert_eq!(crate::utils::read_file_with_backup(&path, parse), Some(serde_json::json!({"v": 1})));
+    // Both broken: nothing, and the broken file is kept aside, not overwritten.
+    fs::write(dir.join("settings.json.bak"), b"nope").unwrap();
+    assert_eq!(crate::utils::read_file_with_backup(&path, parse), None);
+    assert!(dir.join("settings.json.broken").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_config_missing_fields_keeps_the_ones_it_has() {
+    let config: crate::models::AppConfig = serde_json::from_str(r#"{"vam_dir":"D:/VaM"}"#).expect("loads");
+    assert_eq!(config.vam_dir.as_deref(), Some("D:/VaM"));
+    assert_eq!(config.theme, crate::models::AppConfig::default().theme);
+}
+
+#[test]
 fn a_path_splits_into_folder_and_name_as_sql_does() {
     let conn = rusqlite::Connection::open_in_memory().expect("db");
     for p in ["Custom/Atom/a.vmi", "meta.json", "Saves/scene/", "a/b/c/灵梦.png", "", "/x"] {

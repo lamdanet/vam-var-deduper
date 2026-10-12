@@ -257,7 +257,7 @@ pub(crate) struct AddedLink {
 /// written (see `link_key`) — isn't added again; an archive link's member and
 /// password are still updated. `archive_entry` marks the link as a `.zip`
 /// holding the `.var` at that path.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn add_download_link(
     filename: String,
     url: String,
@@ -1010,7 +1010,7 @@ pub(crate) fn list_download_links(package_id: String, db: State<'_, Db>) -> Resu
     crate::db::find_download_links(&db, &base).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn remove_download_link(filename: String, url: String, db: State<'_, Db>) -> Result<bool, String> {
     crate::db::remove_download_link(&db, &filename, &url).map_err(|e| e.to_string())
 }

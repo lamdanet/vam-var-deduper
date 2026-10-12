@@ -476,3 +476,56 @@ pub(crate) fn copy_with_progress(from: &Path, to: &Path, progress: &dyn Fn(u64, 
     }
     result
 }
+
+/// `path` with `suffix` added to its file name (`a.json` → `a.json.bak`).
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+/// Writes a small file so a crash or a full disk never leaves it half
+/// written: a temporary file beside it, flushed to disk, then renamed over
+/// it. The version it replaces is kept as `<name>.bak`.
+pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = with_suffix(path, ".tmp");
+    let written = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(anyhow!("failed to write {}: {e}", path.display()));
+    }
+    if path.exists() {
+        let _ = fs::copy(path, with_suffix(path, ".bak"));
+    }
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        anyhow!("failed to write {}: {e}", path.display())
+    })
+}
+
+/// Reads a file written by [`write_file_atomic`] and parses it with `parse`.
+/// Missing: `None`, so the caller uses its defaults. Unreadable or broken:
+/// its `.bak`; when that fails too, the broken file is set aside as
+/// `<name>.broken` (never overwritten by the next save) and `None`.
+pub(crate) fn read_file_with_backup<T>(path: &Path, parse: impl Fn(&str) -> Option<T>) -> Option<T> {
+    let main = match fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        other => other.ok().and_then(|text| parse(&text)),
+    };
+    if main.is_some() {
+        return main;
+    }
+    let backup = fs::read_to_string(with_suffix(path, ".bak")).ok().and_then(|text| parse(&text));
+    if backup.is_none() {
+        let _ = fs::rename(path, with_suffix(path, ".broken"));
+    }
+    backup
+}

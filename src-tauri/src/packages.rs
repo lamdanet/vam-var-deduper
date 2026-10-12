@@ -1300,7 +1300,7 @@ pub(crate) fn begin_task(
     phase: &str,
     message: &str,
 ) -> Result<(u64, TaskMap, Arc<AtomicBool>), String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(state)?;
     state
         .tasks
         .lock()

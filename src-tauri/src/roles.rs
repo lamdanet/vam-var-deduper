@@ -163,7 +163,7 @@ pub(crate) fn plan_remove_packages(file_paths: Vec<String>, state: State<'_, App
 
 /// Mark packages' families installed (`true`) or dependencies (`false`), from
 /// the user or a download's intent. The cached listing follows at once.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn set_package_roles(
     package_ids: Vec<String>,
     installed: bool,

@@ -77,7 +77,7 @@ pub(crate) struct PackagePrefs {
     pub(crate) auto: Vec<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn vam_prefs_get(vam_dir: String, package_id: String, db: State<'_, Db>) -> PackagePrefs {
     let (hidden, favorite) = read_flags(Path::new(vam_dir.trim()), &package_id);
     let auto = crate::db::auto_hidden_for(&db, &package_id).unwrap_or_default();
@@ -100,7 +100,7 @@ fn set_flag(vam_dir: &Path, package_id: &str, internal: &str, kind: &str, on: bo
 
 /// Hide / show (`kind` "hide") or favorite / unfavorite ("fav") items of one
 /// package in VaM. A hide set or cleared here is the user's from now on.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn vam_prefs_set(
     vam_dir: String,
     package_id: String,
@@ -137,7 +137,7 @@ pub(crate) struct AutoHideResult {
 /// Make the auto-hides match the setting: with it on, every item of every
 /// dependency package (not installed, not offloaded) is hidden; hides it made
 /// for anything else are removed. Hides the user made are never touched.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn auto_hide_sync(
     vam_dir: String,
     enabled: bool,
@@ -193,7 +193,7 @@ pub(crate) fn auto_hide_sync(
 /// in the library has no prefs folder while an older version does, copy that
 /// version's `.hide` / `.fav` for the items the new one still has. Returns how
 /// many flags were copied.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn vam_prefs_carry_over(vam_dir: String, state: State<'_, AppState>, db: State<'_, Db>) -> Result<usize, String> {
     let vam_dir = PathBuf::from(vam_dir.trim());
     let root = prefs_root(&vam_dir);

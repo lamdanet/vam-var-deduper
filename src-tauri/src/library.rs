@@ -1915,7 +1915,7 @@ pub(crate) fn hub_wishlist_list(db: State<'_, Db>) -> Result<Vec<WishlistEntry>,
 
 /// Adds (with `snapshot`) or removes (`snapshot: null`) a wishlist entry.
 /// Re-adding refreshes the snapshot but keeps the original date.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn hub_wishlist_set(
     resource_id: String,
     snapshot: Option<serde_json::Value>,

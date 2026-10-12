@@ -14,7 +14,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -284,7 +284,7 @@ pub(crate) fn start_clean_many_check_task(
     source_var_path: String,
     state: State<'_, AppState>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state.tasks.lock().map_err(|_| "task state poisoned".to_string())?;
         guard.insert(task_id, new_progress_payload("clean_many_check", "Reading the packages with its files"));
@@ -328,7 +328,7 @@ pub(crate) fn start_clean_many_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state.tasks.lock().map_err(|_| "task state poisoned".to_string())?;
         guard.insert(task_id, new_progress_payload("clean_many_starting", "Cleaning the packages"));

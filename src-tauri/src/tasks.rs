@@ -539,7 +539,7 @@ pub(crate) fn start_scan_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -595,7 +595,7 @@ pub(crate) fn start_execute_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -647,7 +647,7 @@ pub(crate) fn start_bulk_import_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -917,7 +917,7 @@ pub(crate) fn start_export_scene_images_task(
     let depth = ScanDepth::from_deep(deep_scan.unwrap_or(true));
     let overwrite = overwrite.unwrap_or(false);
 
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -1096,7 +1096,7 @@ pub(crate) fn get_database_stats(
     db::database_stats(&app, db.inner()).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn set_creator_flag(
     creator_name: String,
     flag: i32,
@@ -1109,7 +1109,7 @@ pub(crate) fn set_creator_flag(
     db::set_creator_flag(&conn, &creator_name, flag).map_err(|err| err.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_creator_flag(
     creator_name: String,
     db: State<'_, Db>,
@@ -1122,7 +1122,7 @@ pub(crate) fn get_creator_flag(
 /// backend's scan-time filter immediately (without re-scanning) — e.g. after
 /// the user right-clicks a candidate and picks "Disable creator", every other
 /// already-rendered row from that creator should also disappear.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_blocked_creators(db: State<'_, Db>) -> Result<Vec<String>, String> {
     let conn = db.read().map_err(|err| err.to_string())?;
     let mut names: Vec<String> = db::get_blocked_creator_names(&conn)
@@ -1203,12 +1203,12 @@ pub(crate) fn list_favorite_creators(db: State<'_, Db>) -> Result<Vec<String>, S
 /// index. Async + progress-reporting so the Settings UI can show a real
 /// progress bar instead of a frozen "Clearing…" line. The actual work runs
 /// on a background thread; the UI polls progress via `get_task_progress`.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn clear_database(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -1259,7 +1259,7 @@ fn finish_clear_database_task(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn find_resources_by_crc(
     crc32: u32,
     exclude_package_id: Option<String>,
@@ -1297,7 +1297,7 @@ pub(crate) fn find_resources_by_crcs_bulk(
 /// page when the user picks a DB-sourced row as the keep target — the
 /// frontend builds a CRC32 → ResourceRef map from this list and uses it to
 /// relocate filtered groups via CRC matching.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn load_db_package_resources(
     package_id: String,
     db: State<'_, Db>,
@@ -2433,7 +2433,7 @@ fn build_resource_list_where(
 /// that need the total should fire `count_resources_from_db` separately and
 /// merge the result. Default (`None` / `Some(false)`) computes COUNT inline
 /// for backward compatibility.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_resources_from_db(
     offset: u64,
     limit: u64,
@@ -2525,7 +2525,7 @@ pub(crate) fn list_resources_from_db(
 /// fire it AFTER the (fast) page rows return — the count itself is the
 /// multi-second part on multi-million-row tables, and the user gets to see
 /// the table immediately while it computes.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn count_resources_from_db(
     search: Option<String>,
     filters: Option<ResourceListFilters>,
@@ -2557,7 +2557,7 @@ pub(crate) fn count_resources_from_db(
 /// through the multi-million-row `resources` table. The trade-off is that
 /// this lists *all* seeded categories, even ones no resource currently
 /// uses — a tiny cosmetic cost for an instant query.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_resource_filter_options(
     db: State<'_, Db>,
 ) -> Result<ResourceListFilterOptions, String> {
@@ -2586,7 +2586,7 @@ pub(crate) fn list_resource_filter_options(
 
 /// Returns every indexed `(package, internal_path)` pair sharing a given
 /// CRC32. Drives the right-side detail panel on the Resource List page.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_resource_duplicates(
     crc32: u32,
     db: State<'_, Db>,
@@ -3055,7 +3055,7 @@ pub(crate) fn start_db_find_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -3407,7 +3407,7 @@ pub(crate) fn start_reclaim_scan_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -3622,7 +3622,7 @@ pub(crate) fn start_unique_resources_task(
     request: UniqueResourcesRequest,
     state: State<'_, AppState>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -4997,7 +4997,7 @@ pub(crate) fn start_resolve_var_source_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -5060,7 +5060,7 @@ pub(crate) fn start_analyze_var_dependencies_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -5223,7 +5223,7 @@ pub(crate) fn start_analyze_text_dependencies_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -5518,7 +5518,7 @@ pub(crate) fn start_download_one_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -5734,7 +5734,7 @@ pub(crate) fn start_import_download_links_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -5755,12 +5755,12 @@ pub(crate) fn start_import_download_links_task(
     Ok(TaskHandle { id: task_id })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn get_download_links_count(db: State<'_, Db>) -> Result<i64, String> {
     db::count_download_links(&db).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn clear_download_links(db: State<'_, Db>) -> Result<(), String> {
     db::clear_download_links(&db).map_err(|e| e.to_string())
 }
@@ -5825,7 +5825,7 @@ pub(crate) fn start_dependency_check_task(
     request: DependencyCheckRequest,
     state: State<'_, AppState>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -5851,7 +5851,7 @@ pub(crate) fn start_delete_dependency_scan_task(
     request: DeleteDependencyScanRequest,
     state: State<'_, AppState>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -6082,7 +6082,7 @@ pub(crate) fn start_backfill_sizes_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -6121,7 +6121,7 @@ pub(crate) fn start_backfill_sizes_task(
 /// Kept for backward compatibility with any external callers; the in-app UI
 /// now goes through `start_scan_missing_resources_task` so the UI thread
 /// stays responsive while the I/O-heavy walk runs on a worker.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn scan_missing_resources(
     input_dir: String,
     additional_input_dirs: Option<Vec<String>>,
@@ -6167,7 +6167,7 @@ pub(crate) fn start_scan_missing_resources_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -6259,7 +6259,7 @@ fn finish_scan_missing_resources_task(
 /// `crc32` is known (the broken resource was indexed before deletion) we use
 /// the existing CRC index; otherwise we fall back to an exact
 /// `internal_path` match across all indexed packages.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn find_db_candidates_for_broken_ref(
     crc32: Option<u32>,
     internal_path: String,
@@ -6399,7 +6399,7 @@ pub(crate) fn start_apply_missing_resources_fix_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks
@@ -6628,7 +6628,7 @@ pub(crate) fn start_apply_internalize_task(
     backup_dir: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state
             .tasks

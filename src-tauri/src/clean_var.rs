@@ -14,7 +14,7 @@ use std::{
     fs,
     io::Read,
     path::Path,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -1020,7 +1020,7 @@ pub(crate) fn start_clean_var_task(
     state: State<'_, AppState>,
     db: State<'_, Db>,
 ) -> Result<TaskHandle, String> {
-    let task_id = state.next_task_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let task_id = crate::db_location::next_task_id(&state)?;
     {
         let mut guard = state.tasks.lock().map_err(|_| "task state poisoned".to_string())?;
         guard.insert(task_id, new_progress_payload("clean_starting", "Cleaning the package"));
