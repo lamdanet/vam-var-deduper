@@ -1586,12 +1586,81 @@ function getOpenWith(id) {
   input.focus();
 }
 
+// ---- A search's matches in your saved sources -------------------------------------
+// VAR Packages and the Hub show, above their results, what a search finds in
+// your saved sources that you don't have: new packages, or newer versions
+// (older versions of what you have aren't offered). A few hundred at most.
+
+const GET_STRIP_MAX = 300;
+
+// Fills `st` ({ token, query, rows, open, loading }) for `text`; onChange redraws.
+async function getStripLoad(st, text, onChange) {
+  const q = String(text || "").trim();
+  const token = (st.token ?? 0) + 1;
+  Object.assign(st, { token, query: q, rows: [], open: false, loading: q.length >= 3 });
+  onChange();
+  if (!st.loading || !invoke) return;
+  try {
+    await hubLoadLocal();
+    const [rows] = await invoke("search_source_files", { query: q, offset: 0, limit: GET_STRIP_MAX });
+    if (st.token !== token) return;
+    st.rows = Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    addLog(`Search in your sources: ${String(e)}`);
+  }
+  if (st.token !== token) return;
+  st.loading = false;
+  onChange();
+}
+
+function getStripIds(st) {
+  return (st?.rows ?? [])
+    .map((r) => String(r.filename).replace(/\.var$/i, ""))
+    .filter((id) => ["new", "newer"].includes(getLibraryState(id).kind));
+}
+
+// Draws the strip into `host`; its buttons carry `attr` ("toggle", "get-all").
+function getStripRender(host, st, attr, show = true) {
+  if (!host) return;
+  const ids = st && !st.loading ? getStripIds(st) : [];
+  const on = show && Boolean(st?.query) && ids.length > 0;
+  host.classList.toggle("hidden", !on);
+  if (!on) {
+    host.innerHTML = "";
+    return;
+  }
+  const byId = new Map((st.rows ?? []).map((r) => [String(r.filename).replace(/\.var$/i, "").toLowerCase(), r]));
+  const more = (st.rows ?? []).length >= GET_STRIP_MAX ? "+" : "";
+  const can = ids.filter((id) => !findDownloadJob(id));
+  host.innerHTML = `<div class="lib-src-strip-head">
+      <span class="material-symbols-outlined">download</span>
+      <span><b>${ids.length.toLocaleString()}${more} more in your sources</b> that you don't have</span>
+      ${st.open && can.length > 1 ? `<button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" ${attr}="get-all"><span class="material-symbols-outlined">download</span>Get all ${can.length}</button>` : ""}
+      <button type="button" class="lib-btn lib-btn-xs lib-btn-outline" ${attr}="toggle">${st.open ? "Hide" : "Show them"}</button>
+    </div>
+    ${
+      st.open
+        ? `<div class="lib-src-strip-list">${ids
+            .map((id) => {
+              const r = byId.get(id.toLowerCase());
+              const hosts = String(r?.hosts || "").split(",").filter(Boolean).map(getHostName).join(" · ");
+              return getRowHtml(
+                id,
+                `<span class="get-src"><span class="material-symbols-outlined">bookmark</span>${escapeHtml(`${hosts}${r?.links > 1 ? ` · ${r.links} links` : ""}`)}</span>`,
+              );
+            })
+            .join("")}</div>`
+        : ""
+    }`;
+}
+
 // Pages that show what you have, after a Get landed.
 function getRefreshViews() {
   getRenderPanel();
   if (libIsMissingView()) libRenderMissing();
   libRenderSourceStrip();
   if (PKG.item && PKG.details && $("pkg-view") && !$("pkg-view").classList.contains("hidden")) pkgRenderDeps();
+  hubRenderSourceStrip();
 }
 
 // ---- The Downloads panel's box ---------------------------------------------------
@@ -3389,73 +3458,21 @@ function libRenderMissing() {
 
 // ---- Not installed, in your sources (the search strip) --------------------------
 // A library search also looks in your saved sources: what it finds there that
-// isn't installed is offered above the results, a few hundred at most.
+// you don't have is offered above the results (getStrip*, shared with the Hub).
 
-const LIB_SRC_STRIP_MAX = 300;
-
-async function libLoadSourceStrip() {
+function libLoadSourceStrip() {
   const q = String(state.varPackagesFilter ?? "").trim();
   // Plain words only: the search's field filters (creator:…) aren't file names.
-  const text = q.includes(":") ? "" : q;
-  const token = (state.vpSrcSearch?.token ?? 0) + 1;
-  state.vpSrcSearch = { token, query: text, rows: [], open: false, loading: Boolean(text) && text.length >= 3 };
-  libRenderSourceStrip();
-  if (!state.vpSrcSearch.loading || !invoke) return;
-  try {
-    await hubLoadLocal();
-    const [rows] = await invoke("search_source_files", { query: text, offset: 0, limit: LIB_SRC_STRIP_MAX });
-    if (state.vpSrcSearch.token !== token) return;
-    state.vpSrcSearch.rows = Array.isArray(rows) ? rows : [];
-  } catch (e) {
-    addLog(`Search in your sources: ${String(e)}`);
-  }
-  if (state.vpSrcSearch.token !== token) return;
-  state.vpSrcSearch.loading = false;
-  libRenderSourceStrip();
+  state.vpSrcSearch = state.vpSrcSearch ?? {};
+  getStripLoad(state.vpSrcSearch, q.includes(":") ? "" : q, libRenderSourceStrip);
 }
 
-// The ids found that you don't have: new packages, or newer versions (older
-// versions of what you have aren't offered).
 function libSourceStripRows() {
-  return (state.vpSrcSearch?.rows ?? [])
-    .map((r) => String(r.filename).replace(/\.var$/i, ""))
-    .filter((id) => ["new", "newer"].includes(getLibraryState(id).kind));
+  return getStripIds(state.vpSrcSearch);
 }
 
 function libRenderSourceStrip() {
-  const host = $("lib-src-strip");
-  if (!host) return;
-  const st = state.vpSrcSearch;
-  const ids = st && !st.loading ? libSourceStripRows() : [];
-  const on = Boolean(st?.query) && !libIsMissingView() && ids.length > 0;
-  host.classList.toggle("hidden", !on);
-  if (!on) {
-    host.innerHTML = "";
-    return;
-  }
-  const byId = new Map((st.rows ?? []).map((r) => [String(r.filename).replace(/\.var$/i, "").toLowerCase(), r]));
-  const more = (st.rows ?? []).length >= LIB_SRC_STRIP_MAX ? "+" : "";
-  const can = ids.filter((id) => !findDownloadJob(id));
-  host.innerHTML = `<div class="lib-src-strip-head">
-      <span class="material-symbols-outlined">download</span>
-      <span><b>${ids.length.toLocaleString()}${more} more in your sources</b> that you don't have</span>
-      ${st.open && can.length > 1 ? `<button type="button" class="lib-btn lib-btn-xs lib-btn-gradient" data-lib-src-act="get-all"><span class="material-symbols-outlined">download</span>Get all ${can.length}</button>` : ""}
-      <button type="button" class="lib-btn lib-btn-xs lib-btn-outline" data-lib-src-act="toggle">${st.open ? "Hide" : "Show them"}</button>
-    </div>
-    ${
-      st.open
-        ? `<div class="lib-src-strip-list">${ids
-            .map((id) => {
-              const r = byId.get(id.toLowerCase());
-              const hosts = String(r?.hosts || "").split(",").filter(Boolean).map(getHostName).join(" · ");
-              return getRowHtml(
-                id,
-                `<span class="get-src"><span class="material-symbols-outlined">bookmark</span>${escapeHtml(`${hosts}${r?.links > 1 ? ` · ${r.links} links` : ""}`)}</span>`,
-              );
-            })
-            .join("")}</div>`
-        : ""
-    }`;
+  getStripRender($("lib-src-strip"), state.vpSrcSearch, "data-lib-src-act", !libIsMissingView());
 }
 
 // ---- Newer in your sources -------------------------------------------------------
@@ -27082,9 +27099,21 @@ async function hubSelect(rid) {
 
 // ---- Filters / actions ---------------------------------------------------------------------
 
+// What a Hub search finds in your saved sources that you don't have (paid,
+// removed, or never on the Hub), above the Hub's results.
+function hubLoadSourceStrip() {
+  HUB.srcSearch = HUB.srcSearch ?? {};
+  getStripLoad(HUB.srcSearch, HUB.filters.search ?? "", hubRenderSourceStrip);
+}
+
+function hubRenderSourceStrip() {
+  getStripRender($("hub-src-strip"), HUB.srcSearch, "data-hub-src-act", HUB.mode === "hub");
+}
+
 function hubSetFilter(field, value) {
   HUB.filters[field] = value;
   hubSavePrefs();
+  if (field === "search") hubLoadSourceStrip();
   if (HUB.mode === "wishlist") {
     hubRenderGrid();
   } else {
@@ -27596,6 +27625,18 @@ function setupHubView() {
   if (scroll && typeof ResizeObserver === "function") new ResizeObserver(() => hubApplyLayout()).observe(scroll);
 
   // Grid clicks: pin, author, action buttons, then the card itself.
+  $("hub-src-strip")?.addEventListener("click", (e) => {
+    const act = e.target.closest?.("[data-hub-src-act]")?.getAttribute("data-hub-src-act");
+    if (act === "toggle") {
+      HUB.srcSearch.open = !HUB.srcSearch.open;
+      return hubRenderSourceStrip();
+    }
+    if (act === "get-all") return void getPackages(getStripIds(HUB.srcSearch).filter((id) => !findDownloadJob(id)));
+    const one = e.target.closest?.("[data-get-id]");
+    if (one) return void getPackages([one.getAttribute("data-get-id")]);
+    const open = e.target.closest?.("[data-get-open]");
+    if (open) pkgOpen({ package_id: open.getAttribute("data-get-open") });
+  });
   $("hub-grid")?.addEventListener("click", (e) => {
     const pin = e.target.closest("[data-hub-pin]");
     if (pin) {
