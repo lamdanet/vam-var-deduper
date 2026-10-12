@@ -62,6 +62,11 @@ release time, it fills it with the commit messages since the last release.
   or to a zip holding the .var, are added once downloaded
 
 ### Changed
+- **VAR Packages makes room for the packages**: two toolbar buttons hide or
+  show the folder tree (Explore) and the details panel, and are remembered.
+  On a window too narrow for both beside the grid, they slide over it
+  instead: clicking a package slides its details in, the folder tree opens
+  from its button and closes once you pick a folder, and Esc closes either
 - **Explore's subfolders wrap onto two lines** instead of one line with a
   sideways scrollbar; "Show all N folders" opens the rest
 - **VAR Packages filters clear in one click**: a set filter (Status, Type,
@@ -123,6 +128,8 @@ release time, it fills it with the commit messages since the last release.
   1,161 missing dependencies of a large library took about 70 s, now 24 s
 
 ### Fixed
+- Unfolding a folder in Explore's folder tree no longer scrolls the tree back
+  up to the open folder
 - Hint text, gradient buttons and warning colours that were too faint to read
   in several themes (Violet Pulse's buttons faded to white on pale pink; the
   Clear database button was pale pink on the light themes)
