@@ -38,6 +38,8 @@ pub(crate) struct ImpactTarget {
     pub(crate) readable: bool,
     pub(crate) on_hub: Option<bool>,
     pub(crate) hub_resource_id: Option<String>,
+    /// It sits in the offload folder, so VaM doesn't load it now.
+    pub(crate) offloaded: bool,
     /// Other local versions of the same package, newest first.
     pub(crate) other_versions: Vec<String>,
 }
@@ -269,6 +271,7 @@ pub(crate) fn compute(items: &[VarPackageListItem], target: usize) -> DeleteImpa
             readable: t.readable,
             on_hub: t.on_hub,
             hub_resource_id: t.hub_resource_id.clone(),
+            offloaded: t.offloaded,
             other_versions,
         },
         used_by,

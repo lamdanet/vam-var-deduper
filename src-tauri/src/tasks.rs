@@ -3906,6 +3906,7 @@ fn run_dependency_check_task(
     tasks: &Arc<Mutex<HashMap<u64, ProgressPayload>>>,
     task_id: u64,
     request: DependencyCheckRequest,
+    cancel: Arc<AtomicBool>,
 ) -> Result<DependencyCheckResponse> {
     let folder = request.folder.trim();
     if folder.is_empty() {
@@ -3973,9 +3974,14 @@ fn run_dependency_check_task(
             let target_base_ref: &str = target_base.as_str();
             let target_base_lc_ref: &str = target_base_lc.as_str();
             let target_full_lc_ref: &str = target_full_lc.as_str();
+            let cancel_ref = &cancel;
             handles.push(s.spawn(move || {
                 let mut local: Vec<WorkerHit> = Vec::new();
                 loop {
+                    // Stopped: the caller drops a partial answer, so just end.
+                    if cancel_ref.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let i = next_index_ref.fetch_add(1, Ordering::Relaxed);
                     if i >= total_files {
                         break;
@@ -5838,10 +5844,20 @@ pub(crate) fn start_dependency_check_task(
             new_progress_payload("dependency_check_starting", "Starting dependency check"),
         );
     }
+    // Lets the delete dialog's Stop end the walk (cancel_task) instead of it
+    // reading every archive in the background.
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut cancels = state
+            .cancellations
+            .lock()
+            .map_err(|_| "cancellation state poisoned".to_string())?;
+        cancels.insert(task_id, Arc::clone(&cancel_flag));
+    }
 
     let tasks = Arc::clone(&state.tasks);
     thread::spawn(move || {
-        let result = run_dependency_check_task(&tasks, task_id, request);
+        let result = run_dependency_check_task(&tasks, task_id, request, cancel_flag);
         finish_dependency_check_task(&tasks, task_id, result);
     });
 
