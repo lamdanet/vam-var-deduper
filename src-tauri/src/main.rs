@@ -6,6 +6,7 @@ mod clean_var;
 mod config;
 mod db;
 mod db_location;
+mod delete_impact;
 mod dep_usage;
 mod disable;
 mod dropin;
@@ -36,6 +37,7 @@ mod vamprefs;
 use tauri::{Emitter, Manager};
 
 use crate::{
+    delete_impact::get_delete_impact,
     extract::{extract_probe, extract_run},
     hub_index::{hub_exact_download, hub_index_lookup, hub_index_refresh, hub_index_status},
     integrity::start_verify_packages_task,
@@ -205,6 +207,7 @@ fn main() {
             start_unique_resources_task,
             start_dependency_check_task,
             start_delete_dependency_scan_task,
+            get_delete_impact,
             start_analyze_var_dependencies_task,
             start_analyze_text_dependencies_task,
             start_download_one_task,

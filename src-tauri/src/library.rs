@@ -717,8 +717,14 @@ pub(crate) struct LibIndex {
 
 impl LibIndex {
     pub(crate) fn build(items: &[VarPackageListItem]) -> Self {
+        Self::build_where(items, |_| true)
+    }
+
+    /// Like `build`, over only the items `keep` accepts — what would still
+    /// resolve once the others are gone. Indices still point into `items`.
+    pub(crate) fn build_where(items: &[VarPackageListItem], keep: impl Fn(usize) -> bool) -> Self {
         let mut families: HashMap<String, Vec<(Option<u64>, usize)>> = HashMap::new();
-        for (i, item) in items.iter().enumerate() {
+        for (i, item) in items.iter().enumerate().filter(|(i, _)| keep(*i)) {
             let base = naming::package_base(&item.package_id).to_ascii_lowercase();
             families
                 .entry(base)
