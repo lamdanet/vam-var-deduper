@@ -12,6 +12,8 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-15
+
 ### Fixed
 - The app no longer fails to start ("failed to collect folders for v22") when an earlier
   database conversion finished but stopped before recording it
