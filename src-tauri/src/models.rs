@@ -392,9 +392,12 @@ pub(crate) struct ProgressPayload {
     pub(crate) unique_resources_result: Option<UniqueResourcesResponse>,
     #[serde(default)]
     pub(crate) dependency_check_result: Option<DependencyCheckResponse>,
-    /// Result payload for `start_repair_package_task` (Package Explorer).
+    /// Result payloads for the Repair VARs page: `start_repair_scan_task`
+    /// (the whole library) and `start_repair_packages_task`.
     #[serde(default)]
-    pub(crate) repair_result: Option<crate::package_repair::RepairResult>,
+    pub(crate) repair_scan_result: Option<crate::package_repair::RepairScanResult>,
+    #[serde(default)]
+    pub(crate) repair_batch_result: Option<crate::package_repair::RepairBatchResult>,
     /// Result payload for `start_delete_dependency_scan_task` (VAR Packages
     /// delete modal, "Scan dependencies" option).
     #[serde(default)]

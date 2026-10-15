@@ -17,17 +17,28 @@
 //!   flag (old Chinese / Japanese zip tools write GBK or Shift-JIS). VaM reads
 //!   them as code page 437, so a scene shows as `╥∞╜τ…` or not at all. Written
 //!   back as UTF-8 with the flag.
+//! - **meta.json itself**: a creator or package name that isn't the one in
+//!   the file name, packages its files use but it doesn't list, a byte-order
+//!   mark or JSON only a lenient reader accepts.
+//!
+//! The Repair VARs page checks one package, or the whole library at once
+//! (`start_repair_scan_task`), and repairs one or many
+//! (`start_repair_packages_task`).
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     thread,
 };
 
 use anyhow::{anyhow, Context, Result};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -36,7 +47,7 @@ use zip::{write::SimpleFileOptions, CompressionMethod, System, ZipArchive, ZipWr
 use crate::{
     execute::rewrite_external_text_payload,
     fix_var::{collect_pkg_refs, free_backup_path, is_text_path},
-    models::{AppState, ProgressPayload, TaskHandle, META_PATH},
+    models::{AppState, ProgressPayload, TaskHandle, VarPackageListItem, META_PATH},
     tasks::{new_progress_payload, set_task_progress},
     utils::{byte_step, copy_with_progress, decode_text, dump_json_bytes, normalize_zip_path, read_json_bytes, Progress},
 };
@@ -81,6 +92,18 @@ pub(crate) struct RepairName {
     pub(crate) fixed: String,
 }
 
+/// One thing wrong with meta.json itself.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MetaIssue {
+    /// `"creator"` | `"package_name"` | `"undeclared"` | `"format"` (fixable);
+    /// `"license"` | `"missing"` (only reported).
+    pub(crate) code: String,
+    pub(crate) fixable: bool,
+    /// What meta.json has, and what the repair writes (when fixable).
+    pub(crate) found: String,
+    pub(crate) fixed: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct RepairReport {
     pub(crate) package_id: String,
@@ -90,6 +113,7 @@ pub(crate) struct RepairReport {
     pub(crate) names: Vec<RepairName>,
     /// References to other packages for files this package has.
     pub(crate) redirectable: u32,
+    pub(crate) meta: Vec<MetaIssue>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,9 +123,25 @@ pub(crate) struct RepairRequest {
     /// the repair are removed; the rest are reported as kept.
     #[serde(default)]
     pub(crate) remove_deps: Vec<String>,
+    /// Remove every dependency nothing would still use (for many packages at
+    /// once, where nobody picks keys).
+    #[serde(default)]
+    pub(crate) remove_unneeded: bool,
     /// Point references to files this package has at its own copy.
     #[serde(default)]
     pub(crate) redirect: bool,
+    /// meta.json: the creator and package name from the file name, and the
+    /// packages its files use but it doesn't list.
+    #[serde(default)]
+    pub(crate) fix_creator: bool,
+    #[serde(default)]
+    pub(crate) fix_package_name: bool,
+    #[serde(default)]
+    pub(crate) add_undeclared: bool,
+    /// Rewrite meta.json as plain JSON (no BOM, no trailing commas) even when
+    /// nothing else in it changes.
+    #[serde(default)]
+    pub(crate) clean_meta: bool,
     #[serde(default)]
     pub(crate) backup: bool,
     #[serde(default)]
@@ -112,6 +152,9 @@ pub(crate) struct RepairRequest {
 pub(crate) struct RepairResult {
     pub(crate) removed_deps: Vec<String>,
     pub(crate) kept_deps: Vec<String>,
+    pub(crate) added_deps: Vec<String>,
+    /// meta.json fields set: "creator", "package_name", "format".
+    pub(crate) meta_fixed: Vec<String>,
     pub(crate) redirected: u32,
     pub(crate) renamed: u32,
     pub(crate) backup_path: Option<String>,
@@ -239,6 +282,7 @@ fn scan(path: &Path) -> Result<Scan> {
     let mut groups: HashMap<String, Group> = HashMap::new();
     let mut redirects = BTreeMap::new();
     let mut meta: Option<Value> = None;
+    let mut meta_raw: Option<Vec<u8>> = None;
     for i in 0..archive.len() {
         let mut e = archive.by_index(i)?;
         if e.is_dir() {
@@ -249,6 +293,7 @@ fn scan(path: &Path) -> Result<Scan> {
             let mut raw = Vec::new();
             e.read_to_end(&mut raw)?;
             meta = read_json_bytes(&raw, "meta.json").ok();
+            meta_raw = Some(raw);
             continue;
         }
         if !is_text_path(&inner) {
@@ -325,14 +370,73 @@ fn scan(path: &Path) -> Result<Scan> {
         .collect();
     undeclared.sort_by_key(|u| u.package.to_lowercase());
 
+    let meta_issues = meta_issues(&package_id, meta.as_ref(), meta_raw.as_deref(), &undeclared);
     let report = RepairReport {
         package_id,
         deps,
         undeclared,
         names: names.values().map(|(stored, fixed)| RepairName { stored: stored.clone(), fixed: fixed.clone() }).collect(),
         redirectable: redirects.len() as u32,
+        meta: meta_issues,
     };
     Ok(Scan { report, redirects, names })
+}
+
+/// The creator and the name part of a package id: `Creator.Name.3`.
+fn id_parts(package_id: &str) -> (String, String) {
+    let base = crate::naming::package_base(package_id);
+    match base.split_once('.') {
+        Some((c, n)) => (c.to_string(), n.to_string()),
+        None => (String::new(), base.to_string()),
+    }
+}
+
+fn meta_str<'a>(meta: &'a Value, key: &str) -> &'a str {
+    meta.get(key).and_then(Value::as_str).map(str::trim).unwrap_or("")
+}
+
+/// Undeclared packages worth listing: ones with a reference to a file this
+/// package doesn't have (the rest go when references are pointed at its own
+/// copies).
+fn undeclared_to_add(undeclared: &[RepairUndeclared], redirect: bool) -> impl Iterator<Item = &RepairUndeclared> {
+    undeclared.iter().filter(move |u| !redirect || u.refs > u.inside)
+}
+
+fn meta_issues(package_id: &str, meta: Option<&Value>, raw: Option<&[u8]>, undeclared: &[RepairUndeclared]) -> Vec<MetaIssue> {
+    let issue = |code: &str, fixable: bool, found: String, fixed: String| MetaIssue { code: code.to_string(), fixable, found, fixed };
+    let Some(meta) = meta else {
+        return vec![issue("missing", false, if raw.is_some() { "unreadable".into() } else { "none".into() }, String::new())];
+    };
+    let (creator, name) = id_parts(package_id);
+    let mut out = Vec::new();
+    let mc = meta_str(meta, "creatorName");
+    if !creator.is_empty() && !mc.eq_ignore_ascii_case(&creator) {
+        out.push(issue("creator", true, mc.to_string(), creator));
+    }
+    let mn = meta_str(meta, "packageName");
+    if !name.is_empty() && mn != name {
+        out.push(issue("package_name", true, mn.to_string(), name));
+    }
+    let add: Vec<&str> = undeclared_to_add(undeclared, true).map(|u| u.package.as_str()).collect();
+    if !add.is_empty() {
+        out.push(issue("undeclared", true, String::new(), add.join("\n")));
+    }
+    if let Some(raw) = raw {
+        let bom = raw.starts_with(&[0xEF, 0xBB, 0xBF]);
+        let strict = serde_json::from_slice::<Value>(if bom { &raw[3..] } else { raw }).is_ok();
+        if bom || !strict {
+            let what = match (bom, strict) {
+                (true, false) => "a byte-order mark, and JSON only a lenient reader accepts",
+                (true, true) => "a byte-order mark",
+                _ => "JSON only a lenient reader accepts (trailing commas, comments)",
+            };
+            out.push(issue("format", true, what.to_string(), "plain JSON".into()));
+        }
+    }
+    if meta_str(meta, "licenseType").is_empty() {
+        out.push(issue("license", false, String::new(), String::new()));
+    }
+    out
 }
 
 /// What could be repaired in a package. Reads its text files once.
@@ -344,7 +448,9 @@ pub(crate) fn inspect_package_repair(file_path: String) -> Result<RepairReport, 
 /// Rewrites the package with the chosen repairs (file names are always put
 /// right when it's rewritten). Binary entries are copied without
 /// recompressing; the new file replaces the old one only once it's complete.
-pub(crate) fn repair_package(request: &RepairRequest, progress: Progress<'_>) -> Result<RepairResult> {
+/// `licenses`: lowercase family -> licenseType of the installed package, for
+/// dependencies it adds.
+pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String, String>, progress: Progress<'_>) -> Result<RepairResult> {
     let target = Path::new(&request.file_path);
     progress(0.01, "Reading the package");
     let found = scan(target)?;
@@ -355,19 +461,27 @@ pub(crate) fn repair_package(request: &RepairRequest, progress: Progress<'_>) ->
     let wanted: HashSet<&str> = request.remove_deps.iter().map(String::as_str).collect();
     let mut remove: BTreeSet<String> = BTreeSet::new();
     for d in &found.report.deps {
-        if !wanted.contains(d.key.as_str()) {
-            continue;
-        }
         let free = matches!(d.status.as_str(), "self" | "unused") || (d.status == "covered" && request.redirect);
-        if free {
+        if free && (request.remove_unneeded || wanted.contains(d.key.as_str())) {
             remove.insert(d.key.clone());
-        } else {
+        } else if wanted.contains(d.key.as_str()) {
             result.kept_deps.push(d.key.clone());
         }
     }
-    if remove.is_empty() && redirects.is_empty() && found.names.is_empty() {
+    let fixable = |code: &str| found.report.meta.iter().any(|m| m.code == code && m.fixable);
+    let fix_creator = request.fix_creator && fixable("creator");
+    let fix_name = request.fix_package_name && fixable("package_name");
+    let add: Vec<String> = if request.add_undeclared {
+        undeclared_to_add(&found.report.undeclared, request.redirect).map(|u| u.package.clone()).collect()
+    } else {
+        Vec::new()
+    };
+    let clean = request.clean_meta && fixable("format");
+    let meta_changes = !remove.is_empty() || fix_creator || fix_name || !add.is_empty() || clean;
+    if !meta_changes && redirects.is_empty() && found.names.is_empty() {
         return Err(anyhow!("Nothing to repair."));
     }
+    let (file_creator, file_pkg_name) = id_parts(&found.report.package_id);
 
     let backup_root: Option<PathBuf> = if request.backup {
         request
@@ -416,12 +530,42 @@ pub(crate) fn repair_package(request: &RepairRequest, progress: Progress<'_>) ->
             if inner.eq_ignore_ascii_case(META_PATH) {
                 let mut raw = Vec::new();
                 entry.read_to_end(&mut raw)?;
+                if !meta_changes {
+                    // Untouched: the bytes it had, BOM and all.
+                    out.start_file(&name, options)?;
+                    out.write_all(&raw)?;
+                    continue;
+                }
                 let mut meta = read_json_bytes(&raw, "meta.json")?;
+                if let Some(obj) = meta.as_object_mut() {
+                    if fix_creator {
+                        obj.insert("creatorName".into(), Value::String(file_creator.clone()));
+                        result.meta_fixed.push("creator".into());
+                    }
+                    if fix_name {
+                        obj.insert("packageName".into(), Value::String(file_pkg_name.clone()));
+                        result.meta_fixed.push("package_name".into());
+                    }
+                    if clean {
+                        result.meta_fixed.push("format".into());
+                    }
+                    if !obj.get("dependencies").is_some_and(Value::is_object) {
+                        obj.insert("dependencies".into(), Value::Object(serde_json::Map::new()));
+                    }
+                }
                 if let Some(deps) = meta.get_mut("dependencies").and_then(Value::as_object_mut) {
                     for key in &remove {
                         if deps.remove(key).is_some() {
                             result.removed_deps.push(key.clone());
                         }
+                    }
+                    for pkg in &add {
+                        if deps.contains_key(pkg) {
+                            continue;
+                        }
+                        let license = licenses.get(&base_lc(pkg)).cloned().unwrap_or_else(|| "PC EA".to_string());
+                        deps.insert(pkg.clone(), serde_json::json!({ "licenseType": license, "dependencies": {} }));
+                        result.added_deps.push(pkg.clone());
                     }
                 }
                 out.start_file(&name, options)?;
@@ -458,47 +602,199 @@ pub(crate) fn repair_package(request: &RepairRequest, progress: Progress<'_>) ->
     Ok(result)
 }
 
-fn finish(tasks: &Arc<Mutex<HashMap<u64, ProgressPayload>>>, task_id: u64, result: Result<RepairResult>) {
+/// One package's problems, for the library list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RepairSummary {
+    pub(crate) file_path: String,
+    pub(crate) package_id: String,
+    pub(crate) size_bytes: u64,
+    /// Dependencies nothing would use: self, unused, and covered ones (gone
+    /// once references point at its own copies).
+    pub(crate) unneeded: u32,
+    pub(crate) covered: u32,
+    /// Nested entries under those, i.e. what made it look short of packages.
+    pub(crate) unneeded_nested: u32,
+    pub(crate) redirectable: u32,
+    pub(crate) names: u32,
+    /// Fixable meta.json issue codes.
+    pub(crate) meta: Vec<String>,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RepairScanResult {
+    pub(crate) scanned: usize,
+    pub(crate) cancelled: bool,
+    /// Only packages with something to repair (or that couldn't be read).
+    pub(crate) packages: Vec<RepairSummary>,
+}
+
+fn summarize(path: &Path, size: u64) -> Option<RepairSummary> {
+    let package_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let base = RepairSummary { file_path: path.display().to_string(), package_id, size_bytes: size, ..RepairSummary::default() };
+    let report = match scan(path) {
+        Ok(found) => found.report,
+        Err(e) => return Some(RepairSummary { error: Some(e.to_string()), ..base }),
+    };
+    let unneeded: Vec<&RepairDep> = report.deps.iter().filter(|d| matches!(d.status.as_str(), "self" | "unused" | "covered")).collect();
+    let summary = RepairSummary {
+        unneeded: unneeded.len() as u32,
+        covered: unneeded.iter().filter(|d| d.status == "covered").count() as u32,
+        unneeded_nested: unneeded.iter().map(|d| d.nested).sum(),
+        redirectable: report.redirectable,
+        names: report.names.len() as u32,
+        meta: report.meta.iter().filter(|m| m.fixable).map(|m| m.code.clone()).collect(),
+        ..base
+    };
+    let any = summary.unneeded + summary.redirectable + summary.names > 0 || !summary.meta.is_empty();
+    any.then_some(summary)
+}
+
+/// The packages to check: the VAR Packages listing when there is one, else
+/// the given folders.
+fn library_files(state: &AppState, roots: &[String]) -> Result<Vec<(PathBuf, u64)>> {
+    if let Ok(cache) = state.var_packages_folder_cache.lock() {
+        if let Some(c) = cache.as_ref() {
+            return Ok(c.items.iter().map(|it| (PathBuf::from(&it.file_path), it.size_bytes)).collect());
+        }
+    }
+    let roots: Vec<PathBuf> = roots.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).map(PathBuf::from).filter(|p| p.is_dir()).collect();
+    let Some((first, rest)) = roots.split_first() else { return Ok(Vec::new()) };
+    let entries = crate::utils::collect_var_files_multi(&crate::scan::scan_roots(first, rest))?;
+    Ok(entries.into_iter().map(|e| (e.path, e.fingerprint.size)).collect())
+}
+
+fn licenses(items: &[VarPackageListItem]) -> HashMap<String, String> {
+    items
+        .iter()
+        .filter_map(|it| it.license.as_ref().map(|l| (base_lc(&it.package_id), l.clone())))
+        .collect()
+}
+
+fn set_result(tasks: &Arc<Mutex<HashMap<u64, ProgressPayload>>>, task_id: u64, apply: impl FnOnce(&mut ProgressPayload)) {
     if let Ok(mut guard) = tasks.lock() {
         if let Some(task) = guard.get_mut(&task_id) {
             task.done = true;
             task.progress = 1.0;
-            match result {
-                Ok(r) => {
-                    task.phase = "repair_complete".to_string();
-                    task.message = "Repaired".to_string();
-                    task.repair_result = Some(r);
-                    task.error = None;
-                }
-                Err(e) => {
-                    task.phase = "repair_failed".to_string();
-                    task.message = "Repair failed".to_string();
-                    task.error = Some(e.to_string());
-                }
-            }
+            apply(task);
         }
     }
 }
 
-#[tauri::command]
-pub(crate) fn start_repair_package_task(request: RepairRequest, state: State<'_, AppState>) -> Result<TaskHandle, String> {
-    let task_id = crate::db_location::next_task_id(&state)?;
+fn register_task(state: &AppState, phase: &str, message: &str) -> Result<(u64, Arc<AtomicBool>), String> {
+    let task_id = crate::db_location::next_task_id(state)?;
     state
         .tasks
         .lock()
         .map_err(|_| "task state poisoned".to_string())?
-        .insert(task_id, new_progress_payload("repair_starting", "Starting the repair"));
+        .insert(task_id, new_progress_payload(phase, message));
+    let cancel = Arc::new(AtomicBool::new(false));
+    state
+        .cancellations
+        .lock()
+        .map_err(|_| "cancellation state poisoned".to_string())?
+        .insert(task_id, Arc::clone(&cancel));
+    Ok((task_id, cancel))
+}
+
+/// Checks every package in the library. Reads each one's text files and
+/// central directory (not its textures), several at a time; stops early on
+/// cancel_task, keeping what it found.
+#[tauri::command]
+pub(crate) fn start_repair_scan_task(roots: Vec<String>, state: State<'_, AppState>) -> Result<TaskHandle, String> {
+    let files = library_files(&state, &roots).map_err(|e| e.to_string())?;
+    let (task_id, cancel) = register_task(&state, "repair_scan_starting", "Listing packages")?;
+    let tasks = Arc::clone(&state.tasks);
+    thread::spawn(move || {
+        let total = files.len();
+        let done = AtomicUsize::new(0);
+        let mut packages: Vec<RepairSummary> = files
+            .par_iter()
+            .filter_map(|(path, size)| {
+                if cancel.load(Ordering::Relaxed) {
+                    return None;
+                }
+                let found = summarize(path, *size);
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                if n.is_multiple_of(8) || n == total {
+                    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    set_task_progress(&tasks, task_id, "repair_scan", n as f64 / total.max(1) as f64, format!("Checked {n} of {total}: {name}"));
+                }
+                found
+            })
+            .collect();
+        packages.sort_by_key(|p| p.package_id.to_lowercase());
+        let result = RepairScanResult { scanned: done.load(Ordering::Relaxed), cancelled: cancel.load(Ordering::Relaxed), packages };
+        set_result(&tasks, task_id, |t| {
+            t.phase = "repair_scan_complete".into();
+            t.message = format!("{} of {} packages have something to repair", result.packages.len(), result.scanned);
+            t.repair_scan_result = Some(result);
+        });
+    });
+    Ok(TaskHandle { id: task_id })
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RepairDone {
+    pub(crate) file_path: String,
+    pub(crate) result: RepairResult,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RepairFailed {
+    pub(crate) file_path: String,
+    pub(crate) error: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RepairBatchResult {
+    pub(crate) done: Vec<RepairDone>,
+    pub(crate) failed: Vec<RepairFailed>,
+    pub(crate) cancelled: bool,
+}
+
+/// Repairs packages one after another. One that fails (locked, damaged) is
+/// reported and the rest go on; cancel_task stops before the next one.
+#[tauri::command]
+pub(crate) fn start_repair_packages_task(requests: Vec<RepairRequest>, state: State<'_, AppState>) -> Result<TaskHandle, String> {
+    let licenses = state
+        .var_packages_folder_cache
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|c| licenses(&c.items)))
+        .unwrap_or_default();
+    let (task_id, cancel) = register_task(&state, "repair_starting", "Starting the repair")?;
     let tasks = Arc::clone(&state.tasks);
     let folder_cache = Arc::clone(&state.var_packages_folder_cache);
     let generation = Arc::clone(&state.var_packages_cache_generation);
     thread::spawn(move || {
-        let result = repair_package(&request, &|f, m| set_task_progress(&tasks, task_id, "repair_writing", f, m));
-        // Its dependencies changed: the listing has to read it again.
-        generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut out = RepairBatchResult::default();
+        let n = requests.len().max(1) as f64;
+        for (i, request) in requests.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                out.cancelled = true;
+                break;
+            }
+            let name = Path::new(&request.file_path).file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let step = |f: f64, m: &str| {
+                let msg = if requests.len() > 1 { format!("{} of {}: {name}: {m}", i + 1, requests.len()) } else { m.to_string() };
+                set_task_progress(&tasks, task_id, "repair_writing", (i as f64 + f) / n, msg);
+            };
+            match repair_package(request, &licenses, &step) {
+                Ok(result) => out.done.push(RepairDone { file_path: request.file_path.clone(), result }),
+                Err(e) => out.failed.push(RepairFailed { file_path: request.file_path.clone(), error: e.to_string() }),
+            }
+        }
+        // Their dependencies changed: the listing has to read them again.
+        generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut cache) = folder_cache.lock() {
             *cache = None;
         }
-        finish(&tasks, task_id, result);
+        set_result(&tasks, task_id, |t| {
+            t.phase = "repair_complete".into();
+            t.message = format!("Repaired {}, {} failed", out.done.len(), out.failed.len());
+            t.repair_batch_result = Some(out);
+        });
     });
     Ok(TaskHandle { id: task_id })
 }
@@ -602,10 +898,16 @@ mod tests {
             &RepairRequest {
                 file_path: var.display().to_string(),
                 remove_deps: vec!["a.Unused.latest".into(), "b.Covered.latest".into(), "c.Plugin.1".into()],
+                remove_unneeded: false,
                 redirect: true,
+                fix_creator: false,
+                fix_package_name: false,
+                add_undeclared: false,
+                clean_meta: false,
                 backup: true,
                 backup_dir: Some(dir.join("backup").display().to_string()),
             },
+            &HashMap::new(),
             &crate::utils::no_progress,
         )
         .unwrap();
@@ -624,6 +926,56 @@ mod tests {
         z.by_name("Saves/scene/s.json").unwrap().read_to_string(&mut s).unwrap();
         assert!(s.contains("SELF:/Custom/m.vmi") && s.contains("c.Plugin.1:/"));
         assert!(z.by_name("Saves/scene/异界上仙风神.json").is_ok());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn meta_issues_are_found_and_fixed() {
+        let dir = tmp("meta");
+        let var = dir.join("vamxw.Fox.1.var");
+        // A BOM, a trailing comma, another creator and name, an unlisted user.
+        let mut raw = vec![0xEF, 0xBB, 0xBF];
+        raw.extend_from_slice(br#"{"creatorName":"kesuen","packageName":"vamxw_Fox","licenseType":"CC BY","dependencies":{},}"#);
+        let mut zip = ZipWriter::new(fs::File::create(&var).unwrap());
+        let o = SimpleFileOptions::default();
+        zip.start_file("meta.json", o).unwrap();
+        zip.write_all(&raw).unwrap();
+        zip.start_file("Saves/scene/s.json", o).unwrap();
+        zip.write_all(br#"{"p":"MacGruber.PostMagic.3:/Custom/Scripts/p.cslist"}"#).unwrap();
+        zip.finish().unwrap();
+
+        let codes: Vec<String> = scan(&var).unwrap().report.meta.iter().map(|m| m.code.clone()).collect();
+        assert_eq!(codes, ["creator", "package_name", "undeclared", "format"]);
+
+        let licenses = HashMap::from([("macgruber.postmagic".to_string(), "CC BY-SA".to_string())]);
+        let res = repair_package(
+            &RepairRequest {
+                file_path: var.display().to_string(),
+                remove_deps: vec![],
+                remove_unneeded: true,
+                redirect: true,
+                fix_creator: true,
+                fix_package_name: true,
+                add_undeclared: true,
+                clean_meta: true,
+                backup: false,
+                backup_dir: None,
+            },
+            &licenses,
+            &crate::utils::no_progress,
+        )
+        .unwrap();
+        assert_eq!(res.added_deps, ["MacGruber.PostMagic.3"]);
+        assert_eq!(res.meta_fixed, ["creator", "package_name", "format"]);
+        let again = scan(&var).unwrap().report;
+        assert!(again.meta.is_empty(), "{:?}", again.meta);
+        let mut z = ZipArchive::new(fs::File::open(&var).unwrap()).unwrap();
+        let mut m = String::new();
+        z.by_name("meta.json").unwrap().read_to_string(&mut m).unwrap();
+        let v: Value = serde_json::from_str(&m).expect("strict JSON now");
+        assert_eq!(v["creatorName"], "vamxw");
+        assert_eq!(v["packageName"], "Fox");
+        assert_eq!(v["dependencies"]["MacGruber.PostMagic.3"]["licenseType"], "CC BY-SA");
         let _ = fs::remove_dir_all(dir);
     }
 }

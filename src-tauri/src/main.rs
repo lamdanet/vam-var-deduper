@@ -39,7 +39,7 @@ use tauri::{Emitter, Manager};
 
 use crate::{
     delete_impact::get_delete_impact,
-    package_repair::{inspect_package_repair, start_repair_package_task},
+    package_repair::{inspect_package_repair, start_repair_packages_task, start_repair_scan_task},
     extract::{extract_probe, extract_run},
     hub_index::{hub_exact_download, hub_index_lookup, hub_index_refresh, hub_index_status},
     integrity::start_verify_packages_task,
@@ -211,7 +211,8 @@ fn main() {
             start_delete_dependency_scan_task,
             get_delete_impact,
             inspect_package_repair,
-            start_repair_package_task,
+            start_repair_packages_task,
+            start_repair_scan_task,
             start_analyze_var_dependencies_task,
             start_analyze_text_dependencies_task,
             start_download_one_task,
