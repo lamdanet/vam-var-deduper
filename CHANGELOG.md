@@ -20,6 +20,11 @@ release time, it fills it with the commit messages since the last release.
 - **Clean VARs uses Preferred / Avoid like Fix Missing** instead of favorites: the same marks (set on
   either page) put preferred copies first, and avoided ones are never suggested or chosen by themselves
 
+### Fixed
+- Package Explorer showed the creator from meta.json instead of the package name ("by kesuen" for a
+  vamxw package); it now shows the package's creator, with meta.json's name beside it when it differs
+- "Prefer their copies" for a creator is gone: Clean VARs chooses by Preferred / Avoid now
+
 ## [0.3.1] - 2026-10-15
 
 ### Fixed

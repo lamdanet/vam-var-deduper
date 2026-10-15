@@ -7087,7 +7087,15 @@ function pkgRenderHero() {
   const details = PKG.details && !PKG.details.error ? PKG.details : null;
   const title = details?.title ? String(details.title).replaceAll("_", " ") : libTitle(item);
   const version = libVersion(item);
-  const creator = details?.creator_name || libCreator(item);
+  // The creator is the one in its id (file name): what VaM and every package
+  // that depends on it go by. meta.json's creatorName (often the original
+  // author of a repack) is shown beside it when it differs.
+  const creator = libCreator(item);
+  const metaCreator = String(details?.creator_name ?? "").trim();
+  const credit =
+    metaCreator && metaCreator.toLowerCase() !== String(creator).toLowerCase()
+      ? `<span class="pkg-meta-credit" title="The creator its meta.json names. VaM, and every package that depends on it, go by ${escapeAttribute(creator)} from its file name.">· meta.json says ${escapeHtml(metaCreator)}</span>`
+      : "";
   // One row: the package image, four more, and +N for the rest.
   const gallery = pkgGalleryEntries();
   const strip = [{ entry: "", label: "Package image" }, ...gallery.slice(0, 4).map((e) => ({ entry: e, label: e }))];
@@ -7129,7 +7137,7 @@ function pkgRenderHero() {
           <h1 class="pkg-title" title="${escapeAttribute(item.package_id)}">${escapeHtml(title)}${version ? `<span class="pkg-ver">v${escapeHtml(version)}</span>` : ""}</h1>
           <div class="pkg-by">
             <span class="lib-avatar" style="background:${libAuthorColor(creator)}">${escapeHtml(libAuthorInitials(creator))}</span>
-            <span>by <button type="button" class="pkg-author" data-pkg-author="${escapeAttribute(creator)}" title="Every package by ${escapeAttribute(creator)} in VAR Packages">${escapeHtml(creator)}</button></span>
+            <span>by <button type="button" class="pkg-author" data-pkg-author="${escapeAttribute(creator)}" title="Every package by ${escapeAttribute(creator)} in VAR Packages">${escapeHtml(creator)}</button>${credit}</span>
             ${support}
           </div>
           <div class="pkg-chips">${pkgChipsHtml(item, details)}</div>
@@ -9183,8 +9191,9 @@ function pkgZoomEntry(entry) {
     .catch(() => {});
 }
 
-// Clean VARs prefers a favorite creator's copy as the one to keep and never
-// keeps a blocked creator's. One flag per creator: 1 favorite, 2 blocked.
+// Clean VARs and Fix Missing never offer a blocked creator's copies. One flag
+// per creator: 2 blocked, 0 none. (Which copy to prefer is Preferred / Avoid,
+// per package.)
 async function pkgSetCreatorFlag(creator, flag) {
   if (!creator || !invoke) return;
   try {
@@ -9193,16 +9202,10 @@ async function pkgSetCreatorFlag(creator, flag) {
     showToast(`Couldn't save that: ${String(e?.message || e)}`, "error");
     return;
   }
-  if (flag === 1) _favoriteCreators.add(creator);
-  else _favoriteCreators.delete(creator);
   if (flag === 2) _blockedCreators.add(creator);
   else _blockedCreators.delete(creator);
   showToast(
-    flag === 1
-      ? `Clean VARs will prefer ${creator}'s copies.`
-      : flag === 2
-        ? `Clean VARs will never keep ${creator}'s copies.`
-        : `${creator} is back to normal in Clean VARs.`,
+    flag === 2 ? `Clean VARs will never keep ${creator}'s copies.` : `${creator} is back to normal in Clean VARs.`,
     "success",
     4000,
   );
@@ -9223,13 +9226,11 @@ function pkgMoreMenu(event) {
     ...(() => {
       const creator = deriveCreatorFromPackageId(item.package_id);
       if (!creator) return [];
-      const fav = _favoriteCreators.has(creator);
       const blocked = _blockedCreators.has(creator);
       return [
         {
           label: `Creator ${creator} in Clean VARs`,
           submenu: [
-            { label: `${fav ? "✓ " : ""}Prefer their copies`, action: () => pkgSetCreatorFlag(creator, fav ? 0 : 1) },
             { label: `${blocked ? "✓ " : ""}Never keep their copies`, action: () => pkgSetCreatorFlag(creator, blocked ? 0 : 2) },
           ],
         },
@@ -24445,21 +24446,15 @@ async function loadBlockedCreators() {
   }
 }
 
-// Favorite packages / creators: global DB-backed sets, same rationale as
+// Favorite packages: a global DB-backed set, same rationale as
 // _blockedCreators above (module Sets survive the per-page state
 // snapshotting). Bulk-loaded once at startup, mutated in place on toggle so
-// every star surface (list rows, cards, details header, Favorite Source
-// picks) reads the same truth without per-item DB fetches.
+// every star surface (list rows, cards, details header) reads the same truth
+// without per-item DB fetches.
 const _favoritePackages = new Set();
-const _favoriteCreators = new Set();
 
 function isPackageFavorite(packageId) {
   return packageId != null && _favoritePackages.has(String(packageId));
-}
-
-function isCreatorFavoriteForPackage(packageId) {
-  const creator = deriveCreatorFromPackageId(packageId);
-  return creator != null && _favoriteCreators.has(creator);
 }
 
 async function loadFavorites() {
@@ -24472,15 +24467,6 @@ async function loadFavorites() {
     }
   } catch (err) {
     addLog(`Failed to load favorite packages: ${String(err)}`);
-  }
-  try {
-    const names = await invoke("list_favorite_creators");
-    _favoriteCreators.clear();
-    if (Array.isArray(names)) {
-      for (const n of names) _favoriteCreators.add(n);
-    }
-  } catch (err) {
-    addLog(`Failed to load favorite creators: ${String(err)}`);
   }
 }
 

@@ -15156,6 +15156,14 @@ button.lib-dep-ref:hover {
   text-decoration: underline;
 }
 
+/* meta.json's creatorName, when it isn't the creator in the file name. */
+.pkg-meta-credit {
+  margin-left: 6px;
+  font-size: 0.9em;
+  color: var(--text-dim);
+  cursor: help;
+}
+
 .pkg-chips {
   display: flex;
   flex-wrap: wrap;
