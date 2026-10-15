@@ -12,6 +12,8 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
 ### Added
 - **View on Hub everywhere**: a Hub button wherever a package that's on the Hub is shown
 - **Choose where the database lives**: Settings → Database → Location moves it to another folder
