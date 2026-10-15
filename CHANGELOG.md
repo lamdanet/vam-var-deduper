@@ -15,6 +15,8 @@ release time, it fills it with the commit messages since the last release.
 ### Changed
 - **Delete dialog redesigned**: it opens already showing what uses the package and what it uses,
   ticks the dependencies nothing else needs, and warns as you tick if something still needs one
+- **Clean VARs**: each copy you can choose has Explore, Show file, Hub and (for images) a full-size
+  view, plus a right-click menu; Package Explorer's Back returns to the page you came from
 
 ## [0.3.1] - 2026-10-15
 

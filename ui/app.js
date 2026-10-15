@@ -6191,6 +6191,8 @@ const PKG = {
   // { loading } | { error } | { bytes, files, packages: [...] }
   shared: null,
   history: [],
+  // The page it was opened from ({ link, label }), so Back returns there.
+  returnTo: null,
   token: 0,
 };
 const PKG_RECENT_STORE = "pkg.recent";
@@ -6448,7 +6450,18 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
   const item = pkgResolveItem(target);
   if (!item || !invoke) return;
   const onDisk = item.file_path ? Boolean(await invoke("path_exists", { path: item.file_path }).catch(() => false)) : false;
-  if (!fromHistory && PKG.item && PKG.item.file_path !== item.file_path) {
+  // Opened from another page: Back goes to that page, and the trail of
+  // packages starts over from it.
+  const view = pkgView();
+  if (!fromHistory && view?.classList.contains("hidden")) {
+    const link = document.querySelector("[data-sidebar-link].active");
+    const key = link?.getAttribute("data-sidebar-link");
+    PKG.returnTo =
+      key && key !== "pkg-explorer"
+        ? { link: key, label: link.querySelector(".sidebar-label")?.textContent?.trim() || "previous page" }
+        : null;
+    PKG.history = [];
+  } else if (!fromHistory && PKG.item && PKG.item.file_path !== item.file_path) {
     PKG.history.push(PKG.item);
     if (PKG.history.length > 30) PKG.history.shift();
   }
@@ -6566,7 +6579,8 @@ function pkgBack() {
     pkgOpen(prev, { fromHistory: true });
     return;
   }
-  document.querySelector('[data-sidebar-link="var-packages"]')?.click();
+  const link = PKG.returnTo?.link || "var-packages";
+  document.querySelector(`[data-sidebar-link="${link}"]`)?.click();
 }
 
 async function pkgPickFile() {
@@ -6588,7 +6602,9 @@ function pkgRender() {
   }
   const back = PKG.history.length
     ? `Back to ${escapeHtml(libTitle(PKG.history[PKG.history.length - 1]))}`
-    : "VAR Packages";
+    : PKG.returnTo && PKG.returnTo.link !== "var-packages"
+      ? `Back to ${escapeHtml(PKG.returnTo.label)}`
+      : "VAR Packages";
   view.innerHTML = `
     <div class="pkg-scroll" id="pkg-scroll">
       <nav class="pkg-nav">
@@ -15487,12 +15503,28 @@ function cvRenderDetail() {
       const usable = cvUsable(c) && cvFree(item);
       const others = usable ? p.items.filter(({ item: x }) => x.key !== item.key).length : 0;
       const lacks = c.incomplete ?? [];
+      // A copy only the database knows has no file to open or show.
+      const file = p.installed === false ? "" : p.file || c.file_path || "";
+      const name = escapeAttribute(c.package_id);
+      const acts = [
+        others
+          ? `<button type="button" class="ghost-button fm-tiny" data-cv-useall="${name}" title="It has ${pkgCount(others, "more of your files", "more of your files")}: point them all here">Use for all ${others + 1}</button>`
+          : "",
+        file && /\.(png|jpe?g)$/i.test(c.internal_path)
+          ? `<button type="button" class="fm-icon-btn" data-cv-zoom-copy="${escapeAttribute(file)}" data-cv-zoom-entry="${escapeAttribute(c.internal_path)}" title="See this copy of the image"><span class="material-symbols-outlined">image_search</span></button>`
+          : "",
+        `<button type="button" class="fm-icon-btn" data-cv-explore="${name}" data-cv-explore-file="${escapeAttribute(file)}" title="Explore ${name}: contents, dependencies, what uses it"><span class="material-symbols-outlined">space_dashboard</span></button>`,
+        file
+          ? `<button type="button" class="fm-icon-btn" data-cv-show="${escapeAttribute(file)}" title="Show the file"><span class="material-symbols-outlined">folder_open</span></button>`
+          : "",
+        hubLinkHtml(c.package_id),
+      ].join("");
       return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}${usable ? "" : " is-disabled"}" role="radio" tabindex="${usable ? 0 : -1}" aria-checked="${chosen}" aria-disabled="${!usable}" data-cv-copy="${escapeAttribute(c.package_id)}">
           ${p.installed === false || !p.file ? `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(p.file, libGradient(p.pkg), "fm-cand-thumb")}</div>`}
           <div class="fm-cand-top">
             <span class="fm-cand-pick"><span class="material-symbols-outlined fm-cand-radio">${chosen ? "radio_button_checked" : "radio_button_unchecked"}</span><span class="fm-cand-name" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}`)}">${fmPkgLabelHtml(c.package_id)}</span></span>
             <span class="fm-cand-tags">${c === suggest && !pick ? `<span class="chip">Suggested</span>` : ""}${cvPkgChips(p)}</span>
-            <span class="fm-cand-acts">${others ? `<button type="button" class="ghost-button fm-tiny" data-cv-useall="${escapeAttribute(c.package_id)}" title="It has ${pkgCount(others, "more of your files", "more of your files")}: point them all here">Use for all ${others + 1}</button>` : ""}</span>
+            <span class="fm-cand-acts">${acts}</span>
           </div>
           <div class="fm-cand-sub">${
             c.internal_path === item.path
@@ -15551,6 +15583,7 @@ function cvRenderDetail() {
         // in the same place: the slot keeps one height, nothing below moves.
         const chosenBox = (pkg) => `<div class="fm-chosen"><div class="fm-chosen-main"><span class="material-symbols-outlined">check_circle</span>
               <div class="fm-chosen-text"><small>Points at</small>${fmPkgLabelHtml(pkg)}</div>
+              <button type="button" class="fm-icon-btn" data-cv-explore="${escapeAttribute(pkg)}" data-cv-explore-file="${escapeAttribute(cvPkg(pkg)?.installed === false ? "" : cvPkg(pkg)?.file || "")}" title="Explore ${escapeAttribute(pkg)}"><span class="material-symbols-outlined">space_dashboard</span></button>
               <button type="button" class="ghost-button fm-small" data-cv-file-clear="${escapeAttribute(item.key)}"><span class="material-symbols-outlined">close</span>Clear</button></div></div>`;
         const emptyBox = `<div class="fm-chosen is-empty"><div class="fm-chosen-main"><span class="material-symbols-outlined">radio_button_unchecked</span>
               <div class="fm-chosen-text"><small>Points at</small><span class="fm-chosen-none">Nothing yet: it stays in ${escapeHtml(cvSelfName())}. Choose a copy below.</span></div></div></div>`;
@@ -15643,6 +15676,13 @@ function cvOnClick(e) {
   }
   if ((el = q("[data-cv-explore]"))) {
     fmExplore(el.getAttribute("data-cv-explore"), el.getAttribute("data-cv-explore-file"));
+    return;
+  }
+  if ((el = q("[data-cv-zoom-copy]"))) {
+    const entry = el.getAttribute("data-cv-zoom-entry");
+    invoke("get_var_image", { filePath: el.getAttribute("data-cv-zoom-copy"), entry })
+      .then((url) => url && openImageZoom(url, entry.split("/").pop()))
+      .catch(() => {});
     return;
   }
   if ((el = q("[data-cv-show]"))) {
@@ -15787,6 +15827,42 @@ function cvOnChange(e) {
   }
 }
 
+// Right-click menu for any package Clean VARs offers as a choice. Explore
+// opens Package Explorer, whose Back returns here with the page as it was.
+function cvPkgMenuItems(pkgId, file) {
+  const id = String(pkgId || "");
+  if (!id) return [];
+  return [
+    { label: "Explore details", action: () => fmExplore(id, file || "") },
+    ...hubMenuItem(id),
+    { separator: true },
+    ...(file
+      ? [
+          { label: "Show in Explorer", action: () => invoke("show_in_explorer", { path: file }).catch(() => {}) },
+          { label: "Copy file path", action: () => copyTextToClipboard(file).catch(() => {}) },
+        ]
+      : []),
+    { label: "Copy package name", action: () => copyTextToClipboard(id).catch(() => {}) },
+  ];
+}
+
+function cvContextMenu(e) {
+  const card = e.target.closest?.("[data-cv-copy]");
+  const row = !card && e.target.closest?.("[data-cm-row]");
+  let items = [];
+  if (card) {
+    const id = card.getAttribute("data-cv-copy");
+    const file = card.querySelector("[data-cv-explore-file]")?.getAttribute("data-cv-explore-file") || "";
+    items = cvPkgMenuItems(id, file);
+  } else if (row) {
+    const p = cmPkg(row.getAttribute("data-cm-row"));
+    if (p) items = cvPkgMenuItems(p.package_id, p.file_path);
+  }
+  if (!items.length) return;
+  e.preventDefault();
+  showContextMenu(e.clientX, e.clientY, items);
+}
+
 function setupCleanVars() {
   CV.withDb = fmStoreGet("cv.withDb", "0") === "1";
   const view = cvView();
@@ -15796,6 +15872,7 @@ function setupCleanVars() {
     view.addEventListener("click", cmOnClick);
     view.addEventListener("change", cmOnChange);
     view.addEventListener("keydown", cmOnKey);
+    view.addEventListener("contextmenu", cvContextMenu);
     view.addEventListener("keydown", (e) => {
       if (cvMode() !== "one") return;
       if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-cv-copy], [data-cv-frow]")) {
