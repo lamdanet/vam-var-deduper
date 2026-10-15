@@ -6487,7 +6487,8 @@ pub(crate) fn start_apply_missing_resources_fix_task(
             // Backup only makes sense when we're overwriting the original;
             // with an output-folder workflow the original IS the backup.
             // The folder the user chose for backups; else the output folder's
-            // `backup`; else `fix-var-backup` next to the package.
+            // `backup`; else `fix-var-backup` in the VaM folder (never inside
+            // AddonPackages, where VaM would load the backup).
             let chosen_backup_dir = backup_dir.as_deref().map(str::trim).filter(|s| !s.is_empty());
             let backup_root_owned = if backup && replace_in_place {
                 if let Some(dir) = chosen_backup_dir {
@@ -6495,7 +6496,7 @@ pub(crate) fn start_apply_missing_resources_fix_task(
                 } else if let Some(dir) = trimmed_output_dir {
                     Some(Path::new(dir).join("backup"))
                 } else {
-                    target_path.parent().map(|p| p.join("fix-var-backup"))
+                    crate::fix_var::default_backup_root(target_path, "fix-var-backup")
                 }
             } else {
                 None
@@ -6707,8 +6708,8 @@ pub(crate) fn start_apply_internalize_task(
                 Some(Path::new(dir).join("changed").join(file_name))
             };
 
-            // The folder chosen for backups, else <output>/backup, else a
-            // sibling internalize-backup folder.
+            // The folder chosen for backups, else <output>/backup, else
+            // internalize-backup in the VaM folder (never inside AddonPackages).
             let chosen_backup_dir = backup_dir
                 .as_deref()
                 .map(str::trim)
@@ -6719,7 +6720,7 @@ pub(crate) fn start_apply_internalize_task(
                 } else if let Some(dir) = trimmed_output_dir {
                     Some(Path::new(dir).join("backup"))
                 } else {
-                    target_path.parent().map(|p| p.join("internalize-backup"))
+                    crate::fix_var::default_backup_root(target_path, "internalize-backup")
                 }
             } else {
                 None

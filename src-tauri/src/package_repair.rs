@@ -622,7 +622,7 @@ pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String,
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
-            .or_else(|| target.parent().map(|p| p.join("fix-var-backup")))
+            .or_else(|| crate::fix_var::default_backup_root(target, "fix-var-backup"))
     } else {
         None
     };

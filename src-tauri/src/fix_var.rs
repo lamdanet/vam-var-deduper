@@ -784,6 +784,21 @@ fn lookup_license_in_db(db: &Db, _package_id: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
+/// Where backups go when no folder was chosen: `name` beside the
+/// AddonPackages folder the package is in (in the VaM folder), never inside
+/// it, because VaM loads every .var under AddonPackages and a backup there is a
+/// duplicate package. Outside AddonPackages: `name` beside the package.
+pub(crate) fn default_backup_root(target: &Path, name: &str) -> Option<PathBuf> {
+    let addon = target
+        .ancestors()
+        .skip(1)
+        .find(|a| a.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case("AddonPackages")));
+    match addon.and_then(Path::parent) {
+        Some(vam) => Some(vam.join(name)),
+        None => target.parent().map(|p| p.join(name)),
+    }
+}
+
 /// `dir/name`, or `dir/<stem> (2).var` and so on when that's taken, so an
 /// earlier backup is never overwritten.
 pub(crate) fn free_backup_path(dir: &Path, name: &str) -> PathBuf {
@@ -800,7 +815,8 @@ pub(crate) fn free_backup_path(dir: &Path, name: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{free_backup_path, lookup_crcs_by_paths, lookup_crcs_by_paths_split, replacement_target};
+    use super::{default_backup_root, free_backup_path, lookup_crcs_by_paths, lookup_crcs_by_paths_split, replacement_target};
+    use std::path::{Path, PathBuf};
     use std::fs;
 
     #[test]
@@ -858,6 +874,16 @@ mod tests {
         assert_eq!(found.get("Custom/y.png"), Some(&(22, 200)));
         assert!(!found.contains_key("Custom/no-crc.json"));
         assert!(!found.contains_key("Custom/nowhere.cs"));
+    }
+
+    #[test]
+    fn default_backups_go_beside_addonpackages_not_inside() {
+        let p = Path::new(r"D:\VaM\AddonPackages\vamxw\deps\a.Pkg.1.var");
+        assert_eq!(default_backup_root(p, "fix-var-backup"), Some(PathBuf::from(r"D:\VaM\fix-var-backup")));
+        let q = Path::new(r"D:\VaM\addonpackages\a.Pkg.1.var");
+        assert_eq!(default_backup_root(q, "x"), Some(PathBuf::from(r"D:\VaM\x")));
+        let elsewhere = Path::new(r"E:\Archive\a.Pkg.1.var");
+        assert_eq!(default_backup_root(elsewhere, "x"), Some(PathBuf::from(r"E:\Archive\x")));
     }
 
     #[test]

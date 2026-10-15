@@ -9417,10 +9417,7 @@ function rvBackup() {
 // Missing, else fix-var-backup in the VaM folder. Never beside the package:
 // VaM loads every .var under AddonPackages, a backup there included.
 function rvBackupDir() {
-  const chosen = rvStore(RV_STORE.backupDir, "") || fmBackupDir();
-  if (chosen) return chosen;
-  const vam = String(vamDir() || "").replace(/[\\/]+$/, "");
-  return vam ? `${vam}\\fix-var-backup` : "";
+  return rvStore(RV_STORE.backupDir, "") || fmBackupDir();
 }
 
 // Open the page on a package (Package Explorer's Repair).
@@ -10627,13 +10624,17 @@ function fmBackup() {
   return fmStoreGet(FM_STORE.backup, "1") === "1";
 }
 
-// Where backups of the originals go: the folder chosen for them, else the
-// saved output folder's "backup".
+// Where backups of the originals go (Fix Missing and Internalize): the folder
+// chosen for them, else the saved output folder's "backup", else
+// fix-var-backup in the VaM folder. Never inside AddonPackages by default:
+// VaM loads every .var under it, a backup there included.
 function fmBackupDir() {
   const chosen = fmStoreGet(FM_STORE.backupDir, "");
   if (chosen) return chosen;
   const out = fmStoreGet(FM_STORE.outputDir, "") || String(state.missingResources?.outputDir || "").trim();
-  return out ? `${out.replace(/[\\/]+$/, "")}\\backup` : "";
+  if (out) return `${out.replace(/[\\/]+$/, "")}\\backup`;
+  const vam = String(vamDir() || "").replace(/[\\/]+$/, "");
+  return vam ? `${vam}\\fix-var-backup` : "";
 }
 
 function fmView() {

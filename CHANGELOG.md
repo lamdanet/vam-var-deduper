@@ -28,6 +28,8 @@ release time, it fills it with the commit messages since the last release.
   either page) put preferred copies first, and avoided ones are never suggested or chosen by themselves
 
 ### Fixed
+- Fix Missing and Internalize Resources keep backups in fix-var-backup in the VaM folder when no
+  folder is chosen, instead of asking first; never inside AddonPackages, where VaM would load them
 - Package Explorer showed the creator from meta.json instead of the package name ("by kesuen" for a
   vamxw package); it now shows the package's creator, with meta.json's name beside it when it differs
 - "Prefer their copies" for a creator is gone: Clean VARs chooses by Preferred / Avoid now
