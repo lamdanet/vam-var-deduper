@@ -52,6 +52,10 @@ use crate::{
     utils::{byte_step, copy_with_progress, decode_text, dump_json_bytes, normalize_zip_path, read_json_bytes, Progress},
 };
 
+/// The error when a package has nothing the request would change; a batch
+/// counts it as skipped, not failed.
+const NOTHING_TO_REPAIR: &str = "Nothing to repair.";
+
 /// Outside references listed per dependency, as examples.
 const SAMPLE_CAP: usize = 4;
 
@@ -71,6 +75,10 @@ pub(crate) struct RepairDep {
     pub(crate) plugins: u32,
     pub(crate) morphs: u32,
     pub(crate) others: u32,
+    /// Times its name appears without a path, as a plugin's code does when it
+    /// loads the package itself (`GetLatestPackageUid("Creator.Name")`).
+    /// Any of these keeps it: what the code does with it can't be seen.
+    pub(crate) named: u32,
     /// Packages its meta.json nests under this one (a snapshot of that
     /// package's own tree).
     pub(crate) nested: u32,
@@ -160,8 +168,32 @@ pub(crate) struct RepairResult {
     pub(crate) backup_path: Option<String>,
 }
 
+/// The lowercase family of a package id or dependency key. Also strips
+/// `.minN` ("version N or newer"), which `naming::package_base` leaves on.
 fn base_lc(id: &str) -> String {
-    crate::naming::package_base(id).to_ascii_lowercase()
+    let base = crate::naming::package_base(id);
+    // By bytes: the last segment can be Chinese, and slicing it by byte
+    // offsets would cut a character.
+    let is_min = |last: &str| {
+        let b = last.as_bytes();
+        b.len() > 3 && b[..3].eq_ignore_ascii_case(b"min") && b[3..].iter().all(u8::is_ascii_digit)
+    };
+    let base = match base.rsplit_once('.') {
+        Some((head, last)) if is_min(last) => head,
+        _ => base,
+    };
+    base.to_ascii_lowercase()
+}
+
+/// Files a reference can be in: the usual text payloads, plus plugin sources
+/// and lists (a plugin can name another package's file in its code) and
+/// legacy `.vac` scenes.
+fn holds_refs(inner: &str) -> bool {
+    if is_text_path(inner) {
+        return true;
+    }
+    let lc = inner.to_ascii_lowercase();
+    lc.ends_with(".cs") || lc.ends_with(".cslist") || lc.ends_with(".vac")
 }
 
 fn ref_kind(path: &str) -> &'static str {
@@ -245,6 +277,67 @@ fn misnamed_entries<R: Read + Seek>(archive: &mut ZipArchive<R>, file: &mut fs::
     Ok(out)
 }
 
+/// Every `<family>.<version>:/<path>` in `text` for one family, as
+/// (package as written, path). Searched by the exact name, because package
+/// names can hold characters a general parser can't tell from the text
+/// around them (`Nails!.3`, `Rich Wilder.Solara`, `【Flat_Shoes】…(001-576)`).
+/// `text_lc` is `text` with ASCII lowercased, so byte offsets match.
+fn refs_to_family(text: &str, text_lc: &str, family_lc: &str) -> Vec<(String, String)> {
+    let bytes = text.as_bytes();
+    let needle = format!("{family_lc}.");
+    let mut out = Vec::new();
+    for (at, _) in text_lc.match_indices(&needle) {
+        // Not the tail of a longer name.
+        if at > 0 {
+            let prev = bytes[at - 1];
+            if prev.is_ascii_alphanumeric() || matches!(prev, b'_' | b'-' | b'.') || prev >= 0x80 {
+                continue;
+            }
+        }
+        let ver_start = at + needle.len();
+        let rest = &text_lc[ver_start..];
+        let ver_len = if rest.starts_with("latest") {
+            6
+        } else {
+            let digits_from = if rest.starts_with("min") { 3 } else { 0 };
+            let n = rest[digits_from..].bytes().take_while(u8::is_ascii_digit).count();
+            if n == 0 {
+                continue;
+            }
+            digits_from + n
+        };
+        let after = ver_start + ver_len;
+        if !text_lc[after..].starts_with(":/") {
+            continue;
+        }
+        let path_start = after + 2;
+        let path_end = text[path_start..]
+            .find(['"', '\'', '\r', '\n'])
+            .map_or(text.len(), |i| path_start + i);
+        let path = text[path_start..path_end].trim_end();
+        if !path.is_empty() {
+            out.push((text[at..after].to_string(), path.to_string()));
+        }
+    }
+    out
+}
+
+/// How often a family's name appears as a whole name (not inside a longer
+/// one), with or without a version and path after it.
+fn family_mentions(text_lc: &str, family_lc: &str) -> u32 {
+    let bytes = text_lc.as_bytes();
+    let is_name = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-') || b >= 0x80;
+    text_lc
+        .match_indices(family_lc)
+        .filter(|(at, _)| {
+            let before_ok = *at == 0 || !(is_name(bytes[at - 1]) || bytes[at - 1] == b'.');
+            let end = at + family_lc.len();
+            let after_ok = end >= bytes.len() || !is_name(bytes[end]);
+            before_ok && after_ok
+        })
+        .count() as u32
+}
+
 struct Scan {
     report: RepairReport,
     /// Exact `Pkg:/path` -> `SELF:/path` for every reference to a file this
@@ -277,6 +370,7 @@ fn scan(path: &Path) -> Result<Scan> {
         plugins: u32,
         morphs: u32,
         others: u32,
+        named: u32,
         samples: Vec<String>,
     }
     let mut groups: HashMap<String, Group> = HashMap::new();
@@ -285,45 +379,79 @@ fn scan(path: &Path) -> Result<Scan> {
     let mut meta_raw: Option<Vec<u8>> = None;
     for i in 0..archive.len() {
         let mut e = archive.by_index(i)?;
-        if e.is_dir() {
-            continue;
-        }
-        let inner = normalize_zip_path(e.name());
-        if inner.eq_ignore_ascii_case(META_PATH) {
+        if !e.is_dir() && normalize_zip_path(e.name()).eq_ignore_ascii_case(META_PATH) {
             let mut raw = Vec::new();
             e.read_to_end(&mut raw)?;
             meta = read_json_bytes(&raw, "meta.json").ok();
             meta_raw = Some(raw);
+            break;
+        }
+    }
+    // The families meta.json lists, found by their exact names; anything else
+    // the general parser finds is a package it uses but doesn't list.
+    let listed: BTreeSet<String> = meta
+        .as_ref()
+        .and_then(|m| m.get("dependencies"))
+        .and_then(Value::as_object)
+        .map(|m| m.keys().map(|k| base_lc(k)).filter(|b| *b != own).collect())
+        .unwrap_or_default();
+    let mut tally = |groups: &mut HashMap<String, Group>, pkg: &str, ref_path: &str| {
+        let g = groups.entry(base_lc(pkg)).or_default();
+        if g.display.is_empty() {
+            g.display = pkg.to_string();
+        }
+        g.refs += 1;
+        if own_paths.contains(&normalize_zip_path(ref_path).to_lowercase()) {
+            g.inside += 1;
+            redirects.insert(format!("{pkg}:/{ref_path}"), format!("SELF:/{ref_path}"));
+        } else {
+            match ref_kind(ref_path) {
+                "plugin" => g.plugins += 1,
+                "morph" => g.morphs += 1,
+                _ => g.others += 1,
+            }
+            if g.samples.len() < SAMPLE_CAP {
+                g.samples.push(format!("{pkg}:/{ref_path}"));
+            }
+        }
+    };
+    for i in 0..archive.len() {
+        let mut e = archive.by_index(i)?;
+        if e.is_dir() {
             continue;
         }
-        if !is_text_path(&inner) {
+        let inner = normalize_zip_path(e.name());
+        if inner.eq_ignore_ascii_case(META_PATH) || !holds_refs(&inner) {
             continue;
         }
         let mut raw = Vec::new();
         e.read_to_end(&mut raw)?;
         let Some((text, _)) = decode_text(&raw) else { continue };
+        let text_lc = text.to_ascii_lowercase();
+        // path -> the listed packages found pointing at it, so the general
+        // parser's cut-short reading of one (`Wilder.Solara` for `Rich
+        // Wilder.Solara`) isn't taken for another package.
+        let mut exact: HashMap<String, Vec<String>> = HashMap::new();
+        for family in &listed {
+            let found = refs_to_family(&text, &text_lc, family);
+            let bare = family_mentions(&text_lc, family).saturating_sub(found.len() as u32);
+            if bare > 0 {
+                groups.entry(family.clone()).or_default().named += bare;
+            }
+            for (pkg, ref_path) in found {
+                tally(&mut groups, &pkg, &ref_path);
+                exact.entry(ref_path).or_default().push(pkg);
+            }
+        }
         for (pkg, ref_path) in collect_pkg_refs(&text) {
-            if pkg == "SELF" || base_lc(&pkg) == own {
+            let b = base_lc(&pkg);
+            if pkg == "SELF" || b == own || listed.contains(&b) {
                 continue;
             }
-            let g = groups.entry(base_lc(&pkg)).or_default();
-            if g.display.is_empty() {
-                g.display = pkg.clone();
+            if exact.get(&ref_path).is_some_and(|found| found.iter().any(|f| f.ends_with(pkg.as_str()))) {
+                continue;
             }
-            g.refs += 1;
-            if own_paths.contains(&normalize_zip_path(&ref_path).to_lowercase()) {
-                g.inside += 1;
-                redirects.insert(format!("{pkg}:/{ref_path}"), format!("SELF:/{ref_path}"));
-            } else {
-                match ref_kind(&ref_path) {
-                    "plugin" => g.plugins += 1,
-                    "morph" => g.morphs += 1,
-                    _ => g.others += 1,
-                }
-                if g.samples.len() < SAMPLE_CAP {
-                    g.samples.push(format!("{pkg}:/{ref_path}"));
-                }
-            }
+            tally(&mut groups, &pkg, &ref_path);
         }
     }
 
@@ -341,8 +469,11 @@ fn scan(path: &Path) -> Result<Scan> {
             let g = groups.get(&b);
             let refs = g.map_or(0, |g| g.refs);
             let inside = g.map_or(0, |g| g.inside);
+            let named = g.map_or(0, |g| g.named);
             let status = if b == own {
                 "self"
+            } else if named > 0 {
+                "needed"
             } else if refs == 0 {
                 "unused"
             } else if inside == refs {
@@ -358,6 +489,7 @@ fn scan(path: &Path) -> Result<Scan> {
                 plugins: g.map_or(0, |g| g.plugins),
                 morphs: g.map_or(0, |g| g.morphs),
                 others: g.map_or(0, |g| g.others),
+                named,
                 nested: count_nested(v),
                 samples: g.map(|g| g.samples.clone()).unwrap_or_default(),
             }
@@ -396,10 +528,10 @@ fn meta_str<'a>(meta: &'a Value, key: &str) -> &'a str {
 }
 
 /// Undeclared packages worth listing: ones with a reference to a file this
-/// package doesn't have (the rest go when references are pointed at its own
-/// copies).
-fn undeclared_to_add(undeclared: &[RepairUndeclared], redirect: bool) -> impl Iterator<Item = &RepairUndeclared> {
-    undeclared.iter().filter(move |u| !redirect || u.refs > u.inside)
+/// package doesn't have. A reference to a file it has is pointed at its own
+/// copy instead (Unused dependencies), not made a dependency.
+fn undeclared_to_add(undeclared: &[RepairUndeclared]) -> impl Iterator<Item = &RepairUndeclared> {
+    undeclared.iter().filter(|u| u.refs > u.inside)
 }
 
 fn meta_issues(package_id: &str, meta: Option<&Value>, raw: Option<&[u8]>, undeclared: &[RepairUndeclared]) -> Vec<MetaIssue> {
@@ -417,7 +549,7 @@ fn meta_issues(package_id: &str, meta: Option<&Value>, raw: Option<&[u8]>, undec
     if !name.is_empty() && mn != name {
         out.push(issue("package_name", true, mn.to_string(), name));
     }
-    let add: Vec<&str> = undeclared_to_add(undeclared, true).map(|u| u.package.as_str()).collect();
+    let add: Vec<&str> = undeclared_to_add(undeclared).map(|u| u.package.as_str()).collect();
     if !add.is_empty() {
         out.push(issue("undeclared", true, String::new(), add.join("\n")));
     }
@@ -472,14 +604,14 @@ pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String,
     let fix_creator = request.fix_creator && fixable("creator");
     let fix_name = request.fix_package_name && fixable("package_name");
     let add: Vec<String> = if request.add_undeclared {
-        undeclared_to_add(&found.report.undeclared, request.redirect).map(|u| u.package.clone()).collect()
+        undeclared_to_add(&found.report.undeclared).map(|u| u.package.clone()).collect()
     } else {
         Vec::new()
     };
     let clean = request.clean_meta && fixable("format");
     let meta_changes = !remove.is_empty() || fix_creator || fix_name || !add.is_empty() || clean;
     if !meta_changes && redirects.is_empty() && found.names.is_empty() {
-        return Err(anyhow!("Nothing to repair."));
+        return Err(anyhow!(NOTHING_TO_REPAIR));
     }
     let (file_creator, file_pkg_name) = id_parts(&found.report.package_id);
 
@@ -570,7 +702,7 @@ pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String,
                 }
                 out.start_file(&name, options)?;
                 out.write_all(&dump_json_bytes(&meta)?)?;
-            } else if !redirects.is_empty() && is_text_path(&inner) {
+            } else if !redirects.is_empty() && holds_refs(&inner) {
                 let mut raw = Vec::new();
                 entry.read_to_end(&mut raw)?;
                 if let Some(updated) = rewrite_external_text_payload(&raw, &redirects) {
@@ -714,7 +846,17 @@ pub(crate) fn start_repair_scan_task(roots: Vec<String>, state: State<'_, AppSta
                 if cancel.load(Ordering::Relaxed) {
                     return None;
                 }
-                let found = summarize(path, *size);
+                // A bug on one odd package must not stall the whole check: it
+                // shows as that package's error instead.
+                let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| summarize(path, *size))).unwrap_or_else(|_| {
+                    Some(RepairSummary {
+                        file_path: path.display().to_string(),
+                        package_id: path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(),
+                        size_bytes: *size,
+                        error: Some("couldn't be checked (an internal error; see the log)".into()),
+                        ..RepairSummary::default()
+                    })
+                });
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                 if n.is_multiple_of(8) || n == total {
                     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -750,6 +892,8 @@ pub(crate) struct RepairFailed {
 pub(crate) struct RepairBatchResult {
     pub(crate) done: Vec<RepairDone>,
     pub(crate) failed: Vec<RepairFailed>,
+    /// Had nothing the request would change.
+    pub(crate) skipped: Vec<String>,
     pub(crate) cancelled: bool,
 }
 
@@ -780,8 +924,11 @@ pub(crate) fn start_repair_packages_task(requests: Vec<RepairRequest>, state: St
                 let msg = if requests.len() > 1 { format!("{} of {}: {name}: {m}", i + 1, requests.len()) } else { m.to_string() };
                 set_task_progress(&tasks, task_id, "repair_writing", (i as f64 + f) / n, msg);
             };
-            match repair_package(request, &licenses, &step) {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| repair_package(request, &licenses, &step)))
+                .unwrap_or_else(|_| Err(anyhow!("an internal error (see the log); the package was left as it was")));
+            match outcome {
                 Ok(result) => out.done.push(RepairDone { file_path: request.file_path.clone(), result }),
+                Err(e) if e.to_string() == NOTHING_TO_REPAIR => out.skipped.push(request.file_path.clone()),
                 Err(e) => out.failed.push(RepairFailed { file_path: request.file_path.clone(), error: e.to_string() }),
             }
         }
@@ -926,6 +1073,54 @@ mod tests {
         z.by_name("Saves/scene/s.json").unwrap().read_to_string(&mut s).unwrap();
         assert!(s.contains("SELF:/Custom/m.vmi") && s.contains("c.Plugin.1:/"));
         assert!(z.by_name("Saves/scene/异界上仙风神.json").is_ok());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn listed_names_with_odd_characters_are_found() {
+        let dir = tmp("odd");
+        let var = dir.join("me.Scene.1.var");
+        write_var(
+            &var,
+            json!({"dependencies": {
+                "Jackaroo.Eyes_Lips_Nails!.3": {},
+                "Rich Wilder.Solara.latest": {},
+                "klphgz.【Flat_Shoes】Standing_Pose(001-576).latest": {},
+                "aroo.Eyes_Lips_Nails!.3": {},
+                "AcidBubbles.Glance.min14": {},
+                "FallenDancer.JointCorrect.11": {},
+                "CheesyFX.BodyLanguage_Resources.latest": {},
+                "CheesyFX.BodyLanguage.latest": {},
+            }}),
+            &[(
+                "Saves/scene/s.json",
+                r#"{"a":"Jackaroo.Eyes_Lips_Nails!.3:/Custom/a.jpg","b":"Rich Wilder.Solara.latest:/Custom/b.vmi","c":"klphgz.【Flat_Shoes】Standing_Pose(001-576).latest:/Custom/c.json"}"#,
+            ), (
+                "Saves/scene/t.json",
+                r#"{"p":"AcidBubbles.Glance.min14:/Custom/Scripts/AcidBubbles/Glance/Glance.cs"}"#,
+            ), (
+                "Custom/Scripts/x/Person.cs",
+                r#"const string Jcm = "FallenDancer.JointCorrect.11:/Custom/Atom/Person/Morphs/female/FallenDancer/JCM";"#,
+            ), (
+                "Custom/Scripts/x/Fill.cs",
+                r#"resourcesUid = GetLatestPackageUid("CheesyFX.BodyLanguage_Resources");"#,
+            )],
+            &[],
+        );
+        let r = scan(&var).unwrap().report;
+        let st = |k: &str| r.deps.iter().find(|d| d.key == k).unwrap().status.clone();
+        assert_eq!(st("AcidBubbles.Glance.min14"), "needed", ".minN keys are families too");
+        assert_eq!(base_lc("vamxw.异界上仙风神.latest"), "vamxw.异界上仙风神");
+        assert_eq!(base_lc("kk.小美甜.1"), "kk.小美甜");
+        assert_eq!(base_lc("x.甜甜甜甜"), "x.甜甜甜甜");
+        assert_eq!(st("FallenDancer.JointCorrect.11"), "needed", "a plugin's source names it");
+        assert_eq!(st("CheesyFX.BodyLanguage_Resources.latest"), "needed", "loaded by name in code, no path");
+        assert_eq!(st("CheesyFX.BodyLanguage.latest"), "unused", "a longer name isn't a mention");
+        assert_eq!(st("Jackaroo.Eyes_Lips_Nails!.3"), "needed");
+        assert_eq!(st("Rich Wilder.Solara.latest"), "needed");
+        assert_eq!(st("klphgz.【Flat_Shoes】Standing_Pose(001-576).latest"), "needed");
+        assert_eq!(st("aroo.Eyes_Lips_Nails!.3"), "unused", "a family's name inside a longer one isn't a reference to it");
+        assert!(r.undeclared.is_empty(), "{:?}", r.undeclared.iter().map(|u| &u.package).collect::<Vec<_>>());
         let _ = fs::remove_dir_all(dir);
     }
 
