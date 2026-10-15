@@ -21789,6 +21789,15 @@ function vpdNameList(names, total, max = 2) {
   return shown.join(", ") + (more > 0 ? ` +${more} more` : "");
 }
 
+// A row's small thumbnail (lazy, from the same cache as the grid), with an
+// optional status icon in its corner.
+function vpdRowThumb(filePath, badge = "") {
+  const name = String(filePath).split(/[\\/]/).pop() || filePath;
+  return `<span class="vpd-row-thumb-wrap" aria-hidden="true">${libThumbHtml(filePath, libGradient(name), "vpd-row-thumb")}</div>${
+    badge ? `<span class="material-symbols-outlined vpd-row-badge">${badge}</span>` : ""
+  }</span>`;
+}
+
 function vpdRenderDeps() {
   const list = $("vpd-deps");
   if (!list) return;
@@ -21814,7 +21823,9 @@ function vpdRenderDeps() {
     if (!d.file_path) {
       return `
         <div class="vpd-dep is-missing">
-          <span class="material-symbols-outlined vpd-dep-missing-icon" aria-hidden="true">remove</span>
+          <span class="vpd-row-thumb-wrap is-empty" aria-hidden="true">
+            <span class="material-symbols-outlined">help</span>
+          </span>
           <span class="vpd-dep-main">
             <span class="vpd-dep-name">${escapeHtml(d.key)}</span>
             <span class="vpd-dep-status">${d.via ? `Needed by ${escapeHtml(d.via)} · ` : ""}not in your library</span>
@@ -21831,6 +21842,7 @@ function vpdRenderDeps() {
     return `
       <label class="vpd-dep" data-vpd-dep="${i}">
         <input type="checkbox" class="vpd-dep-check" data-vpd-idx="${i}" ${safe.has(vpdKey(d.file_path)) ? "checked" : ""} />
+        ${vpdRowThumb(d.file_path)}
         <span class="vpd-dep-main">
           <span class="vpd-dep-line">
             <span class="vpd-dep-name" title="${escapeAttribute(d.file_path)}">${escapeHtml(d.package_id)}</span>
@@ -21857,6 +21869,7 @@ function vpdRenderDeps() {
     .filter(([, g]) => g.length)
     .map(([title, g]) => `<div class="vpd-group">${escapeHtml(title)} · ${g.length}</div>${g.map(([d, i]) => row(d, i)).join("")}`)
     .join("");
+  libThumbWatch(list);
 }
 
 // Re-works every live part: dependency statuses, the users list, the verdict
@@ -21981,7 +21994,7 @@ function vpdRenderUsers(checked = vpdCheckedSet()) {
         : "";
       return `
         <li class="vpd-user ${s.cls}" data-vpd-user="${i}">
-          <span class="material-symbols-outlined vpd-user-icon" aria-hidden="true">${s.icon}</span>
+          ${vpdRowThumb(u.file_path, s.icon)}
           <span class="vpd-user-main">
             <span class="vpd-dep-line">
               <span class="vpd-user-name" title="${escapeAttribute(u.file_path)}">${escapeHtml(u.package_id)}</span>
@@ -21995,6 +22008,7 @@ function vpdRenderUsers(checked = vpdCheckedSet()) {
         </li>`;
     })
     .join("");
+  libThumbWatch(list);
 }
 
 // ---- Verdict, totals, scope -----------------------------------------------

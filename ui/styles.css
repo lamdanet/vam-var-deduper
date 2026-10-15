@@ -7792,6 +7792,81 @@ input[type="text"]:disabled {
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
+.vpd-dep {
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+}
+
+/* Row thumbnails: small, lazy, with the user's status in the corner. */
+.vpd-row-thumb-wrap {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+}
+
+.vpd-row-thumb {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--lib-thumb-bg);
+}
+
+.vpd-row-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vpd-row-thumb-wrap.is-empty {
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+}
+
+.vpd-row-thumb-wrap.is-empty .material-symbols-outlined {
+  font-size: 18px;
+}
+
+.vpd-row-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 14px;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  box-shadow: 0 0 0 2px var(--surface-2);
+}
+
+.vpd-user.is-bad .vpd-row-badge {
+  color: var(--danger-text);
+}
+
+.vpd-user.is-warn .vpd-row-badge {
+  color: var(--warn-text);
+}
+
+.vpd-user.is-ok .vpd-row-badge {
+  color: var(--success-text);
+}
+
+.vpd-dep.is-checked .vpd-row-thumb {
+  opacity: 0.55;
+  filter: saturate(0.4);
+}
+
 .vpd-user:last-child,
 .vpd-dep:last-child {
   border-bottom: none;
@@ -7802,24 +7877,12 @@ input[type="text"]:disabled {
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 
-.vpd-user-icon {
-  font-size: 18px;
-  margin-top: 1px;
-  color: var(--text-dim);
-}
-
-.vpd-user.is-bad .vpd-user-icon,
 .vpd-user.is-bad .vpd-user-status {
   color: var(--danger-text);
 }
 
-.vpd-user.is-warn .vpd-user-icon,
 .vpd-user.is-warn .vpd-user-status {
   color: var(--warn-text);
-}
-
-.vpd-user.is-ok .vpd-user-icon {
-  color: var(--success-text);
 }
 
 .vpd-user.is-dim {
@@ -7909,11 +7972,6 @@ input[type="text"]:disabled {
   cursor: default;
   grid-template-columns: auto minmax(0, 1fr);
   opacity: 0.6;
-}
-
-.vpd-dep-missing-icon {
-  font-size: 16px;
-  color: var(--text-dim);
 }
 
 .vpd-group {
