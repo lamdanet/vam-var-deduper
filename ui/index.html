@@ -2177,37 +2177,67 @@
     </div>
 
     <div id="vp-delete-backdrop" class="dialog-backdrop hidden">
-      <div class="dialog-card vp-delete-card" role="dialog" aria-modal="true" aria-labelledby="vp-delete-title">
-        <h3 id="vp-delete-title">Delete package?</h3>
-        <p id="vp-delete-message"></p>
-        <div class="vp-delete-root-row">
-          <span class="vp-delete-root-label" id="vp-delete-root-label">Scan folders</span>
-          <button class="vp-delete-root-settings" id="vp-delete-root-settings" type="button">Change in Settings</button>
+      <div class="dialog-card vpd-card" role="dialog" aria-modal="true" aria-labelledby="vpd-title" aria-describedby="vpd-verdict">
+        <header class="vpd-head">
+          <div id="vpd-thumb" class="vpd-thumb"></div>
+          <div class="vpd-head-text">
+            <p class="vpd-eyebrow">Send to the Recycle Bin</p>
+            <h3 id="vpd-title" class="vpd-title"></h3>
+            <div id="vpd-facts" class="vpd-facts"></div>
+            <p id="vpd-path" class="vpd-path"></p>
+          </div>
+        </header>
+
+        <div id="vpd-verdict" class="vpd-verdict" role="status" aria-live="polite"></div>
+
+        <div class="vpd-panes">
+          <section class="vpd-pane" aria-labelledby="vpd-users-title">
+            <div class="vpd-pane-head">
+              <span class="material-symbols-outlined vpd-pane-icon" aria-hidden="true">call_received</span>
+              <h4 id="vpd-users-title" class="vpd-pane-title">Uses it</h4>
+              <span id="vpd-users-count" class="vpd-count"></span>
+            </div>
+            <p class="vpd-pane-sub">Packages that list it as a dependency, and what happens to them.</p>
+            <ul id="vpd-users" class="vpd-list" aria-labelledby="vpd-users-title"></ul>
+            <div class="vpd-deep">
+              <button id="vpd-deep-button" class="vpd-link" type="button">
+                <span class="material-symbols-outlined" aria-hidden="true">manage_search</span>
+                <span>Also search inside scenes and presets</span>
+              </button>
+              <span class="vpd-deep-note">Finds references that aren't listed as dependencies. Reads every package.</span>
+              <div id="vpd-deep-progress" class="vpd-deep-progress hidden">
+                <div class="progress-track"><div class="progress-bar" id="vpd-deep-bar"></div></div>
+                <span id="vpd-deep-message" class="vpd-deep-message"></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="vpd-pane" aria-labelledby="vpd-deps-title">
+            <div class="vpd-pane-head">
+              <span class="material-symbols-outlined vpd-pane-icon" aria-hidden="true">call_made</span>
+              <h4 id="vpd-deps-title" class="vpd-pane-title">It uses</h4>
+              <span id="vpd-deps-count" class="vpd-count"></span>
+              <div id="vpd-deps-select" class="vpd-select hidden" role="group" aria-label="Select dependencies">
+                <button type="button" data-vpd-select="safe">Unused only</button>
+                <button type="button" data-vpd-select="none">None</button>
+              </div>
+            </div>
+            <p class="vpd-pane-sub">Tick any to send them to the Recycle Bin too. Ones nothing else needs are ticked for you.</p>
+            <div id="vpd-deps" class="vpd-list vpd-deps"></div>
+          </section>
         </div>
-        <div class="vp-delete-root-list" id="vp-delete-root-list"></div>
-        <div class="vp-delete-scan-row">
-          <button id="vp-delete-scan-button" class="ghost-button" type="button">Scan for usage</button>
-          <label class="check-row vp-delete-deep-label">
-            <input type="checkbox" id="vp-delete-deep" />
-            <span>Deep scan (scene/preset refs — slower)</span>
-          </label>
-          <button id="vp-delete-dep-scan-button" class="ghost-button" type="button">Scan dependencies</button>
-        </div>
-        <div id="vp-delete-scan-progress" class="progress-card hidden">
-          <div class="progress-track"><div class="progress-bar" id="vp-delete-scan-bar"></div></div>
-          <p id="vp-delete-scan-message" class="panel-subtitle"></p>
-        </div>
-        <p id="vp-delete-usage-header" class="vp-ddep-header hidden">Used by</p>
-        <p id="vp-delete-scan-summary" class="vp-delete-scan-summary hidden"></p>
-        <div id="vp-delete-scan-list" class="vp-delete-scan-list"></div>
-        <p id="vp-delete-dep-header" class="vp-ddep-header hidden">Dependencies</p>
-        <p id="vp-delete-dep-hint" class="vp-ddep-hint hidden">Tick dependencies to send them to the Recycle Bin together with this package.</p>
-        <p id="vp-delete-dep-summary" class="vp-delete-scan-summary hidden"></p>
-        <div id="vp-delete-dep-list" class="vp-ddep-list"></div>
-        <div class="dialog-actions">
-          <button id="vp-delete-cancel" class="ghost-button" type="button">Cancel</button>
-          <button id="vp-delete-confirm" class="primary-button vp-bulk-danger" type="button">Delete</button>
-        </div>
+
+        <footer class="vpd-foot">
+          <div class="vpd-total">
+            <span id="vpd-total-size" class="vpd-total-size"></span>
+            <span id="vpd-total-text" class="vpd-total-text"></span>
+          </div>
+          <p id="vpd-scope" class="vpd-scope"></p>
+          <div class="dialog-actions vpd-actions">
+            <button id="vp-delete-cancel" class="ghost-button" type="button">Cancel</button>
+            <button id="vp-delete-confirm" class="primary-button vpd-danger" type="button">Delete</button>
+          </div>
+        </footer>
       </div>
     </div>
 

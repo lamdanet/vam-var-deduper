@@ -7371,10 +7371,7 @@ input[type="text"]:disabled {
   color: var(--accent-danger);
 }
 
-/* --- Delete modal (with opt-in usage scan) ------------------------------ */
-/* The dependency-scan modal shows the same "which folders are we checking
-   against" block, so the .dep-scan-root-* twins ride along on these rules. */
-.vp-delete-root-row,
+/* --- Scan Dependencies modal: the "which folders" block ------------------ */
 .dep-scan-root-row {
   display: flex;
   align-items: center;
@@ -7383,7 +7380,6 @@ input[type="text"]:disabled {
   margin: 10px 0 4px;
 }
 
-.vp-delete-root-label,
 .dep-scan-root-label {
   font-size: 12px;
   font-weight: 600;
@@ -7391,7 +7387,6 @@ input[type="text"]:disabled {
   white-space: nowrap;
 }
 
-.vp-delete-root-list,
 .dep-scan-root-list {
   display: flex;
   flex-direction: column;
@@ -7401,7 +7396,6 @@ input[type="text"]:disabled {
   margin-bottom: 6px;
 }
 
-.vp-delete-root-item,
 .dep-scan-root-item {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7414,14 +7408,12 @@ input[type="text"]:disabled {
   font-size: 12px;
 }
 
-.vp-delete-root-empty,
 .dep-scan-root-empty {
   padding: 6px 10px;
   font-size: 12px;
   color: var(--accent-warn);
 }
 
-.vp-delete-root-settings,
 .dep-scan-root-settings {
   flex: 0 0 auto;
   background: transparent;
@@ -7435,227 +7427,761 @@ input[type="text"]:disabled {
   white-space: nowrap;
 }
 
-.vp-delete-root-settings:hover:not(:disabled),
 .dep-scan-root-settings:hover:not(:disabled) {
   filter: brightness(1.15);
 }
 
-.vp-delete-root-settings:disabled,
 .dep-scan-root-settings:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 
-.vp-delete-scan-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin: 8px 0;
-}
-
-.vp-delete-deep-label {
-  font-size: 12px;
-  color: var(--text-muted, var(--text));
-}
-
-.vp-delete-scan-summary {
-  margin: 4px 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.vp-delete-scan-summary.is-safe {
-  color: var(--accent-success);
-}
-
-.vp-delete-scan-summary.is-warn {
-  color: var(--accent-warn);
-}
-
-.vp-delete-scan-list {
-  list-style: none;
-  margin: 0;
+/* --- Delete dialog ---------------------------------------------------------
+   Header (what), verdict (so what), two panes (who uses it | what it uses),
+   footer (how much, confirm). The panes are the only part that scrolls.
+   Status colours: --danger-text / --warn-text / --success-text, which every
+   theme tunes for legibility. */
+.dialog-card.vpd-card {
+  --vpd-pad: 20px;
+  width: min(940px, 100%);
+  max-height: min(860px, 92vh);
   padding: 0;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.vp-delete-scan-list:not(:empty) {
-  margin-top: 4px;
-  border-top: 1px solid var(--line);
-}
-
-.vp-delete-dep-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 6px 2px;
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-}
-
-.vp-delete-dep-name {
-  font-weight: 600;
-}
-
-.vp-delete-dep-creator {
-  color: var(--text-muted, var(--text));
-}
-
-/* --- Delete modal: dependency scan ("Scan dependencies") ------------------
-   New vp-ddep-* prefix — the usage list above already owns .vp-delete-dep-*.
-   Card sizing: two result lists need real width + a height budget (mirrors
-   .dep-scan-card). Visibility is class-driven (.hidden) throughout. */
-.vp-delete-card {
-  width: min(760px, 100%);
-  max-height: 88vh;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  overflow: hidden;
 }
 
-/* Flex gap now provides the rhythm — collapse the old margins. */
-.vp-delete-card .vp-delete-root-row,
-.vp-delete-card .vp-delete-scan-row,
-.vp-delete-card .vp-delete-scan-summary {
-  margin: 0;
-}
-
-.vp-delete-card .vp-delete-scan-list {
-  flex: 0 1 auto;
-}
-
-.vp-ddep-header {
-  margin: 4px 0 0;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--text-muted);
-}
-
-.vp-ddep-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.vp-ddep-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: 34vh;
-  overflow-y: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-}
-
-.vp-ddep-list:empty {
-  display: none;
-}
-
-.vp-ddep-row {
+.vpd-head {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 16px;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
+  padding: var(--vpd-pad) var(--vpd-pad) 14px;
 }
 
-.vp-ddep-row:last-child {
-  border-bottom: none;
+.vpd-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--line);
 }
 
-.vp-ddep-row.is-missing {
-  opacity: 0.55;
-  cursor: default;
+.vpd-thumb-img {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--lib-thumb-bg);
 }
 
-.vp-ddep-row.has-users-expanded {
-  border-bottom-color: transparent;
+.vpd-thumb-img img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
-.vp-ddep-main {
+.vpd-head-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dialog-card .vpd-eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--danger-text);
+}
+
+.dialog-card h3.vpd-title {
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.vpd-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.vpd-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.vpd-type-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.vpd-chip,
+.vpd-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--surface-3);
+}
+
+.vpd-chip.is-ok {
+  color: var(--success-text);
+  border-color: color-mix(in srgb, var(--accent-success) 40%, transparent);
+  background: color-mix(in srgb, var(--accent-success) 10%, transparent);
+}
+
+.vpd-chip.is-bad,
+.vpd-tag.is-bad {
+  color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--accent-danger) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-danger) 10%, transparent);
+}
+
+.dialog-card .vpd-path {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* Verdict: one sentence and its reasons. */
+.vpd-verdict {
+  --vpd-tone: var(--text-muted);
+  --vpd-tone-bg: var(--accent-success);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0 var(--vpd-pad) 14px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--vpd-tone-bg) 35%, var(--line));
+  border-left-width: 4px;
+  border-left-color: var(--vpd-tone-bg);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--vpd-tone-bg) 9%, var(--surface));
+}
+
+.vpd-verdict.is-ok {
+  --vpd-tone: var(--success-text);
+  --vpd-tone-bg: var(--accent-success);
+}
+
+.vpd-verdict.is-warn {
+  --vpd-tone: var(--warn-text);
+  --vpd-tone-bg: var(--accent-warn);
+}
+
+.vpd-verdict.is-bad {
+  --vpd-tone: var(--danger-text);
+  --vpd-tone-bg: var(--accent-danger);
+}
+
+.vpd-verdict.is-busy {
+  --vpd-tone-bg: var(--line-strong);
+}
+
+.vpd-verdict-icon {
+  font-size: 22px;
+  color: var(--vpd-tone);
+  flex: 0 0 auto;
+}
+
+.vpd-verdict.is-busy .vpd-verdict-icon {
+  animation: vpd-spin 1s linear infinite;
+}
+
+@keyframes vpd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.vpd-verdict-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+  padding: 6px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.vpd-verdict-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vpd-verdict-text strong {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.vpd-verdict-text ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.vpd-verdict-text li {
+  position: relative;
+  padding-left: 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.vpd-verdict-text li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.vpd-verdict-text li.is-bad {
+  color: var(--danger-text);
+}
+
+.vpd-verdict-text li.is-warn {
+  color: var(--warn-text);
+}
+
+/* Two panes side by side; stacked when narrow. */
+.vpd-panes {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 var(--vpd-pad);
+}
+
+.vpd-pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.vpd-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 2px;
+}
+
+.vpd-pane-icon {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.dialog-card .vpd-pane-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.vpd-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.vpd-count:empty {
+  display: none;
+}
+
+.vpd-select {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.vpd-select button {
+  padding: 3px 9px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vpd-select button + button {
+  border-left: 1px solid var(--line);
+}
+
+.vpd-select button:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.dialog-card .vpd-pane-sub {
+  margin: 0;
+  padding: 2px 14px 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--line);
+}
+
+.vpd-list {
+  flex: 1 1 auto;
+  min-height: 72px;
+  max-height: 46vh;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+/* Rows: an icon or checkbox, the text, then the size and the ⋯ button. */
+.vpd-user,
+.vpd-dep {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 4px 10px;
+  padding: 9px 10px 9px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.vpd-user {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.vpd-user:last-child,
+.vpd-dep:last-child {
+  border-bottom: none;
+}
+
+.vpd-user:hover,
+.vpd-dep:hover {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.vpd-user-icon {
+  font-size: 18px;
+  margin-top: 1px;
+  color: var(--text-dim);
+}
+
+.vpd-user.is-bad .vpd-user-icon,
+.vpd-user.is-bad .vpd-user-status {
+  color: var(--danger-text);
+}
+
+.vpd-user.is-warn .vpd-user-icon,
+.vpd-user.is-warn .vpd-user-status {
+  color: var(--warn-text);
+}
+
+.vpd-user.is-ok .vpd-user-icon {
+  color: var(--success-text);
+}
+
+.vpd-user.is-dim {
+  opacity: 0.65;
+}
+
+.vpd-user-main,
+.vpd-dep-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vpd-dep-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   min-width: 0;
 }
 
-.vp-ddep-name {
+.vpd-user-name,
+.vpd-dep-name {
+  font-size: 12.5px;
   font-weight: 600;
-  font-size: 12px;
   color: var(--text);
   overflow-wrap: anywhere;
 }
 
-.vp-ddep-meta {
-  color: var(--text-dim);
-  font-size: 11px;
+.vpd-user-status,
+.vpd-dep-status,
+.vpd-dep-via {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
-.vp-ddep-size {
+.vpd-dep-via {
+  color: var(--text-dim);
+}
+
+.vpd-dep {
+  cursor: pointer;
+}
+
+.vpd-dep input[type="checkbox"] {
+  margin: 2px 0 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--danger-text);
+  cursor: pointer;
+}
+
+.vpd-dep.is-checked {
+  background: color-mix(in srgb, var(--accent-danger) 6%, transparent);
+}
+
+.vpd-dep.is-checked .vpd-dep-name {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--danger-text) 60%, transparent);
+}
+
+.vpd-dep-status.is-ok {
+  color: var(--success-text);
+}
+
+.vpd-dep-status.is-bad {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+.vpd-dep.is-bad {
+  box-shadow: inset 3px 0 0 var(--accent-danger);
+}
+
+.vpd-dep-size {
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   white-space: nowrap;
+  margin-top: 1px;
 }
 
-.vp-ddep-chips {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.vpd-dep.is-missing {
+  cursor: default;
+  grid-template-columns: auto minmax(0, 1fr);
+  opacity: 0.6;
 }
 
-.chip.vp-ddep-exclusive {
-  color: var(--accent-success);
-  border-color: color-mix(in srgb, var(--accent-success) 45%, transparent);
+.vpd-dep-missing-icon {
+  font-size: 16px;
+  color: var(--text-dim);
 }
 
-button.chip.vp-ddep-shared {
-  appearance: none;
-  font: inherit;
-  font-size: 10px;
+.vpd-group {
+  padding: 8px 14px 6px;
+  font-size: 10.5px;
   font-weight: 700;
-  cursor: pointer;
-  color: var(--accent-warn);
-  border-color: color-mix(in srgb, var(--accent-warn) 45%, transparent);
-  background: var(--surface-3);
-}
-
-button.chip.vp-ddep-shared:hover {
-  filter: brightness(1.15);
-}
-
-/* Effectively exclusive: every remaining user is itself checked for deletion.
-   Dashed border keeps it visually distinct from the truly-exclusive chip. */
-button.chip.vp-ddep-shared.vp-ddep-eff {
-  color: var(--accent-success);
-  border-color: color-mix(in srgb, var(--accent-success) 45%, transparent);
-  border-style: dashed;
-}
-
-.chip.vp-ddep-missing {
-  color: var(--text-muted);
-}
-
-.vp-ddep-users {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 10px 8px 36px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 
-.vp-ddep-users:last-child {
-  border-bottom: none;
+.vpd-more {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.vpd-more .material-symbols-outlined {
+  font-size: 18px;
+}
+
+.vpd-user:hover .vpd-more,
+.vpd-dep:hover .vpd-more,
+.vpd-more:focus-visible {
+  opacity: 1;
+}
+
+.vpd-more:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.vpd-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 14px;
+  font-size: 12.5px;
+  color: var(--success-text);
+}
+
+.vpd-empty .material-symbols-outlined {
+  font-size: 20px;
+}
+
+.vpd-empty.is-muted {
+  color: var(--text-muted);
+}
+
+/* Loading placeholder rows. */
+.vpd-skel-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vpd-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.vpd-skel span {
+  height: 9px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--surface-3), color-mix(in srgb, var(--text) 8%, var(--surface-3)), var(--surface-3));
+  background-size: 200% 100%;
+  animation: vpd-shimmer 1.2s ease-in-out infinite;
+}
+
+.vpd-skel span:first-child {
+  width: 58%;
+}
+
+.vpd-skel span:last-child {
+  width: 36%;
+}
+
+@keyframes vpd-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vpd-skel span,
+  .vpd-verdict.is-busy .vpd-verdict-icon {
+    animation: none;
+  }
+}
+
+/* Deep search, under the users list. */
+.vpd-deep {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.vpd-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.vpd-link .material-symbols-outlined {
+  font-size: 17px;
+}
+
+.vpd-link:hover:not(:disabled) {
+  text-decoration-color: currentColor;
+}
+
+.vpd-link:disabled {
+  background: transparent;
+  border-radius: 0;
+}
+
+.vpd-link.is-done,
+.vpd-link.is-done:disabled {
+  opacity: 1;
+  cursor: default;
+  text-decoration: none;
+  color: var(--text-muted);
+}
+
+.vpd-deep-note {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.vpd-link.is-done + .vpd-deep-note {
+  display: none;
+}
+
+.vpd-deep-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.vpd-deep-message {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Footer: what it frees, then confirm. */
+.vpd-foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "total actions"
+    "scope actions";
+  align-items: center;
+  gap: 2px 16px;
+  margin-top: 14px;
+  padding: 14px var(--vpd-pad) 16px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.vpd-total {
+  grid-area: total;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.vpd-total-size {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.vpd-total-text {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dialog-card .vpd-scope {
+  grid-area: scope;
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.vpd-scope .vpd-link {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dialog-actions.vpd-actions {
+  grid-area: actions;
+  margin: 0;
+  flex-wrap: nowrap;
+}
+
+.vpd-danger {
+  background: var(--danger-text);
+  border-color: var(--danger-text);
+  color: #fff;
+  min-width: 96px;
+}
+
+.vpd-danger:hover:not(:disabled) {
+  background: var(--danger-text);
+  border-color: var(--danger-text);
+  filter: brightness(1.1);
+}
+
+@media (max-width: 760px) {
+  .vpd-panes {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .vpd-list {
+    max-height: none;
+  }
+
+  .vpd-foot {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "total" "scope" "actions";
+  }
+
+  .dialog-actions.vpd-actions {
+    margin-top: 10px;
+  }
 }
 
 /* --- VAR Packages: image gallery modal ------------------------------------
-   Same card recipe as .vp-delete-card / .dep-scan-card: fixed width, a height
+   Same card recipe as .dep-scan-card: fixed width, a height
    budget, flex column with the scrolling grid as the only flex-grow child so
    the controls and summary stay put while the grid scrolls. */
 .vp-images-card {

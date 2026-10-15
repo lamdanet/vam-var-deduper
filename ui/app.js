@@ -519,39 +519,6 @@ Object.assign(I18N.en_US, {
   varFavLabelOn: "Favorited",
   varPackagesSelCount: (n, size) => `${n} selected · ${size}`,
   varPackagesSelNone: "None selected",
-  varPackagesDeleteTitle: "Delete package?",
-  varPackagesDeleteMessage: (name) =>
-    `Send ${name} to the Recycle Bin? You can restore it from the Recycle Bin if you need it back.`,
-  varPackagesDeleteScan: "Scan for usage",
-  varPackagesDeleteConfirm: "Delete",
-  varPackagesDeleteCancel: "Cancel",
-  varPackagesDeleteCancelScan: "Cancel scan",
-  varPackagesDeleteNoUsage: "No other packages reference this — safe to delete.",
-  varPackagesDeleteUsedBy: (n) =>
-    `${n} package${n === 1 ? "" : "s"} reference this (any version) — deleting may break them:`,
-  varPackagesDeleteRootLabel: "Scan folders",
-  varPackagesDeleteRootUnset: "Not set — configure your VAR library folder in Settings.",
-  varPackagesDeleteChangeInSettings: "Change in Settings",
-  varPackagesDeleteNoRoots: "Set your VAR library (AddonPackages) folder in Settings to scan usage.",
-  varPackagesDeleteDepScan: "Scan dependencies",
-  varPackagesDeleteUsageHeader: "Used by",
-  varPackagesDeleteDepsHeader: "Dependencies",
-  varPackagesDeleteDepsHint:
-    "Tick dependencies to send them to the Recycle Bin together with this package.",
-  varPackagesDeleteDepsNone: "This package declares no dependencies.",
-  varPackagesDeleteDepsSummary: (ex, sh, miss) =>
-    `${ex} exclusive · ${sh} shared with other packages · ${miss} not installed`,
-  varPackagesDeleteDepsScanErrors: (n) =>
-    ` ${n} package${n === 1 ? "" : "s"} could not be read — shared counts may be incomplete.`,
-  varPackagesDeleteDepsExclusive: "Not used by others",
-  varPackagesDeleteDepsShared: (n) => `Used by ${n} other${n === 1 ? "" : "s"}`,
-  varPackagesDeleteDepsEffExclusive: "Only used by packages being deleted",
-  varPackagesDeleteDepsMissing: "Not installed",
-  varPackagesDeleteDepsTransitive: "transitive",
-  varPackagesDeleteDepsDisabled: "disabled",
-  varPackagesDeleteDepsMoreFiles: (n) => `+${n} more file${n === 1 ? "" : "s"}`,
-  varPackagesDeleteDepsMoreUsers: (n) => `and ${n} more`,
-  varPackagesDeleteConfirmWithDeps: (n) => `Delete + ${n} dep${n === 1 ? "" : "s"}`,
   varPackagesImagesTitle: "Images in package",
   varPackagesImagesOpen: "View images",
   varPackagesImagesMaxLabel: "Max size",
@@ -21531,40 +21498,46 @@ function showVarPackagesDbStale(count) {
 }
 
 // =====================================================================
-// Delete-confirmation modal with an OPT-IN reverse-dependency scan. Opening
-// is cheap; the "Scan for usage" button runs start_dependency_check_task
-// (a whole-library archive read) only when clicked, so the user learns which
-// other packages reference this one before recycling it. Reuses the existing
-// reverse-dependency backend — no new Rust. Mirrors the DEP_SCAN modal shape.
+// Delete dialog. It opens with the whole picture already there, read from the
+// library's dependency graph (get_delete_impact, no archive reads): which
+// packages use this one and what happens to each, and everything it pulls in
+// with who else needs it. Dependencies nothing else needs come pre-ticked, and
+// every row's status follows the ticks live. The one slow check, references
+// inside scenes and presets that aren't declared as dependencies, stays a
+// single opt-in click (start_dependency_check_task with deep_scan).
 // =====================================================================
 const VP_DELETE = {
   filePath: null,
   packageId: null,
-  fileName: null,
+  resolve: null,
+  // get_delete_impact's answer; null while loading or when it failed.
+  impact: null,
+  loadError: null,
+  // Bumped per open, so a late answer for an earlier package is dropped.
+  loadSeq: 0,
+  // The deep search's dependents (DependencyCheckMatch), once it has run.
+  deep: null,
+  // The users list as rendered, so a row's menu can find its package.
+  userRows: [],
   taskId: null,
   running: false,
   cancelled: false,
-  resolve: null,
-  // Normalized dependency-scan rows (vpDdepNormalize). Checkbox state lives in
-  // the DOM and is read once at confirm — no mirror state to drift.
-  deps: null,
-  // Raw usage-scan matches, kept so the row right-click menu can resolve an
-  // index back to a package_id + file_path.
-  dependents: null,
 };
 
-const VP_DDEP_TASK_CMD = "start_delete_dependency_scan_task";
-const VP_DDEP_RESULT_FIELD = "delete_dependency_scan_result";
+const VPD_TYPE_NAMES = {
+  scene: "Scene",
+  look: "Look",
+  pose: "Pose",
+  clothing: "Clothing",
+  hair: "Hairstyle",
+  other: "Package",
+};
 
-function vpDeleteSetText(id, v) {
-  const el = $(id);
-  if (el) el.textContent = String(v ?? "");
-}
+const vpdKey = (path) => String(path || "").toLowerCase();
 
-// The AddonPackages root(s) the usage scan walks: the Settings "VAR library
-// folder" + its additional dirs (the downloadVars context), deduped
-// case-insensitively. NO var-details fallback (unlike depLibraryDirs) — the
-// roots must come from the Settings config, or the modal hints to configure it.
+// The AddonPackages root(s): the Settings "VAR library folder" + its
+// additional dirs, deduped case-insensitively. Used when the package isn't in
+// the VAR Packages listing, and by the deep search.
 function vpDeleteRootDirs() {
   const raw = [
     ($("settings-library-folder")?.value || "").trim(),
@@ -21582,108 +21555,58 @@ function vpDeleteRootDirs() {
   return out;
 }
 
-// Populates the modal's root selector from the configured library roots.
-// Value "" means "all roots"; a path value means scan just that root. When no
-// root is configured, disables the selector + Scan and hints toward Settings.
-// Lists every configured VAR library root (read-only) that the usage scan will
-// cover — primary + additional folders from Settings — so the user sees the
-// full scope. The folders are changed in Settings (the link navigates there).
-function vpDeleteRenderRoot() {
-  const listEl = $("vp-delete-root-list");
-  const scanBtn = $("vp-delete-scan-button");
-  const roots = vpDeleteRootDirs();
-  const depScanBtn = $("vp-delete-dep-scan-button");
-  if (roots.length === 0) {
-    if (listEl) {
-      listEl.innerHTML = `<div class="vp-delete-root-empty">${escapeHtml(t("varPackagesDeleteRootUnset"))}</div>`;
-    }
-    if (scanBtn) scanBtn.disabled = true;
-    if (depScanBtn) depScanBtn.disabled = true;
-    const summary = $("vp-delete-scan-summary");
-    if (summary) {
-      summary.textContent = t("varPackagesDeleteNoRoots");
-      summary.classList.remove("hidden", "is-safe");
-      summary.classList.add("is-warn");
-    }
-    return;
-  }
-  if (scanBtn) scanBtn.disabled = false;
-  if (depScanBtn) depScanBtn.disabled = false;
-  if (listEl) {
-    listEl.innerHTML = roots
-      .map(
-        (dir) =>
-          `<div class="vp-delete-root-item" title="${escapeAttribute(dir)}">${escapeHtml(dir)}</div>`,
-      )
-      .join("");
-  }
-}
-
-// Opens the modal and resolves true (proceed to delete) / false (cancel).
+// Opens the dialog. Resolves `null` (cancelled) or `{ extraPaths }`, the ticked
+// dependencies' file paths.
 function vpDeleteModalOpen(filePath) {
   return new Promise((resolve) => {
-    VP_DELETE.filePath = filePath;
-    VP_DELETE.fileName = filePath.split(/[\\/]/).pop() || filePath;
-    VP_DELETE.packageId = deriveTargetPackageIdFromPath(filePath);
-    VP_DELETE.taskId = null;
-    VP_DELETE.running = false;
-    VP_DELETE.cancelled = false;
-    VP_DELETE.resolve = resolve;
-    VP_DELETE.deps = null;
-    VP_DELETE.dependents = null;
-
-    vpDeleteSetText("vp-delete-title", t("varPackagesDeleteTitle"));
-    const delItem = libFindItem(filePath) ?? state.vpSelected.get(filePath);
-    vpDeleteSetText(
-      "vp-delete-message",
-      `${t("varPackagesDeleteMessage", VP_DELETE.fileName)}${
-        delItem?.on_hub === false ? ` ${libNotOnHubNote([delItem.package_id])}` : ""
-      }`,
-    );
-    vpDeleteSetText("vp-delete-scan-button", t("varPackagesDeleteScan"));
-    vpDeleteSetText("vp-delete-dep-scan-button", t("varPackagesDeleteDepScan"));
-    vpDeleteSetText("vp-delete-usage-header", t("varPackagesDeleteUsageHeader"));
-    vpDeleteSetText("vp-delete-dep-header", t("varPackagesDeleteDepsHeader"));
-    vpDeleteSetText("vp-delete-dep-hint", t("varPackagesDeleteDepsHint"));
-    vpDeleteSetText("vp-delete-confirm", t("varPackagesDeleteConfirm"));
-    // Reset the scan UI — a prior open must not leak its results.
-    const deep = $("vp-delete-deep");
-    if (deep) deep.checked = false;
-    const summary = $("vp-delete-scan-summary");
-    if (summary) {
-      summary.classList.add("hidden");
-      summary.classList.remove("is-safe", "is-warn");
-      summary.textContent = "";
-    }
-    const list = $("vp-delete-scan-list");
-    if (list) list.innerHTML = "";
-    $("vp-delete-usage-header")?.classList.add("hidden");
-    $("vp-delete-dep-header")?.classList.add("hidden");
-    $("vp-delete-dep-hint")?.classList.add("hidden");
-    const depSummary = $("vp-delete-dep-summary");
-    if (depSummary) {
-      depSummary.classList.add("hidden");
-      depSummary.classList.remove("is-safe", "is-warn");
-      depSummary.textContent = "";
-    }
-    const depList = $("vp-delete-dep-list");
-    if (depList) depList.innerHTML = "";
-    vpDeleteSetText("vp-delete-root-label", t("varPackagesDeleteRootLabel"));
-    vpDeleteSetText("vp-delete-root-settings", t("varPackagesDeleteChangeInSettings"));
+    Object.assign(VP_DELETE, {
+      filePath,
+      packageId: deriveTargetPackageIdFromPath(filePath),
+      resolve,
+      impact: null,
+      loadError: null,
+      deep: null,
+      userRows: [],
+      taskId: null,
+      running: false,
+      cancelled: false,
+    });
+    const seq = ++VP_DELETE.loadSeq;
+    vpdRenderHead(libFindItem(filePath));
+    vpdRenderLoading();
     vpDeleteModalBusy(false);
-    // After Busy(false), which force-enables the scan button — so a "no roots"
-    // state can still disable it.
-    vpDeleteRenderRoot();
     $("vp-delete-backdrop")?.classList.remove("hidden");
+    // Cancel, not Delete, takes the first Enter.
+    $("vp-delete-cancel")?.focus();
+    vpdLoad(seq);
   });
 }
 
-// Resolves `null` (cancelled) or `{ extraPaths }` — the checked dependencies'
-// file paths, read from the DOM before the backdrop hides.
+async function vpdLoad(seq) {
+  let impact = null;
+  let error = null;
+  try {
+    impact = await invoke("get_delete_impact", {
+      filePath: VP_DELETE.filePath,
+      roots: vpDeleteRootDirs(),
+    });
+  } catch (err) {
+    error = String(err?.message || err);
+  }
+  if (seq !== VP_DELETE.loadSeq || !VP_DELETE.resolve) return;
+  VP_DELETE.impact = impact;
+  VP_DELETE.loadError = impact ? null : error || "no answer";
+  vpdRenderHead(libFindItem(VP_DELETE.filePath), impact?.target);
+  vpdRenderDeps();
+  vpdRefresh();
+}
+
+// Resolves the dialog. Refuses while the deep search runs (Cancel stops it).
 function vpDeleteModalClose(result) {
-  if (VP_DELETE.running) return; // Cancel the scan first — see vpDeleteModalBusy.
-  const payload = result ? { extraPaths: vpDdepCheckedPaths() } : null;
+  if (VP_DELETE.running) return;
+  const payload = result ? { extraPaths: vpdCheckedPaths() } : null;
   $("vp-delete-backdrop")?.classList.add("hidden");
+  VP_DELETE.loadSeq += 1;
   const resolve = VP_DELETE.resolve;
   VP_DELETE.resolve = null;
   if (resolve) resolve(payload);
@@ -21691,59 +21614,564 @@ function vpDeleteModalClose(result) {
 
 function vpDeleteModalBusy(busy) {
   VP_DELETE.running = busy;
-  $("vp-delete-scan-progress")?.classList.toggle("hidden", !busy);
-  for (const id of ["vp-delete-scan-button", "vp-delete-deep", "vp-delete-dep-scan-button", "vp-delete-confirm", "vp-delete-root-settings"]) {
+  $("vpd-deep-progress")?.classList.toggle("hidden", !busy);
+  for (const id of ["vp-delete-confirm", "vpd-deep-button", "vpd-scope-settings"]) {
     const el = $(id);
     if (el) el.disabled = busy;
   }
-  // While a scan runs, Cancel cancels the scan (not the modal).
-  vpDeleteSetText("vp-delete-cancel", busy ? t("varPackagesDeleteCancelScan") : t("varPackagesDeleteCancel"));
+  const cancel = $("vp-delete-cancel");
+  if (cancel) cancel.textContent = busy ? "Stop search" : "Cancel";
 }
 
-// The opt-in reverse-dependency scan. Invoked only from the Scan button.
-async function vpDeleteRunScan() {
-  if (!invoke || VP_DELETE.running) return;
-  const summary = $("vp-delete-scan-summary");
-  const list = $("vp-delete-scan-list");
-  const showSummary = (text, cls) => {
-    if (!summary) return;
-    summary.textContent = text;
-    summary.classList.remove("hidden", "is-safe", "is-warn");
-    if (cls) summary.classList.add(cls);
-  };
+// ---- Header ---------------------------------------------------------------
 
-  const roots = vpDeleteRootDirs();
-  if (roots.length === 0 || !VP_DELETE.packageId) {
-    showSummary(t("varPackagesDeleteNoRoots"), "is-warn");
-    if (list) list.innerHTML = "";
+function vpdRenderHead(item, target) {
+  const filePath = VP_DELETE.filePath;
+  const fileName = filePath.split(/[\\/]/).pop() || filePath;
+  const pid = target?.package_id || item?.package_id || VP_DELETE.packageId || fileName;
+  const thumb = $("vpd-thumb");
+  if (thumb) {
+    thumb.innerHTML = `${libThumbHtml(filePath, libGradient(fileName), "vpd-thumb-img")}</div>`;
+    libThumbWatch(thumb);
+  }
+  vpDeleteSetText("vpd-title", pid);
+  const path = $("vpd-path");
+  if (path) {
+    path.textContent = filePath;
+    path.title = filePath;
+  }
+
+  const type = target?.pkg_type || item?.pkg_type || "";
+  const size = target?.size_bytes ?? item?.size_bytes;
+  const items = target?.item_count ?? item?.item_count ?? 0;
+  const onHub = target ? target.on_hub : item?.on_hub;
+  const facts = [];
+  if (type) {
+    const color = LIB_TYPE_BY_KEY[type]?.color ?? LIB_TYPE_BY_KEY.other.color;
+    facts.push(
+      `<span class="vpd-fact"><span class="vpd-type-dot" style="background:${escapeAttribute(color)}"></span>${escapeHtml(
+        VPD_TYPE_NAMES[type] ?? VPD_TYPE_NAMES.other,
+      )}</span>`,
+    );
+  }
+  if (items > 0) facts.push(`<span class="vpd-fact">${items} item${items === 1 ? "" : "s"}</span>`);
+  if (size != null) facts.push(`<span class="vpd-fact">${escapeHtml(formatBytesLocal(size))}</span>`);
+  const others = target?.other_versions ?? [];
+  if (others.length) {
+    facts.push(
+      `<span class="vpd-fact" title="${escapeAttribute(others.join("\n"))}">${others.length} other version${
+        others.length === 1 ? "" : "s"
+      } kept</span>`,
+    );
+  }
+  if (target?.offloaded ?? item?.offloaded) facts.push(`<span class="vpd-chip">Offloaded</span>`);
+  if (onHub === true) facts.push(`<span class="vpd-chip is-ok">On the Hub</span>`);
+  if (onHub === false) facts.push(`<span class="vpd-chip is-bad">Not on the Hub</span>`);
+  const factsEl = $("vpd-facts");
+  if (factsEl) factsEl.innerHTML = facts.join("");
+}
+
+function vpDeleteSetText(id, v) {
+  const el = $(id);
+  if (el) el.textContent = String(v ?? "");
+}
+
+// ---- Loading / failure ----------------------------------------------------
+
+function vpdRenderLoading() {
+  const skeleton = (n) =>
+    Array.from({ length: n }, () => `<li class="vpd-skel"><span></span><span></span></li>`).join("");
+  const users = $("vpd-users");
+  if (users) users.innerHTML = skeleton(3);
+  const deps = $("vpd-deps");
+  if (deps) deps.innerHTML = `<ul class="vpd-skel-list">${skeleton(4)}</ul>`;
+  vpDeleteSetText("vpd-users-count", "");
+  vpDeleteSetText("vpd-deps-count", "");
+  $("vpd-deps-select")?.classList.add("hidden");
+  vpdSetVerdict("is-busy", "progress_activity", "Checking your library…", []);
+  vpDeleteSetText("vpd-scope", "");
+  vpdRenderDeepButton();
+  vpdRenderTotal();
+}
+
+function vpdSetVerdict(cls, icon, headline, notes, action = null) {
+  const el = $("vpd-verdict");
+  if (!el) return;
+  el.className = `vpd-verdict ${cls}`;
+  el.innerHTML = `
+    <span class="material-symbols-outlined vpd-verdict-icon" aria-hidden="true">${icon}</span>
+    <div class="vpd-verdict-text">
+      <strong>${escapeHtml(headline)}</strong>
+      ${notes.length ? `<ul>${notes.map((n) => `<li class="${n.cls || ""}">${escapeHtml(n.text)}</li>`).join("")}</ul>` : ""}
+    </div>
+    ${action ? `<button type="button" id="${action.id}" class="ghost-button vpd-verdict-action">${escapeHtml(action.label)}</button>` : ""}`;
+}
+
+// Unticks every ticked dependency something kept still needs, until none is
+// left: unticking one can make its own dependencies needed in turn.
+function vpdUntickNeeded() {
+  const deps = vpdDeps();
+  const boxes = [...document.querySelectorAll("#vpd-deps .vpd-dep-check")];
+  for (;;) {
+    const checked = vpdCheckedSet();
+    const needed = boxes.filter((b) => b.checked && vpdBlockers(deps[Number(b.dataset.vpdIdx)], checked).total > 0);
+    if (!needed.length) break;
+    for (const b of needed) b.checked = false;
+  }
+  vpdRefresh();
+}
+
+// ---- Dependencies ---------------------------------------------------------
+
+function vpdDeps() {
+  return VP_DELETE.impact?.dependencies ?? [];
+}
+
+// The dependencies deleting this would leave with no user: never one the user
+// chose (roles), and only when every user is the package itself or another
+// dependency in the set. Greatest fixed point, so a pair that only use each
+// other still goes.
+function vpdSafeSet() {
+  const deps = vpdDeps();
+  const self = vpdKey(VP_DELETE.filePath);
+  const set = new Set(
+    deps.filter((d) => d.file_path && !d.installed && d.external_total === 0).map((d) => vpdKey(d.file_path)),
+  );
+  for (;;) {
+    let changed = false;
+    for (const d of deps) {
+      const k = vpdKey(d.file_path);
+      if (!set.has(k)) continue;
+      if (d.internal_users.some((u) => vpdKey(u) !== self && !set.has(vpdKey(u)))) {
+        set.delete(k);
+        changed = true;
+      }
+    }
+    if (!changed) return set;
+  }
+}
+
+function vpdCheckedSet() {
+  const deps = vpdDeps();
+  return new Set(
+    [...document.querySelectorAll("#vpd-deps .vpd-dep-check:checked")]
+      .map((c) => deps[Number(c.dataset.vpdIdx)])
+      .filter((d) => d?.file_path)
+      .map((d) => vpdKey(d.file_path)),
+  );
+}
+
+// The ticked dependencies' paths, never the package's own (it goes anyway).
+function vpdCheckedPaths() {
+  const self = vpdKey(VP_DELETE.filePath);
+  const checked = vpdCheckedSet();
+  return vpdDeps()
+    .filter((d) => d.file_path && checked.has(vpdKey(d.file_path)) && vpdKey(d.file_path) !== self)
+    .map((d) => d.file_path);
+}
+
+// Who still needs dependency `d` once the package and the ticked set are gone.
+function vpdBlockers(d, checked) {
+  const self = vpdKey(VP_DELETE.filePath);
+  const idByPath = new Map(vpdDeps().filter((x) => x.file_path).map((x) => [vpdKey(x.file_path), x.package_id]));
+  const inner = d.internal_users
+    .filter((u) => vpdKey(u) !== self && !checked.has(vpdKey(u)))
+    .map((u) => idByPath.get(vpdKey(u)) || u.split(/[\\/]/).pop());
+  return {
+    names: [...inner, ...d.external_users],
+    total: inner.length + d.external_total,
+  };
+}
+
+function vpdNameList(names, total, max = 2) {
+  const shown = names.slice(0, max);
+  const more = total - shown.length;
+  return shown.join(", ") + (more > 0 ? ` +${more} more` : "");
+}
+
+function vpdRenderDeps() {
+  const list = $("vpd-deps");
+  if (!list) return;
+  const deps = vpdDeps();
+  const installed = deps.filter((d) => d.file_path).length;
+  const missing = deps.length - installed;
+  vpDeleteSetText("vpd-deps-count", VP_DELETE.impact ? String(installed) : "");
+  $("vpd-deps-select")?.classList.toggle("hidden", installed === 0);
+  if (!VP_DELETE.impact) {
+    list.innerHTML = `<div class="vpd-empty is-muted">Couldn't read its dependencies.</div>`;
     return;
   }
-  // Always scan every configured root (folder = first, additional = rest) —
-  // a referencing package could live in any root.
-  const folder = roots[0];
-  const additional = roots.slice(1);
-  const deep = !!$("vp-delete-deep")?.checked;
+  if (deps.length === 0) {
+    list.innerHTML = `
+      <div class="vpd-empty">
+        <span class="material-symbols-outlined" aria-hidden="true">check_circle</span>
+        <span>It doesn't depend on anything.</span>
+      </div>`;
+    return;
+  }
+  const safe = vpdSafeSet();
+  const row = (d, i) => {
+    if (!d.file_path) {
+      return `
+        <div class="vpd-dep is-missing">
+          <span class="material-symbols-outlined vpd-dep-missing-icon" aria-hidden="true">remove</span>
+          <span class="vpd-dep-main">
+            <span class="vpd-dep-name">${escapeHtml(d.key)}</span>
+            <span class="vpd-dep-status">${d.via ? `Needed by ${escapeHtml(d.via)} · ` : ""}not in your library</span>
+          </span>
+        </div>`;
+    }
+    const tags = [];
+    if (d.installed) tags.push(`<span class="vpd-tag" title="You chose this package yourself, so it isn't ticked for you.">Yours</span>`);
+    if (d.status === "other_version") {
+      tags.push(`<span class="vpd-tag" title="${escapeAttribute(`Wants ${d.key}; this is the version you have.`)}">Other version</span>`);
+    }
+    if (d.inactive) tags.push(`<span class="vpd-tag">Disabled</span>`);
+    if (d.on_hub === false) tags.push(`<span class="vpd-tag is-bad" title="Once deleted, it can't be downloaded again.">Not on Hub</span>`);
+    return `
+      <label class="vpd-dep" data-vpd-dep="${i}">
+        <input type="checkbox" class="vpd-dep-check" data-vpd-idx="${i}" ${safe.has(vpdKey(d.file_path)) ? "checked" : ""} />
+        <span class="vpd-dep-main">
+          <span class="vpd-dep-line">
+            <span class="vpd-dep-name" title="${escapeAttribute(d.file_path)}">${escapeHtml(d.package_id)}</span>
+            ${tags.join("")}
+          </span>
+          ${d.via ? `<span class="vpd-dep-via">via ${escapeHtml(d.via)}</span>` : ""}
+          <span class="vpd-dep-status" data-vpd-status="${i}"></span>
+        </span>
+        <span class="vpd-dep-size">${escapeHtml(formatBytesLocal(d.size_bytes))}</span>
+        <button type="button" class="vpd-more" data-vpd-menu="dep:${i}" aria-label="More for ${escapeAttribute(d.package_id)}">
+          <span class="material-symbols-outlined" aria-hidden="true">more_horiz</span>
+        </button>
+      </label>`;
+  };
+  // Grouped by how things stand when the dialog opens. Rows never move as
+  // boxes change (rows jumping under the cursor is worse); their status does.
+  const rows = deps.map((d, i) => [d, i]);
+  const groups = [
+    ["Only this package needs", rows.filter(([d]) => d.file_path && safe.has(vpdKey(d.file_path)))],
+    ["Shared, or yours", rows.filter(([d]) => d.file_path && !safe.has(vpdKey(d.file_path)))],
+    ["Not in your library", rows.filter(([d]) => !d.file_path)],
+  ];
+  list.innerHTML = groups
+    .filter(([, g]) => g.length)
+    .map(([title, g]) => `<div class="vpd-group">${escapeHtml(title)} · ${g.length}</div>${g.map(([d, i]) => row(d, i)).join("")}`)
+    .join("");
+}
 
+// Re-works every live part: dependency statuses, the users list, the verdict
+// and the totals. Called on load and on every tick.
+function vpdRefresh() {
+  const checked = vpdCheckedSet();
+  const deps = vpdDeps();
+  const brokenByTicks = [];
+  deps.forEach((d, i) => {
+    if (!d.file_path) return;
+    const row = document.querySelector(`#vpd-deps [data-vpd-dep="${i}"]`);
+    const status = document.querySelector(`#vpd-deps [data-vpd-status="${i}"]`);
+    if (!row || !status) return;
+    const on = checked.has(vpdKey(d.file_path));
+    const b = vpdBlockers(d, checked);
+    let cls;
+    let text;
+    if (b.total === 0) {
+      cls = "is-ok";
+      text = d.installed ? "Nothing else needs it, but you chose it yourself" : "Nothing else needs it";
+    } else if (on) {
+      cls = "is-bad";
+      text = `Still needed by ${vpdNameList(b.names, b.total)}`;
+      brokenByTicks.push({ dep: d, blockers: b });
+    } else {
+      cls = "is-shared";
+      text = `Also used by ${vpdNameList(b.names, b.total)}`;
+    }
+    status.className = `vpd-dep-status ${cls}`;
+    status.textContent = text;
+    status.title = b.total ? b.names.join("\n") + (b.total > b.names.length ? `\n+${b.total - b.names.length} more` : "") : "";
+    row.classList.toggle("is-checked", on);
+    row.classList.toggle("is-bad", on && b.total > 0);
+  });
+  vpdRenderUsers(checked);
+  vpdRenderVerdict(checked, brokenByTicks);
+  vpdRenderTotal(checked);
+}
+
+// ---- Users ----------------------------------------------------------------
+
+// One row per package that uses this one: the graph's users, then anything
+// only the deep search found.
+function vpdUserRows(checked) {
+  const impact = VP_DELETE.impact;
+  const deepByPath = new Map((VP_DELETE.deep ?? []).map((d) => [vpdKey(d.file_path), d]));
+  const rows = (impact?.used_by ?? []).map((u) => {
+    const deep = deepByPath.get(vpdKey(u.file_path));
+    deepByPath.delete(vpdKey(u.file_path));
+    let state;
+    if (checked.has(vpdKey(u.file_path))) state = "gone";
+    else if (u.inactive) state = "inactive";
+    else if (!u.fallback) state = "break";
+    else if (!u.fallback_exact) state = "switch";
+    else state = "ok";
+    return { ...u, state, refs: deep?.deep_refs?.length ?? 0 };
+  });
+  for (const d of deepByPath.values()) {
+    rows.push({
+      package_id: d.package_id,
+      file_path: d.file_path,
+      state: checked.has(vpdKey(d.file_path)) ? "gone" : "ref",
+      metaOnly: d.meta_match,
+      refs: d.deep_refs?.length ?? 0,
+    });
+  }
+  return rows;
+}
+
+const VPD_USER_STATES = {
+  break: { icon: "link_off", cls: "is-bad" },
+  ref: { icon: "link_off", cls: "is-warn" },
+  switch: { icon: "swap_horiz", cls: "is-warn" },
+  ok: { icon: "check_circle", cls: "is-ok" },
+  inactive: { icon: "pause_circle", cls: "is-dim" },
+  gone: { icon: "delete", cls: "is-dim" },
+};
+
+function vpdUserStatus(u) {
+  switch (u.state) {
+    case "break":
+      return "Breaks: nothing else in your library provides it";
+    case "switch":
+      return `Wants this version; falls back to ${u.fallback}`;
+    case "ok":
+      return `Keeps working with ${u.fallback}`;
+    case "inactive":
+      return u.fallback ? `Disabled; would use ${u.fallback}` : "Disabled, so VaM doesn't load it";
+    case "gone":
+      return "Being deleted too";
+    case "ref":
+      return u.metaOnly ? "Lists it as a dependency" : "Points at it from inside a scene or preset";
+    default:
+      return "";
+  }
+}
+
+function vpdRenderUsers(checked = vpdCheckedSet()) {
+  const list = $("vpd-users");
+  if (!list) return;
+  if (!VP_DELETE.impact && !VP_DELETE.deep) {
+    vpDeleteSetText("vpd-users-count", "");
+    list.innerHTML = `<li class="vpd-empty is-muted">Couldn't work out what uses it. The search below still can.</li>`;
+    return;
+  }
+  const rows = vpdUserRows(checked);
+  VP_DELETE.userRows = rows;
+  vpDeleteSetText("vpd-users-count", String(rows.length));
+  if (rows.length === 0) {
+    list.innerHTML = `
+      <li class="vpd-empty">
+        <span class="material-symbols-outlined" aria-hidden="true">check_circle</span>
+        <span>Nothing in your library uses it.</span>
+      </li>`;
+    return;
+  }
+  list.innerHTML = rows
+    .map((u, i) => {
+      const s = VPD_USER_STATES[u.state] ?? VPD_USER_STATES.ok;
+      const refs = u.refs
+        ? `<span class="vpd-tag" title="References inside its scenes and presets">${u.refs} ref${u.refs === 1 ? "" : "s"}</span>`
+        : "";
+      return `
+        <li class="vpd-user ${s.cls}" data-vpd-user="${i}">
+          <span class="material-symbols-outlined vpd-user-icon" aria-hidden="true">${s.icon}</span>
+          <span class="vpd-user-main">
+            <span class="vpd-dep-line">
+              <span class="vpd-user-name" title="${escapeAttribute(u.file_path)}">${escapeHtml(u.package_id)}</span>
+              ${refs}
+            </span>
+            <span class="vpd-user-status">${escapeHtml(vpdUserStatus(u))}</span>
+          </span>
+          <button type="button" class="vpd-more" data-vpd-menu="user:${i}" aria-label="More for ${escapeAttribute(u.package_id)}">
+            <span class="material-symbols-outlined" aria-hidden="true">more_horiz</span>
+          </button>
+        </li>`;
+    })
+    .join("");
+}
+
+// ---- Verdict, totals, scope -----------------------------------------------
+
+function vpdRenderVerdict(checked, brokenByTicks) {
+  const impact = VP_DELETE.impact;
+  const rows = VP_DELETE.userRows ?? [];
+  const count = (st) => rows.filter((u) => u.state === st).length;
+  const breaks = count("break");
+  const refs = count("ref");
+  const switches = count("switch");
+  const kept = count("ok");
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const notes = [];
+
+  if (!impact) {
+    notes.push({ text: `Couldn't read the library: ${VP_DELETE.loadError}`, cls: "is-warn" });
+  }
+  if (impact?.target?.on_hub === false) {
+    notes.push({ text: "It isn't on the Hub. Once deleted, it can't be downloaded again.", cls: "is-warn" });
+  }
+  if (brokenByTicks.length === 1) {
+    const { dep, blockers } = brokenByTicks[0];
+    notes.push({
+      text: `Ticked ${dep.package_id} is still needed by ${vpdNameList(blockers.names, blockers.total)}.`,
+      cls: "is-bad",
+    });
+  } else if (brokenByTicks.length > 1) {
+    notes.push({
+      text: `${brokenByTicks.length} ticked dependencies are still needed by packages you're keeping (marked in red).`,
+      cls: "is-bad",
+    });
+  }
+  const tickedOffHub = vpdDeps().filter((d) => d.file_path && d.on_hub === false && checked.has(vpdKey(d.file_path)));
+  if (tickedOffHub.length) {
+    notes.push({
+      text: `${plural(tickedOffHub.length, "ticked dependency isn't", "ticked dependencies aren't")} on the Hub either.`,
+      cls: "is-warn",
+    });
+  }
+  if (switches) {
+    notes.push({ text: `${plural(switches, "package wants", "packages want")} this exact version and will get another one.`, cls: "is-warn" });
+  }
+  if (refs) {
+    notes.push({ text: `${plural(refs, "package points", "packages point")} at it from inside scenes or presets.`, cls: "is-warn" });
+  }
+
+  let cls;
+  let icon;
+  let headline;
+  if (breaks) {
+    cls = "is-bad";
+    icon = "error";
+    headline = `Deleting it breaks ${plural(breaks, "package", "packages")} in your library.`;
+  } else if (brokenByTicks.length) {
+    cls = "is-bad";
+    icon = "error";
+    headline = "A ticked dependency is still needed elsewhere.";
+  } else if (!impact) {
+    cls = "is-warn";
+    icon = "help";
+    headline = "Couldn't check what uses it.";
+  } else if (switches || refs) {
+    cls = "is-warn";
+    icon = "warning";
+    headline = "Safe to delete, with a catch.";
+  } else {
+    // Safe. Not being on the Hub makes it a caution, and its note says why.
+    const offHub = impact.target?.on_hub === false;
+    cls = offHub ? "is-warn" : "is-ok";
+    icon = offHub ? "warning" : "verified";
+    const inactiveUsers = count("inactive");
+    if (kept) {
+      headline =
+        kept === 1
+          ? "Safe to delete. The package that uses it keeps working with another version."
+          : `Safe to delete. The ${kept} packages that use it keep working with another version.`;
+    } else if (inactiveUsers) {
+      headline = `Safe to delete. Only ${plural(inactiveUsers, "disabled package uses", "disabled packages use")} it.`;
+    } else {
+      headline = "Safe to delete. Nothing in your library uses it.";
+    }
+  }
+  // What breaks reads first.
+  notes.sort((a, b) => (b.cls === "is-bad") - (a.cls === "is-bad"));
+  vpdSetVerdict(
+    cls,
+    icon,
+    headline,
+    notes,
+    brokenByTicks.length ? { id: "vpd-fix-ticks", label: "Keep what's still needed" } : null,
+  );
+  vpdRenderScope();
+}
+
+function vpdRenderTotal(checked = new Set()) {
+  const target = VP_DELETE.impact?.target;
+  const base = target?.size_bytes ?? libFindItem(VP_DELETE.filePath)?.size_bytes ?? 0;
+  const extra = vpdDeps().filter((d) => d.file_path && checked.has(vpdKey(d.file_path)));
+  const bytes = base + extra.reduce((s, d) => s + (Number(d.size_bytes) || 0), 0);
+  const n = 1 + extra.length;
+  vpDeleteSetText("vpd-total-size", formatBytesLocal(bytes));
+  vpDeleteSetText(
+    "vpd-total-text",
+    extra.length
+      ? `freed · the package and ${extra.length} dependenc${extra.length === 1 ? "y" : "ies"} go to the Recycle Bin`
+      : "freed · goes to the Recycle Bin, where you can restore it",
+  );
+  vpDeleteSetText("vp-delete-confirm", n === 1 ? "Delete" : `Delete ${n} packages`);
+}
+
+function vpdRenderScope() {
+  const el = $("vpd-scope");
+  if (!el) return;
+  const impact = VP_DELETE.impact;
+  const noRoots = vpDeleteRootDirs().length === 0;
+  let text = "";
+  if (impact?.from_listing) {
+    text = `Checked against the ${impact.packages_considered.toLocaleString()} packages in VAR Packages.`;
+  } else if (impact && !noRoots) {
+    text = `Checked against the ${impact.packages_considered.toLocaleString()} packages in your library folders.`;
+  } else if (noRoots) {
+    text = "Set your VAR library folder to check what uses it.";
+  }
+  el.innerHTML = text
+    ? `${escapeHtml(text)} <button type="button" id="vpd-scope-settings" class="vpd-link">${noRoots ? "Open Settings" : "Change folders"}</button>`
+    : "";
+  const btn = $("vpd-scope-settings");
+  if (btn) btn.disabled = VP_DELETE.running;
+}
+
+// ---- Deep search ----------------------------------------------------------
+
+function vpdRenderDeepButton() {
+  const btn = $("vpd-deep-button");
+  if (!btn) return;
+  const label = btn.querySelector("span:last-child");
+  if (VP_DELETE.deep) {
+    const known = new Set((VP_DELETE.impact?.used_by ?? []).map((u) => vpdKey(u.file_path)));
+    const n = VP_DELETE.deep.filter((d) => !known.has(vpdKey(d.file_path))).length;
+    if (label) {
+      label.textContent = `Searched scenes and presets · ${
+        n ? `${n} more package${n === 1 ? "" : "s"} found` : "no other packages found"
+      }`;
+    }
+    btn.classList.add("is-done");
+  } else {
+    if (label) label.textContent = "Also search inside scenes and presets";
+    btn.classList.remove("is-done");
+  }
+  btn.disabled = VP_DELETE.running || !!VP_DELETE.deep;
+}
+
+async function vpdRunDeepSearch() {
+  if (!invoke || VP_DELETE.running || VP_DELETE.deep) return;
+  const roots = vpDeleteRootDirs();
+  if (roots.length === 0 || !VP_DELETE.packageId) {
+    showToast("Set your VAR library folder in Settings first.", "error");
+    return;
+  }
+  const seq = VP_DELETE.loadSeq;
   VP_DELETE.cancelled = false;
   vpDeleteModalBusy(true);
-  const bar = $("vp-delete-scan-bar");
+  const bar = $("vpd-deep-bar");
   if (bar) bar.style.width = "0%";
-  vpDeleteSetText("vp-delete-scan-message", "");
-  if (summary) summary.classList.add("hidden");
-  if (list) list.innerHTML = "";
-
+  vpDeleteSetText("vpd-deep-message", "Starting…");
   try {
     const handle = await invoke("start_dependency_check_task", {
       request: {
-        folder,
-        additional_folders: additional,
+        folder: roots[0],
+        additional_folders: roots.slice(1),
         target_package_id: VP_DELETE.packageId,
-        deep_scan: deep,
+        deep_scan: true,
       },
     });
     VP_DELETE.taskId = handle?.id ?? null;
-    if (VP_DELETE.taskId == null) throw new Error("task did not start");
-
+    if (VP_DELETE.taskId == null) throw new Error("the search didn't start");
     let result = null;
     for (;;) {
       await new Promise((r) => setTimeout(r, 300));
@@ -21752,333 +22180,37 @@ async function vpDeleteRunScan() {
       if (!payload) break;
       const pct = Math.round(Math.max(0, Math.min(1, Number(payload.progress ?? 0))) * 100);
       if (bar) bar.style.width = `${pct}%`;
-      vpDeleteSetText("vp-delete-scan-message", payload.message ?? "");
+      vpDeleteSetText("vpd-deep-message", payload.message ?? "");
       if (payload.error) throw new Error(String(payload.error));
       if (payload.done) {
         result = payload.dependency_check_result ?? null;
         break;
       }
     }
-    // Only render on a real result — never show the green "safe to delete"
-    // summary off a null/unexpected payload before a destructive action.
-    if (!VP_DELETE.cancelled && result) vpDeleteRenderScan(result);
+    // Only a finished search counts: a partial one would read as "nothing else".
+    if (!VP_DELETE.cancelled && result && seq === VP_DELETE.loadSeq) {
+      const self = vpdKey(VP_DELETE.filePath);
+      VP_DELETE.deep = (Array.isArray(result.dependents) ? result.dependents : []).filter(
+        (d) => vpdKey(d.file_path) !== self,
+      );
+    }
   } catch (err) {
-    showSummary(String(err), "is-warn");
-    if (list) list.innerHTML = "";
+    showToast(`Search failed: ${String(err?.message || err)}`, "error");
   } finally {
     const id = VP_DELETE.taskId;
     VP_DELETE.taskId = null;
-    if (id != null) {
-      try {
-        await invoke("clear_task", { taskId: id });
-      } catch (_e) {
-        /* task may already be gone */
-      }
-    }
+    if (id != null) invoke("clear_task", { taskId: id }).catch(() => {});
     vpDeleteModalBusy(false);
-  }
-}
-
-// Renders the dependents list. Warn-but-allow: Delete stays enabled either way.
-function vpDeleteRenderScan(res) {
-  // Label the section — the dependency list below may coexist with it.
-  $("vp-delete-usage-header")?.classList.remove("hidden");
-  const summary = $("vp-delete-scan-summary");
-  const list = $("vp-delete-scan-list");
-  const dependents = Array.isArray(res?.dependents) ? res.dependents : [];
-  if (summary) {
-    summary.classList.remove("hidden", "is-safe", "is-warn");
-    summary.textContent = dependents.length === 0
-      ? t("varPackagesDeleteNoUsage")
-      : t("varPackagesDeleteUsedBy", dependents.length);
-    summary.classList.add(dependents.length === 0 ? "is-safe" : "is-warn");
-  }
-  if (!list) return;
-  // Kept for the row right-click menu, which resolves data-vpu-idx back to a
-  // match so it can act on that package's file_path.
-  VP_DELETE.dependents = dependents;
-  if (dependents.length === 0) {
-    list.innerHTML = "";
-    return;
-  }
-  list.innerHTML = dependents
-    .map((d, i) => {
-      const hasMeta = d.meta_match;
-      const refCount = Array.isArray(d.deep_refs) ? d.deep_refs.length : 0;
-      const badges = [];
-      if (hasMeta) badges.push(`<span class="dc-badge is-meta">meta.json</span>`);
-      if (refCount > 0) badges.push(`<span class="dc-badge is-deep">${refCount} ref${refCount === 1 ? "" : "s"}</span>`);
-      return `
-        <li class="vp-delete-dep-row" data-vpu-idx="${i}">
-          <span class="vp-delete-dep-name">${escapeHtml(d.package_id || "")}</span>
-          ${badges.join("")}
-          ${d.creator_name ? `<span class="vp-delete-dep-creator">By ${escapeHtml(d.creator_name)}</span>` : ""}
-        </li>`;
-    })
-    .join("");
-}
-
-// --- "Scan dependencies": the forward scan. One row per dependency BASE (the
-// exclusivity verdict is per family); checking a row deletes every local file
-// of that family. Warn-but-allow throughout — shared deps stay deletable.
-
-// The opt-in dependency scan. Structural clone of vpDeleteRunScan: same task
-// polling, same shared progress card — only one scan runs at a time.
-async function vpDeleteRunDepScan() {
-  if (!invoke || VP_DELETE.running) return;
-  const summary = $("vp-delete-dep-summary");
-  const list = $("vp-delete-dep-list");
-  const showSummary = (text, cls) => {
-    if (!summary) return;
-    summary.textContent = text;
-    summary.classList.remove("hidden", "is-safe", "is-warn");
-    if (cls) summary.classList.add(cls);
-  };
-
-  const roots = vpDeleteRootDirs();
-  if (roots.length === 0 || !VP_DELETE.filePath) {
-    showSummary(t("varPackagesDeleteNoRoots"), "is-warn");
-    if (list) list.innerHTML = "";
-    return;
-  }
-  const folder = roots[0];
-  const additional = roots.slice(1);
-
-  VP_DELETE.cancelled = false;
-  vpDeleteModalBusy(true);
-  const bar = $("vp-delete-scan-bar");
-  if (bar) bar.style.width = "0%";
-  vpDeleteSetText("vp-delete-scan-message", "");
-  // Clear only this section — the usage-scan results stay put.
-  if (summary) summary.classList.add("hidden");
-  if (list) list.innerHTML = "";
-  $("vp-delete-dep-header")?.classList.add("hidden");
-  $("vp-delete-dep-hint")?.classList.add("hidden");
-  VP_DELETE.deps = null;
-  // The cleared list has no checked rows — the confirm label must not keep
-  // advertising deps from a previous scan.
-  vpDdepUpdateConfirmLabel();
-
-  try {
-    const handle = await invoke(VP_DDEP_TASK_CMD, {
-      request: {
-        folder,
-        additional_folders: additional,
-        target_var_path: VP_DELETE.filePath,
-      },
-    });
-    VP_DELETE.taskId = handle?.id ?? null;
-    if (VP_DELETE.taskId == null) throw new Error("task did not start");
-
-    let result = null;
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 300));
-      if (VP_DELETE.cancelled) break;
-      const payload = await invoke("get_task_progress", { taskId: VP_DELETE.taskId });
-      if (!payload) break;
-      const pct = Math.round(Math.max(0, Math.min(1, Number(payload.progress ?? 0))) * 100);
-      if (bar) bar.style.width = `${pct}%`;
-      vpDeleteSetText("vp-delete-scan-message", payload.message ?? "");
-      if (payload.error) throw new Error(String(payload.error));
-      if (payload.done) {
-        result = payload[VP_DDEP_RESULT_FIELD] ?? null;
-        break;
-      }
-    }
-    // Only render on a real result — a cancelled/partial scan must not
-    // pre-check deps off incomplete usage counts before a destructive action.
-    if (!VP_DELETE.cancelled && result && !result.was_cancelled) {
-      VP_DELETE.deps = vpDdepNormalize(result);
-      vpDeleteRenderDeps(result);
-    }
-  } catch (err) {
-    showSummary(String(err), "is-warn");
-    if (list) list.innerHTML = "";
-  } finally {
-    const id = VP_DELETE.taskId;
-    VP_DELETE.taskId = null;
-    if (id != null) {
-      try {
-        await invoke("clear_task", { taskId: id });
-      } catch (_e) {
-        /* task may already be gone */
-      }
-    }
-    vpDeleteModalBusy(false);
-  }
-}
-
-// Maps the backend response to display rows and applies the display order:
-// installed before not-installed, then ascending shared-user count (exclusive
-// = 0 naturally first), then base A–Z.
-function vpDdepNormalize(res) {
-  const deps = Array.isArray(res?.dependencies) ? res.dependencies : [];
-  const out = deps.map((d) => {
-    const files = Array.isArray(d.local_files) ? d.local_files : [];
-    return {
-      base: String(d.package_base || ""),
-      direct: !!d.direct,
-      files,
-      installed: files.length > 0,
-      sizeBytes: files.reduce((s, f) => s + (Number(f.size_bytes) || 0), 0),
-      usedBy: Array.isArray(d.used_by) ? d.used_by : [],
-      usedByTotal: Number(d.used_by_total) || 0,
-    };
-  });
-  const key = (e) => e.base.toLowerCase();
-  out.sort((a, b) => {
-    if (a.installed !== b.installed) return a.installed ? -1 : 1;
-    if (a.usedByTotal !== b.usedByTotal) return a.usedByTotal - b.usedByTotal;
-    return key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0;
-  });
-  return out;
-}
-
-// Renders the dependency section from VP_DELETE.deps. Exclusive installed deps
-// are pre-checked; shared and not-installed start unchecked.
-function vpDeleteRenderDeps(res) {
-  const summary = $("vp-delete-dep-summary");
-  const list = $("vp-delete-dep-list");
-  const deps = Array.isArray(VP_DELETE.deps) ? VP_DELETE.deps : [];
-  $("vp-delete-dep-header")?.classList.remove("hidden");
-  const anyInstalled = deps.some((d) => d.installed);
-  $("vp-delete-dep-hint")?.classList.toggle("hidden", !anyInstalled);
-
-  if (summary) {
-    summary.classList.remove("hidden", "is-safe", "is-warn");
-    if (deps.length === 0) {
-      summary.textContent = t("varPackagesDeleteDepsNone");
-      summary.classList.add("is-safe");
-    } else {
-      const ex = deps.filter((d) => d.installed && d.usedByTotal === 0).length;
-      const sh = deps.filter((d) => d.installed && d.usedByTotal > 0).length;
-      const miss = deps.filter((d) => !d.installed).length;
-      let text = t("varPackagesDeleteDepsSummary", ex, sh, miss);
-      const errors = Number(res?.scan_errors) || 0;
-      if (errors > 0) text += t("varPackagesDeleteDepsScanErrors", errors);
-      summary.textContent = text;
-      // Unreadable archives can under-count sharing — never show green then.
-      summary.classList.add(sh === 0 && errors === 0 ? "is-safe" : "is-warn");
+    if (seq === VP_DELETE.loadSeq) {
+      vpdRenderDeepButton();
+      vpdRefresh();
     }
   }
-  if (!list) return;
-  list.innerHTML = deps
-    .map((d, i) => {
-      const metaParts = [];
-      if (d.installed) {
-        metaParts.push(escapeHtml(d.files[0]?.file_path || ""));
-        if (d.files.length > 1) {
-          metaParts.push(escapeHtml(t("varPackagesDeleteDepsMoreFiles", d.files.length - 1)));
-        }
-        if (d.files.some((f) => f.disabled)) {
-          metaParts.push(escapeHtml(t("varPackagesDeleteDepsDisabled")));
-        }
-      } else {
-        metaParts.push(escapeHtml(t("varPackagesDeleteDepsMissing")));
-      }
-      const chips = [];
-      if (!d.installed) {
-        chips.push(`<span class="chip vp-ddep-missing">${escapeHtml(t("varPackagesDeleteDepsMissing"))}</span>`);
-      } else if (d.usedByTotal === 0) {
-        chips.push(`<span class="chip vp-ddep-exclusive">${escapeHtml(t("varPackagesDeleteDepsExclusive"))}</span>`);
-      } else {
-        chips.push(
-          `<button type="button" class="chip vp-ddep-shared" data-ddep-toggle="${i}" aria-expanded="false">${escapeHtml(t("varPackagesDeleteDepsShared", d.usedByTotal))} ▸</button>`,
-        );
-      }
-      if (!d.direct) {
-        chips.push(`<span class="chip">${escapeHtml(t("varPackagesDeleteDepsTransitive"))}</span>`);
-      }
-      const preChecked = d.installed && d.usedByTotal === 0;
-      const row = `
-        <label class="check-row vp-ddep-row${d.installed ? "" : " is-missing"}" data-ddep-row="${i}">
-          <input type="checkbox" class="vp-ddep-check" data-ddep-idx="${i}"
-            ${preChecked ? "checked" : ""} ${d.installed ? "" : "disabled"} />
-          <span class="vp-ddep-main">
-            <span class="vp-ddep-name">${escapeHtml(d.base)}</span>
-            <span class="vp-ddep-meta">${metaParts.join(" · ")}</span>
-          </span>
-          <span class="vp-ddep-size">${d.installed ? escapeHtml(formatBytesLocal(d.sizeBytes)) : ""}</span>
-          <span class="vp-ddep-chips">${chips.join("")}</span>
-        </label>`;
-      // The users panel is a SIBLING of the row label, so clicks inside it
-      // can't toggle the checkbox.
-      let users = "";
-      if (d.usedBy.length > 0) {
-        const userChips = d.usedBy
-          .map((u) => `<span class="chip">${escapeHtml(u.package_id || "")}</span>`)
-          .join("");
-        const more =
-          d.usedByTotal > d.usedBy.length
-            ? `<span class="chip">${escapeHtml(t("varPackagesDeleteDepsMoreUsers", d.usedByTotal - d.usedBy.length))}</span>`
-            : "";
-        users = `<div class="vp-ddep-users hidden" data-ddep-users="${i}">${userChips}${more}</div>`;
-      }
-      return row + users;
-    })
-    .join("");
-  vpDdepUpdateConfirmLabel();
-  // Pre-checked exclusive rows may already satisfy other rows' effective
-  // exclusivity — compute the chips now, not only on the first change event.
-  vpDdepRefreshEffective();
 }
 
-function vpDdepCheckedEntries() {
-  if (!Array.isArray(VP_DELETE.deps)) return [];
-  return [...document.querySelectorAll("#vp-delete-dep-list .vp-ddep-check:checked")]
-    .map((c) => VP_DELETE.deps[Number(c.dataset.ddepIdx)])
-    .filter(Boolean);
-}
-
-// The checked dependencies' file paths — deduped case-insensitively, never
-// including the main package's own path (it is deleted regardless).
-function vpDdepCheckedPaths() {
-  const seen = new Set([String(VP_DELETE.filePath || "").toLowerCase()]);
-  const out = [];
-  for (const entry of vpDdepCheckedEntries()) {
-    for (const f of entry.files) {
-      const k = String(f.file_path).toLowerCase();
-      if (!seen.has(k)) {
-        seen.add(k);
-        out.push(f.file_path);
-      }
-    }
-  }
-  return out;
-}
-
-function vpDdepUpdateConfirmLabel() {
-  const n = vpDdepCheckedEntries().length;
-  vpDeleteSetText(
-    "vp-delete-confirm",
-    n ? t("varPackagesDeleteConfirmWithDeps", n) : t("varPackagesDeleteConfirm"),
-  );
-}
-
-// Chip-swap only, never a reorder (rows jumping under the cursor is worse than
-// a stale order): a shared dep whose every user is itself checked for deletion
-// (or is the base of a checked row) reads as effectively exclusive. Requires
-// the full user list (cap not hit) — a truncated list can't prove anything.
-function vpDdepRefreshEffective() {
-  if (!Array.isArray(VP_DELETE.deps)) return;
-  const checkedBases = new Set(vpDdepCheckedEntries().map((e) => e.base.toLowerCase()));
-  const baseOf = (id) => String(id).replace(/\.(\d+|latest)$/i, "").toLowerCase();
-  for (const btn of document.querySelectorAll("#vp-delete-dep-list [data-ddep-toggle]")) {
-    const entry = VP_DELETE.deps[Number(btn.dataset.ddepToggle)];
-    if (!entry) continue;
-    const provable = entry.usedBy.length > 0 && entry.usedBy.length === entry.usedByTotal;
-    const eff =
-      provable && entry.usedBy.every((u) => checkedBases.has(baseOf(u.package_id)));
-    btn.classList.toggle("vp-ddep-eff", eff);
-    btn.textContent = eff
-      ? `${t("varPackagesDeleteDepsEffExclusive")} ▸`
-      : `${t("varPackagesDeleteDepsShared", entry.usedByTotal)} ▸`;
-  }
-}
-
-/// Sends one package to the Recycle Bin, after a confirm modal that can
-/// optionally scan for reverse dependencies (which other packages reference
-/// this one) on demand. The Recycle Bin is what makes a wrong click recoverable.
+/// Sends one package to the Recycle Bin, after the delete dialog (what uses
+/// it, what it uses) has been confirmed, together with any dependencies ticked
+/// there. The Recycle Bin is what makes a wrong click recoverable.
 ///
 /// Resolves the paths actually recycled (empty when cancelled or failed). The
 /// grid callers ignore it; the Scan Dependencies modal needs it to know which
@@ -22858,22 +22990,17 @@ function setupVarPackagesImagesModal() {
   });
 }
 
-// --- Row actions in the delete modal's two result lists -------------------
+// --- Row actions in the delete dialog's two lists -------------------------
 //
-// Right-click a row in "Used by" or "Dependencies" to act on THAT package
-// rather than the one being deleted. Right-click (not inline buttons) because
-// the dependency rows are checkbox <label>s — a button inside one is a
-// mis-click away from toggling that dependency's delete tickbox.
-//
-// Two of the four actions leave the modal, and both must close it first
-// (which cancels the pending delete, exactly like the "Change in Settings"
-// button already does):
+// Each row's ⋯ button (or a right-click) acts on THAT package rather than the
+// one being deleted. Two of the actions leave the dialog, and both close it
+// first, which cancels the pending delete:
 //   - Open Details navigates the whole page away.
 //   - Scan dependencies opens #dep-scan-backdrop, which sits BEFORE
 //     #vp-delete-backdrop in the DOM; every .dialog-backdrop shares z-index
 //     1400 and stacks by DOM order, so it would otherwise open behind this
-//     modal and be unreachable.
-// Show in Explorer and Copy file path touch nothing, so they leave the modal
+//     dialog and be unreachable.
+// Show in Explorer and Copy file path touch nothing, so they leave the dialog
 // open and the delete still pending.
 function vpDeleteRowMenuItems(packageId, filePath) {
   const path = String(filePath || "");
@@ -22883,10 +23010,9 @@ function vpDeleteRowMenuItems(packageId, filePath) {
     {
       label: t("varPackagesRowOpenDetails"),
       action: () => {
-        // vpDeleteModalClose refuses while a scan is running. Navigating anyway
-        // would strand the modal open behind the new page, so bail instead.
+        // vpDeleteModalClose refuses while a search is running. Navigating
+        // anyway would strand the dialog open behind the new page.
         if (VP_DELETE.running) return;
-        // Close first: this navigates away, so the delete is abandoned.
         vpDeleteModalClose(false);
         openCandidatePackage(pkg, path);
       },
@@ -22917,72 +23043,68 @@ function vpDeleteRowMenuItems(packageId, filePath) {
   ];
 }
 
-// A dependency row is a whole FAMILY and may have several local files (two
-// versions, or the same version in two folders). One file -> a flat menu; more
-// than one -> a submenu per file so it is never ambiguous which is acted on.
-function vpDdepRowMenuItems(entry) {
-  const files = Array.isArray(entry?.files) ? entry.files : [];
-  if (files.length === 0) return [];
-  if (files.length === 1) {
-    return vpDeleteRowMenuItems(files[0].package_id, files[0].file_path);
+// "user:3" / "dep:5" -> that row's menu items.
+function vpdMenuFor(ref) {
+  const [kind, raw] = String(ref || "").split(":");
+  const i = Number(raw);
+  if (kind === "user") {
+    const u = (VP_DELETE.userRows ?? [])[i];
+    return u ? vpDeleteRowMenuItems(u.package_id, u.file_path) : [];
   }
-  return files.map((f) => ({
-    label: f.package_id || f.file_path,
-    submenu: vpDeleteRowMenuItems(f.package_id, f.file_path),
-  }));
+  if (kind === "dep") {
+    const d = vpdDeps()[i];
+    return d?.file_path ? vpDeleteRowMenuItems(d.package_id, d.file_path) : [];
+  }
+  return [];
 }
 
 function setupVarPackagesDeleteModal() {
-  // "Used by" rows.
-  $("vp-delete-scan-list")?.addEventListener("contextmenu", (event) => {
-    const row = event.target.closest?.("[data-vpu-idx]");
-    if (!row) return;
+  const card = document.querySelector("#vp-delete-backdrop .vpd-card");
+  // ⋯ buttons. A <button> inside the dependency <label> doesn't toggle its
+  // checkbox; stopPropagation keeps the document click handler from closing
+  // the menu this click opens.
+  card?.addEventListener("click", (event) => {
+    const btn = event.target.closest?.("[data-vpd-menu]");
+    if (!btn) return;
     event.preventDefault();
-    const match = (VP_DELETE.dependents ?? [])[Number(row.dataset.vpuIdx)];
-    if (!match) return;
-    const items = vpDeleteRowMenuItems(match.package_id, match.file_path);
-    if (items.length) showContextMenu(event.clientX, event.clientY, items);
+    event.stopPropagation();
+    const items = vpdMenuFor(btn.dataset.vpdMenu);
+    const r = btn.getBoundingClientRect();
+    if (items.length) showContextMenu(r.left, r.bottom + 4, items);
   });
-  // "Dependencies" rows. preventDefault also stops the browser's own menu from
-  // appearing over ours; the label's checkbox is untouched by a right-click.
-  $("vp-delete-dep-list")?.addEventListener("contextmenu", (event) => {
-    const row = event.target.closest?.("[data-ddep-row]");
+  // Right-click anywhere on a row does the same.
+  card?.addEventListener("contextmenu", (event) => {
+    const row = event.target.closest?.("[data-vpd-user], [data-vpd-dep]");
     if (!row) return;
     event.preventDefault();
-    const entry = (VP_DELETE.deps ?? [])[Number(row.dataset.ddepRow)];
-    if (!entry) return;
-    const items = vpDdepRowMenuItems(entry);
-    // A dependency that is not installed locally has no file to act on.
+    const ref = row.dataset.vpdUser != null ? `user:${row.dataset.vpdUser}` : `dep:${row.dataset.vpdDep}`;
+    const items = vpdMenuFor(ref);
     if (items.length) showContextMenu(event.clientX, event.clientY, items);
   });
 
-  $("vp-delete-scan-button")?.addEventListener("click", () => {
-    vpDeleteRunScan().catch((e) => addLog(`Usage scan: ${String(e)}`));
+  $("vpd-deps")?.addEventListener("change", (event) => {
+    if (event.target.classList?.contains("vpd-dep-check")) vpdRefresh();
   });
-  $("vp-delete-dep-scan-button")?.addEventListener("click", () => {
-    vpDeleteRunDepScan().catch((e) => addLog(`Dependency scan: ${String(e)}`));
+  $("vpd-deps-select")?.addEventListener("click", (event) => {
+    const mode = event.target.closest?.("[data-vpd-select]")?.dataset.vpdSelect;
+    if (!mode) return;
+    const safe = mode === "safe" ? vpdSafeSet() : new Set();
+    const deps = vpdDeps();
+    for (const box of document.querySelectorAll("#vpd-deps .vpd-dep-check")) {
+      box.checked = safe.has(vpdKey(deps[Number(box.dataset.vpdIdx)]?.file_path));
+    }
+    vpdRefresh();
   });
-  // Delegated: expand/collapse a shared dep's user list. The chip is a real
-  // <button> inside the row label, so it never toggles the checkbox.
-  $("vp-delete-dep-list")?.addEventListener("click", (event) => {
-    const btn = event.target.closest?.("[data-ddep-toggle]");
-    if (!btn) return;
-    event.preventDefault();
-    const users = document.querySelector(`[data-ddep-users="${btn.dataset.ddepToggle}"]`);
-    if (!users) return;
-    const nowHidden = users.classList.toggle("hidden");
-    btn.setAttribute("aria-expanded", String(!nowHidden));
-    btn.closest(".vp-ddep-row")?.classList.toggle("has-users-expanded", !nowHidden);
+  $("vpd-verdict")?.addEventListener("click", (event) => {
+    if (event.target.closest?.("#vpd-fix-ticks")) vpdUntickNeeded();
   });
-  $("vp-delete-dep-list")?.addEventListener("change", (event) => {
-    if (!event.target.classList?.contains("vp-ddep-check")) return;
-    vpDdepUpdateConfirmLabel();
-    vpDdepRefreshEffective();
+  $("vpd-deep-button")?.addEventListener("click", () => {
+    vpdRunDeepSearch().catch((e) => addLog(`Delete search: ${String(e)}`));
   });
-  // "Change in Settings" — close the modal (cancels this delete) and jump to
-  // the Settings page to edit the VAR library root. Blocked while a scan runs.
-  $("vp-delete-root-settings")?.addEventListener("click", () => {
-    if (VP_DELETE.running) return;
+  // "Change folders" closes the dialog (cancelling this delete) and opens
+  // Settings. Delegated: the scope line is re-rendered.
+  $("vpd-scope")?.addEventListener("click", (event) => {
+    if (!event.target.closest?.("#vpd-scope-settings") || VP_DELETE.running) return;
     vpDeleteModalClose(false);
     document.querySelector('[data-sidebar-link="settings"]')?.click();
   });
@@ -22991,8 +23113,8 @@ function setupVarPackagesDeleteModal() {
   });
   $("vp-delete-cancel")?.addEventListener("click", () => {
     if (VP_DELETE.running) {
-      // Cancel the in-flight scan; the poll breaks on the flag and re-enables
-      // the UI. cancel_task is best-effort (no-op if the task has no flag).
+      // Stop the search; the poll breaks on the flag and re-enables the UI.
+      // cancel_task is best-effort (no-op if the task has no flag).
       VP_DELETE.cancelled = true;
       if (VP_DELETE.taskId != null) {
         invoke("cancel_task", { taskId: VP_DELETE.taskId }).catch(() => {});
@@ -23862,7 +23984,7 @@ async function depDownloadOne(pkg, dest) {
 }
 
 /// Recycles a found dependency from inside the modal. Delegates to vpDeleteOne
-/// so the opt-in usage/dependency scans, Recycle Bin semantics, selection
+/// so the delete dialog, Recycle Bin semantics, selection
 /// pruning and grid refresh all stay in one place — this only mirrors the
 /// outcome back into the dep rows (the exact inverse of depDownloadOne's onDone).
 async function depDeleteOne(pkg) {

@@ -12,6 +12,10 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Changed
+- **Delete dialog redesigned**: it opens already showing what uses the package and what it uses,
+  ticks the dependencies nothing else needs, and warns as you tick if something still needs one
+
 ## [0.3.1] - 2026-10-15
 
 ### Fixed
