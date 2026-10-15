@@ -22509,42 +22509,13 @@ button.vpx-seg:hover {
 }
 
 /* --- Repair VARs --------------------------------------------------------------
-   Tabs (the Clean VARs tab bar, three wide), a pick card and a library card,
-   then the packages list beside the selected one's details. The list and the
-   details scroll on their own, so the tabs and cards stay in view. */
+   One view: a pick card and a library card, then the packages list (narrowed
+   by the Show filters) beside the selected one's details, which stack every
+   kind of problem it has. The list and the details scroll on their own. */
 .rv-view {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.cv-modes.rv-tabs {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.rv-tabs .cv-mode-text {
-  flex: 1 1 auto;
-}
-
-.rv-tab-count {
-  min-width: 22px;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 20px;
-  text-align: center;
-}
-
-.rv-tab-count:empty {
-  display: none;
-}
-
-.cv-mode.is-active .rv-tab-count {
-  background: color-mix(in srgb, var(--primary) 18%, var(--surface-3));
-  color: var(--text);
 }
 
 .rv-top {
@@ -22706,6 +22677,51 @@ button.vpx-seg:hover {
   max-width: 220px;
 }
 
+.rv-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+
+.rv-filters:empty {
+  display: none;
+}
+
+.rv-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rv-filter span {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-filter:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.rv-filter.is-on {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  color: var(--text);
+}
+
+.rv-filter.is-on span {
+  color: var(--text);
+}
+
 .rv-list-tools {
   display: flex;
   align-items: center;
@@ -22731,7 +22747,7 @@ button.vpx-seg:hover {
 
 .rv-row {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   padding: 8px 16px;
@@ -22767,10 +22783,16 @@ button.vpx-seg:hover {
   min-width: 0;
 }
 
+.rv-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .rv-row-chips {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
   gap: 4px;
 }
 
@@ -22831,6 +22853,48 @@ button.vpx-seg:hover {
 .rv-also {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.rv-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.rv-sec:last-of-type {
+  border-bottom: none;
+}
+
+.rv-sec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.rv-sec-title .material-symbols-outlined {
+  font-size: 19px;
+  color: var(--warn-text);
+}
+
+.rv-sec.is-fine .rv-sec-title .material-symbols-outlined {
+  color: var(--text-muted);
+}
+
+.rv-fine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--success-text);
+}
+
+.rv-fine .material-symbols-outlined {
+  font-size: 16px;
 }
 
 .rv-h {
@@ -22970,8 +23034,7 @@ button.vpx-seg:hover {
 
 @media (max-width: 1000px) {
   .rv-top,
-  .rv-grid,
-  .cv-modes.rv-tabs {
+  .rv-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

@@ -13,10 +13,11 @@ release time, it fills it with the commit messages since the last release.
 ## [Unreleased]
 
 ### Added
-- **Repair VARs** page, for one package or the whole library: unused dependencies (listed in
-  meta.json, used by nothing inside, often with long nested chains), meta.json (creator and name that
-  don't match the file, packages it uses but doesn't list, format), and file names not saved as UTF-8,
-  which VaM shows garbled. Package Explorer now says which missing dependencies VaM really needs
+- **Repair VARs** page: for one package or the whole library, shows everything wrong with a package
+  together and repairs it in one go: unused dependencies (listed in meta.json, used by nothing inside,
+  often with long nested chains), meta.json (creator and name that don't match the file, packages it
+  uses but doesn't list, format), and file names not saved as UTF-8, which VaM shows garbled.
+  Package Explorer now says which missing dependencies VaM really needs
 
 ### Changed
 - **Delete dialog redesigned**: it opens already showing what uses the package and what it uses,

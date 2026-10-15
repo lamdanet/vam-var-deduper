@@ -9315,19 +9315,20 @@ async function pkgSetCreatorFlag(creator, flag) {
 }
 
 // ---- Repair VARs -------------------------------------------------------------------
-// A page of its own for what's wrong with packages themselves, one tab per kind:
+// A page of its own for what's wrong with packages themselves, all on one view:
 //   - Unused dependencies: meta.json lists packages nothing inside uses (often
 //     with long nested chains copied from other packages), or references name
 //     another package for a file it has itself.
 //   - meta.json: a creator or package name that isn't the file name's, packages
 //     its files use but it doesn't list, a BOM or lenient-only JSON.
 //   - File names: stored without the UTF-8 mark, so VaM shows them garbled.
-// Each tab works on one package (picked here, or sent from Package Explorer) or
-// on every package the library check found. Backed by package_repair.rs; Fix
+// A package's problems show together and one Repair fixes them all, for one
+// package (picked here, or sent from Package Explorer) or every one ticked
+// from the library check. The list can be narrowed to one kind of problem. Backed by package_repair.rs; Fix
 // Missing stays the page for references to files a package doesn't have.
 
-const RV_STORE = { tab: "rv.tab", backup: "rv.backup", backupDir: "rv.backupDir", redirect: "rv.redirect" };
-const RV_TABS = [
+const RV_STORE = { filter: "rv.filter", backup: "rv.backup", backupDir: "rv.backupDir", redirect: "rv.redirect" };
+const RV_KINDS = [
   { key: "deps", icon: "playlist_remove", title: "Unused dependencies", sub: "Listed in meta.json, used by nothing inside" },
   { key: "meta", icon: "data_object", title: "meta.json", sub: "Creator, name, unlisted packages, format" },
   { key: "names", icon: "translate", title: "File names", sub: "Not saved as UTF-8: garbled in VaM" },
@@ -9357,8 +9358,8 @@ const RV = {
   applyTask: null,
   // The row whose details show on the right.
   sel: null,
-  // Ticked for "Repair ticked", per tab.
-  ticked: { deps: new Set(), meta: new Set(), names: new Set() },
+  // Ticked for "Repair ticked".
+  ticked: new Set(),
   // meta.json fixes to make (the same for one package or many).
   metaFix: { creator: true, package_name: true, undeclared: true, format: true },
   query: "",
@@ -9380,9 +9381,10 @@ function rvStoreSet(key, value) {
   } catch (_e) {}
 }
 
-function rvTab() {
-  const t = rvStore(RV_STORE.tab, "deps");
-  return RV_TABS.some((x) => x.key === t) ? t : "deps";
+// The list's filter: "all", or one kind of problem.
+function rvFilter() {
+  const f = rvStore(RV_STORE.filter, "all");
+  return RV_KINDS.some((x) => x.key === f) ? f : "all";
 }
 
 function rvView() {
@@ -9421,9 +9423,8 @@ function rvBackupDir() {
   return vam ? `${vam}\\fix-var-backup` : "";
 }
 
-// Open the page on a package (Package Explorer's Repair), on a tab.
-function rvOpen(filePath, tab = null) {
-  if (tab) rvStoreSet(RV_STORE.tab, tab);
+// Open the page on a package (Package Explorer's Repair).
+function rvOpen(filePath) {
   if (filePath) {
     RV.target = filePath;
     RV.sel = filePath;
@@ -9489,19 +9490,20 @@ function rvUpdateSummary(filePath, report) {
   else if (any) list.push(s);
 }
 
-// Does a summary have something for this tab?
-function rvHas(s, tab) {
-  if (!s || s.error) return false;
-  if (tab === "deps") return s.unneeded > 0 || s.redirectable > 0;
-  if (tab === "meta") return s.meta.length > 0;
-  return s.names > 0;
+// Does a summary have something of this kind ("all": anything) to repair?
+function rvHas(s, kind = "all") {
+  if (!s || s.error || s.pending) return false;
+  if (kind === "deps") return s.unneeded > 0 || s.redirectable > 0;
+  if (kind === "meta") return s.meta.length > 0;
+  if (kind === "names") return s.names > 0;
+  return s.unneeded > 0 || s.redirectable > 0 || s.meta.length > 0 || s.names > 0;
 }
 
 // The rows of the list: the picked package first, then the library check's.
 function rvRows() {
-  const tab = rvTab();
+  const filter = rvFilter();
   const q = RV.query;
-  const lib = (RV.lib?.packages ?? []).filter((s) => rvHas(s, tab));
+  const lib = (RV.lib?.packages ?? []).filter((s) => rvHas(s, filter));
   const rows = [...lib];
   if (RV.target && !rows.some((s) => s.file_path === RV.target)) {
     const rep = RV.reports.get(RV.target);
@@ -9517,13 +9519,7 @@ function rvRows() {
 function rvRender() {
   const view = rvView();
   if (!view) return;
-  const tab = rvTab();
   view.innerHTML = `
-    <nav class="cv-modes rv-tabs" role="tablist" aria-label="What to repair">${RV_TABS.map(
-      (t) => `<button type="button" role="tab" class="cv-mode${tab === t.key ? " is-active" : ""}" aria-selected="${tab === t.key}" data-rv-tab="${t.key}">
-        <span class="material-symbols-outlined">${t.icon}</span><span class="cv-mode-text"><b>${t.title}</b><small>${t.sub}</small></span>
-        <span class="rv-tab-count" id="rv-count-${t.key}"></span></button>`,
-    ).join("")}</nav>
     <section class="rv-top">
       <article class="card rv-card" id="rv-pick"></article>
       <article class="card rv-card" id="rv-lib"></article>
@@ -9537,6 +9533,7 @@ function rvRender() {
             <input id="rv-search" type="search" placeholder="Filter packages" value="${escapeAttribute(RV.query)}" />
           </div>
         </div>
+        <div id="rv-filters" class="rv-filters" role="group" aria-label="Show"></div>
         <div id="rv-list-tools" class="rv-list-tools"></div>
         <div id="rv-list" class="rv-list" role="list"></div>
       </article>
@@ -9579,11 +9576,6 @@ function rvRenderLib() {
   const host = $("rv-lib");
   if (!host) return;
   const lib = RV.lib;
-  const counts = Object.fromEntries(RV_TABS.map((t) => [t.key, (lib?.packages ?? []).filter((s) => rvHas(s, t.key)).length]));
-  for (const t of RV_TABS) {
-    const el = $(`rv-count-${t.key}`);
-    if (el) el.textContent = lib ? String(counts[t.key]) : "";
-  }
   const unreadable = (lib?.packages ?? []).filter((s) => s.error).length;
   let body;
   if (RV.scanning) {
@@ -9591,8 +9583,8 @@ function rvRenderLib() {
       <small>${escapeHtml(RV.message || "Starting…")}</small></div>
       <button type="button" class="ghost-button fm-small" data-rv-act="scan-stop">Stop</button>`;
   } else if (lib) {
-    const total = counts.deps + counts.meta + counts.names;
-    body = `<div class="rv-lib-text"><b>${total ? `${pkgCount(new Set((lib.packages ?? []).filter((s) => !s.error).map((s) => s.file_path)).size, "package has", "packages have")} something to repair` : "Nothing to repair"}</b>
+    const total = (lib.packages ?? []).filter((s) => rvHas(s)).length;
+    body = `<div class="rv-lib-text"><b>${total ? `${pkgCount(total, "package has", "packages have")} something to repair` : "Nothing to repair"}</b>
       <small>Checked ${lib.scanned.toLocaleString()} packages${lib.cancelled ? " (stopped early)" : ""}${RV.libAt ? ` · ${RV.libAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}${
         unreadable ? ` · ${pkgCount(unreadable, "couldn't be read", "couldn't be read")}` : ""
       }</small></div>
@@ -9606,27 +9598,50 @@ function rvRenderLib() {
       <span>Keep a backup of each original in <button type="button" class="fm-link" data-rv-act="backup-dir" title="Choose the backup folder">${escapeHtml(rvBackupDir() || "a folder you choose")}</button></span></label>`;
 }
 
-function rvChipsHtml(s, tab) {
+function rvChipsHtml(s) {
   if (s.pending) return `<span class="chip">Reading…</span>`;
-  if (tab === "deps") {
-    return [
-      s.unneeded ? `<span class="chip fm-chip-warn">${pkgCount(s.unneeded, "unused", "unused")}</span>` : "",
-      s.unneeded_nested ? `<span class="chip" title="Nested entries under them">+${s.unneeded_nested} nested</span>` : "",
-      s.redirectable ? `<span class="chip" title="References to files it has itself">${pkgCount(s.redirectable, "own file", "own files")}</span>` : "",
-    ].join("");
+  if (!rvHas(s)) return `<span class="chip fm-chip-good">Nothing to repair</span>`;
+  const deps = s.unneeded
+    ? `${pkgCount(s.unneeded, "unused dependency", "unused dependencies")}${s.unneeded_nested ? ` (+${s.unneeded_nested} nested)` : ""}`
+    : s.redirectable
+      ? pkgCount(s.redirectable, "reference to its own file", "references to its own files")
+      : "";
+  return [
+    deps ? `<span class="chip fm-chip-warn" title="Unused dependencies">${escapeHtml(deps)}</span>` : "",
+    s.meta.length
+      ? `<span class="chip fm-chip-warn" title="${escapeAttribute(s.meta.map((c) => RV_META_LABELS[c] || c).join("\n"))}">meta.json: ${escapeHtml(
+          s.meta.map((c) => (RV_META_LABELS[c] || c).toLowerCase()).join(", "),
+        )}</span>`
+      : "",
+    s.names ? `<span class="chip fm-chip-warn" title="File names not saved as UTF-8">${pkgCount(s.names, "garbled name", "garbled names")}</span>` : "",
+  ].join("");
+}
+
+function rvRenderFilters() {
+  const host = $("rv-filters");
+  if (!host) return;
+  const pkgs = RV.lib?.packages ?? [];
+  if (!RV.lib) {
+    host.innerHTML = "";
+    return;
   }
-  if (tab === "meta") return s.meta.map((c) => `<span class="chip fm-chip-warn">${escapeHtml((RV_META_LABELS[c] || c).toLowerCase())}</span>`).join("");
-  return s.names ? `<span class="chip fm-chip-warn">${pkgCount(s.names, "name", "names")}</span>` : "";
+  const filter = rvFilter();
+  const chip = (key, label, n) => `<button type="button" class="rv-filter${filter === key ? " is-on" : ""}" data-rv-filter="${key}" aria-pressed="${filter === key}">
+      ${escapeHtml(label)}<span>${n}</span></button>`;
+  host.innerHTML = [
+    chip("all", "All", pkgs.filter((x) => rvHas(x)).length),
+    ...RV_KINDS.map((k) => chip(k.key, k.title, pkgs.filter((x) => rvHas(x, k.key)).length)),
+  ].join("");
 }
 
 function rvRenderList() {
   const list = $("rv-list");
   const tools = $("rv-list-tools");
   if (!list) return;
-  const tab = rvTab();
+  rvRenderFilters();
   const rows = rvRows();
-  const fixable = rows.filter((s) => !s.pending && rvHas(s, tab));
-  const ticked = RV.ticked[tab];
+  const fixable = rows.filter((s) => rvHas(s));
+  const ticked = RV.ticked;
   for (const fp of [...ticked]) if (!fixable.some((s) => s.file_path === fp)) ticked.delete(fp);
   const title = $("rv-list-title");
   if (title) title.textContent = RV.lib ? `Packages to repair · ${fixable.length}` : "Packages";
@@ -9642,25 +9657,27 @@ function rvRenderList() {
   }
   if (!rows.length) {
     list.innerHTML = `<div class="rv-empty"><span class="material-symbols-outlined">${RV.lib ? "check_circle" : "manage_search"}</span>
-      <span>${RV.lib ? `No package in your library has this to repair.` : "Pick a package, or check the whole library."}</span></div>`;
+      <span>${RV.lib ? (rvFilter() === "all" ? "No package in your library has anything to repair." : "No package has this to repair.") : "Pick a package, or check the whole library."}</span></div>`;
     return;
   }
   list.innerHTML = rows
     .map((s) => {
-      const can = !s.pending && rvHas(s, tab);
+      const can = rvHas(s);
       const on = ticked.has(s.file_path);
       return `<div class="rv-row${s.file_path === RV.sel ? " is-sel" : ""}${can ? "" : " is-clean"}" role="listitem" tabindex="0" data-rv-row="${escapeAttribute(s.file_path)}">
         ${can ? `<input type="checkbox" class="rv-tick" data-rv-tick="${escapeAttribute(s.file_path)}" ${on ? "checked" : ""} aria-label="Tick ${escapeAttribute(s.package_id)}" />` : `<span class="rv-tick-space"></span>`}
         ${libThumbHtml(s.file_path, libGradient(s.package_id), "rv-row-thumb")}</div>
-        <span class="rv-row-text">${fmPkgLabelHtml(s.package_id)}${s.file_path === RV.target ? `<span class="chip">Picked</span>` : ""}</span>
-        <span class="rv-row-chips">${can || s.pending ? rvChipsHtml(s, tab) : `<span class="chip fm-chip-good">Nothing here</span>`}</span>
+        <span class="rv-row-main">
+          <span class="rv-row-text">${fmPkgLabelHtml(s.package_id)}${s.file_path === RV.target ? `<span class="chip">Picked</span>` : ""}</span>
+          <span class="rv-row-chips">${rvChipsHtml(s)}</span>
+        </span>
       </div>`;
     })
     .join("");
   libThumbWatch(list);
 }
 
-// ---- Details: one package, the current tab ------------------------------------------------
+// ---- Details: one package, every kind of problem it has --------------------------------------
 
 function rvRenderDetail() {
   const host = $("rv-detail");
@@ -9680,20 +9697,29 @@ function rvRenderDetail() {
     host.innerHTML = `<div class="rv-detail-head">${rvDetailHead(fp)}</div><div class="rv-empty is-bad"><span class="material-symbols-outlined">error</span><span>Couldn't read it: ${escapeHtml(rep.error)}</span></div>`;
     return;
   }
-  const tab = rvTab();
-  const body = tab === "deps" ? rvDepsHtml(rep) : tab === "meta" ? rvMetaHtml(rep) : rvNamesHtml(rep);
-  const can = rvHas(rvSummaryOf(fp, rep), tab);
-  const others = RV_TABS.filter((t) => t.key !== tab && rvHas(rvSummaryOf(fp, rep), t.key));
+  const sum = rvSummaryOf(fp, rep);
+  const can = rvHas(sum);
+  const builders = { deps: rvDepsHtml, meta: rvMetaHtml, names: rvNamesHtml };
+  // The kinds it has something to repair in, then a short "fine" line for the
+  // rest; still-needed dependencies show even when nothing goes.
+  const sections = RV_KINDS.map((k) => {
+    const has = rvHas(sum, k.key);
+    const keep = k.key === "deps" && (rep.deps ?? []).some((d) => d.status === "needed");
+    if (!has && !keep) return "";
+    return `<section class="rv-sec${has ? "" : " is-fine"}">
+        <h3 class="rv-sec-title"><span class="material-symbols-outlined">${k.icon}</span>${escapeHtml(k.title)}</h3>
+        ${builders[k.key](rep)}</section>`;
+  }).join("");
+  const fine = RV_KINDS.filter((k) => !rvHas(sum, k.key)).map((k) => k.title.toLowerCase());
   host.innerHTML = `
     <div class="rv-detail-head">${rvDetailHead(fp)}</div>
-    <div class="rv-detail-body">${body}</div>
+    <div class="rv-detail-body">
+      ${can ? "" : `<div class="rv-empty is-ok"><span class="material-symbols-outlined">check_circle</span><span>Nothing to repair in this package.</span></div>`}
+      ${sections}
+      ${can && fine.length ? `<p class="rv-note rv-fine"><span class="material-symbols-outlined">check</span>Fine: ${escapeHtml(fine.join(", "))}.</p>` : ""}
+    </div>
     <div class="rv-detail-foot">
-      ${
-        others.length
-          ? `<span class="rv-also">Also: ${others.map((t) => `<button type="button" class="fm-link" data-rv-tab="${t.key}">${escapeHtml(t.title)}</button>`).join(" · ")}</span>`
-          : ""
-      }
-      ${tab !== "names" && rep.names?.length ? `<span class="rv-also">Repairing it also saves its ${pkgCount(rep.names.length, "file name", "file names")} as UTF-8.</span>` : ""}
+      <span class="rv-also">Repair does everything ticked above, and keeps a backup${rvBackup() ? "" : " only if you turn backups on"}.</span>
       <button type="button" class="primary-button" data-rv-act="apply-one" ${can && !RV.applying ? "" : "disabled"}><span class="material-symbols-outlined">build</span>Repair this package</button>
     </div>`;
 }
@@ -9805,24 +9831,21 @@ function rvNamesHtml(rep) {
 
 // ---- Repair ----------------------------------------------------------------------------
 
-// What a repair on this tab does, for one package (its ticks) or many.
+// What Repair does: every kind at once. One package uses its own dependency
+// ticks; many remove everything nothing uses. File names are always put right.
 function rvRequest(filePath, { one = false } = {}) {
-  const tab = rvTab();
   const req = {
     file_path: filePath,
     backup: rvBackup(),
     backup_dir: rvBackupDir() || null,
+    redirect: rvRedirect(),
+    fix_creator: RV.metaFix.creator,
+    fix_package_name: RV.metaFix.package_name,
+    add_undeclared: RV.metaFix.undeclared,
+    clean_meta: RV.metaFix.format,
   };
-  if (tab === "deps") {
-    req.redirect = rvRedirect();
-    if (one) req.remove_deps = [...document.querySelectorAll("#rv-detail [data-rv-dep]:checked")].map((b) => b.getAttribute("data-rv-dep"));
-    else req.remove_unneeded = true;
-  } else if (tab === "meta") {
-    req.fix_creator = RV.metaFix.creator;
-    req.fix_package_name = RV.metaFix.package_name;
-    req.add_undeclared = RV.metaFix.undeclared;
-    req.clean_meta = RV.metaFix.format;
-  }
+  if (one) req.remove_deps = [...document.querySelectorAll("#rv-detail [data-rv-dep]:checked")].map((b) => b.getAttribute("data-rv-dep"));
+  else req.remove_unneeded = true;
   return req;
 }
 
@@ -9882,7 +9905,7 @@ async function rvApply(requests) {
   toast.update(RV.flash, out.failed.length ? "error" : "success");
   toast.dismiss(6000);
   for (const d of out.done) {
-    RV.ticked[rvTab()].delete(d.file_path);
+    RV.ticked.delete(d.file_path);
     RV.reports.delete(d.file_path);
   }
   rvRender();
@@ -9937,9 +9960,9 @@ function rvSelect(fp) {
 async function rvOnClick(e) {
   const q = (s) => e.target.closest?.(s);
   let el;
-  if ((el = q("[data-rv-tab]"))) {
-    rvStoreSet(RV_STORE.tab, el.getAttribute("data-rv-tab"));
-    rvRender();
+  if ((el = q("[data-rv-filter]"))) {
+    rvStoreSet(RV_STORE.filter, el.getAttribute("data-rv-filter"));
+    rvRenderList();
     return;
   }
   if ((el = q("[data-rv-explore]"))) {
@@ -9970,7 +9993,7 @@ async function rvOnClick(e) {
     } else if (act === "apply-one" && RV.sel) {
       rvApply([rvRequest(RV.sel, { one: true })]);
     } else if (act === "apply-ticked") {
-      rvApply([...RV.ticked[rvTab()]].map((fp) => rvRequest(fp)));
+      rvApply([...RV.ticked].map((fp) => rvRequest(fp)));
     } else if (act === "fix-missing" && RV.sel) {
       fmOpen(RV.sel, { scan: true });
     }
@@ -9983,14 +10006,14 @@ async function rvOnClick(e) {
 
 function rvOnChange(e) {
   const t = e.target;
-  const tab = rvTab();
   if (t.matches?.("[data-rv-tick]")) {
     const fp = t.getAttribute("data-rv-tick");
-    if (t.checked) RV.ticked[tab].add(fp);
-    else RV.ticked[tab].delete(fp);
+    if (t.checked) RV.ticked.add(fp);
+    else RV.ticked.delete(fp);
     rvRenderList();
   } else if (t.matches?.('[data-rv-act="tick-all"]')) {
-    RV.ticked[tab] = new Set(t.checked ? rvRows().filter((s) => !s.pending && rvHas(s, tab)).map((s) => s.file_path) : []);
+    // All the list shows (with a filter on, only those).
+    RV.ticked = new Set(t.checked ? rvRows().filter((x) => rvHas(x)).map((x) => x.file_path) : []);
     rvRenderList();
   } else if (t.matches?.('[data-rv-opt="redirect"]')) {
     rvStoreSet(RV_STORE.redirect, t.checked ? "1" : "0");
@@ -10189,7 +10212,7 @@ function pkgRunAction(act, event) {
     case "repair-deps":
     case "repair-meta":
     case "repair-names":
-      rvOpen(item.file_path, act.slice("repair-".length));
+      rvOpen(item.file_path);
       break;
     case "fix-refs":
       fmOpen(item.file_path);
