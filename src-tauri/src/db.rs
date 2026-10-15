@@ -822,7 +822,9 @@ fn migrate(conn: &mut Connection, progress: Progress) -> Result<()> {
         .context("failed to create replacement_prefs")?;
     }
 
-    if current < 22 {
+    // Only while `resources` is still a table: a database converted by a run
+    // that stopped before it recorded v22 has the lean layout already.
+    if current < 22 && lean_conversion_needed(conn) {
         migrate_v22_lean(conn, progress)?;
     }
 
@@ -937,6 +939,8 @@ fn migrate_v22_lean(conn: &mut Connection, progress: Progress) -> Result<()> {
         )
         .context("failed to build the v22 indexes")?;
         tx.execute_batch(RESOURCES_VIEW_SQL).context("failed to create the v22 resources view")?;
+        // In the same commit as the conversion, so the two can't disagree.
+        tx.execute_batch("PRAGMA user_version = 22;").context("failed to record v22")?;
         tx.commit().context("failed to commit v22 migration")?;
         Ok(())
     })();

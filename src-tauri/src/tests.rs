@@ -6697,6 +6697,21 @@ fn the_lean_conversion_keeps_every_row_and_backs_up_first() {
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM resources WHERE package_id = 'Beta.Hair.2'", [], |r| r.get(0)).expect("n");
         assert_eq!(n, 4);
     }
+    // Converted, but the run stopped before it recorded v22: it opens, and
+    // isn't converted again.
+    {
+        let conn = db.conn.lock().expect("lock");
+        conn.execute_batch("PRAGMA user_version = 21;").expect("v21");
+    }
+    drop(db);
+    let db = crate::db::open_file(&path).expect("reopen a converted v21");
+    {
+        let conn = db.conn.lock().expect("lock");
+        let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).expect("version");
+        assert_eq!(v, crate::db::SCHEMA_VERSION);
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM resources", [], |r| r.get(0)).expect("n");
+        assert_eq!(n, 5);
+    }
     drop(db);
     let _ = fs::remove_dir_all(&dir);
 }
