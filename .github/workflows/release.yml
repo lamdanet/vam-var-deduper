@@ -104,20 +104,27 @@ jobs:
           # Ticked on a manual run, or a version like 0.2.0-beta.1.
           if [ "$PRERELEASE" = "true" ] || [[ "$VERSION" == *-* ]]; then flags+=(--prerelease); fi
 
-          # Notes: this version's "## [X.Y.Z]" section of CHANGELOG.md, with
-          # GitHub's generated notes (compare link) appended. Without a
-          # section, GitHub's generated notes alone.
+          # Notes: download links first (GitHub lists the files below the
+          # notes, out of sight when the notes are long), then this version's
+          # "## [X.Y.Z]" section of CHANGELOG.md, then GitHub's generated
+          # notes (compare link).
+          name="VAM-VAR-Deduper-v$VERSION-windows-x64"
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION"
           awk -v v="$VERSION" '
             /^## \[/ { if (on) exit; on = index($0, "## [" v "]") == 1; next }
             on
-          ' CHANGELOG.md 2>/dev/null | tr -d '\r' > dist/notes.md || true
-          if grep -q '[^[:space:]]' dist/notes.md; then
-            flags+=(--notes-file dist/notes.md)
-          else
+          ' CHANGELOG.md 2>/dev/null | tr -d '\r' > dist/changes.md || true
+          {
+            echo "**Download:** [$name.exe]($base/$name.exe) · [$name.zip]($base/$name.zip) · [SHA256SUMS.txt]($base/SHA256SUMS.txt)"
+            echo
+            cat dist/changes.md
+          } > dist/notes.md
+          if ! grep -q '[^[:space:]]' dist/changes.md; then
             echo "::warning::CHANGELOG.md has no section for $VERSION; using GitHub's generated notes."
           fi
 
           gh release create "v$VERSION" dist/*.zip dist/*.exe dist/SHA256SUMS.txt \
+            --notes-file dist/notes.md \
             --target "$GITHUB_SHA" \
             --title "VAM VAR Deduper v$VERSION" \
             --generate-notes \

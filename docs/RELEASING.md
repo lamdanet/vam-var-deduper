@@ -69,8 +69,8 @@ something goes wrong.
 [CHANGELOG.md](../CHANGELOG.md) is the single source of release notes. Each
 version's section is used in two places:
 
-- **The GitHub release page.** The workflow uses the version's section as the
-  release description and adds GitHub's comparison link below it.
+- **The GitHub release page.** The workflow puts links to the downloads
+  first, then the version's section, then GitHub's comparison link.
 - **The app.** Settings → About → **Release notes** shows the whole changelog,
   newest first, with the running version marked. The changelog is built into
   the exe, so each build shows the notes it shipped with. The version badge
@@ -94,7 +94,8 @@ The file looks like this:
 
 **Writing notes.** Add a line under `## [Unreleased]` when you make a change
 users will notice. Write it for users ("what changed for me"), not as a commit
-message. Grouping under `### Added`, `### Changed` and `### Fixed` is optional.
+message, and keep it to one short line: GitHub lists the files below the
+notes, so a long section buries them. Grouping under `### Added`, `### Changed` and `### Fixed` is optional.
 The app shows bullets, `**bold**`, `` `code` `` and those group headings.
 Link targets are not shown, only the link text.
 
