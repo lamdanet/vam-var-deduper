@@ -4,143 +4,46 @@ What's new in each release of VAM VAR Deduper. The app shows this under
 Settings → About → Release notes, and each GitHub release uses its version's
 section as its notes.
 
-Write changes under **Unreleased** as you make them. `npm run release` turns
+Write changes under **Unreleased** as you make them, one short line each:
+what changed, not how. The GitHub release page shows these notes above the
+downloads, so a long section pushes them out of sight. `npm run release` turns
 that section into the new version's notes. If Unreleased is still empty at
 release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
 ### Added
-- **View on Hub from every page**: wherever a package is shown and it's on the
-  Hub, a Hub button (compass) opens its page in the app's Hub. VAR Packages'
-  details panel has a **View on Hub** button under Open details, and a Hub
-  button on each dependency and each "Used by" package. That also covers
-  dependency rows (missing ones too) in Package Explorer, the
-  Missing and "Newer in your sources" lists, Package Explorer for a package
-  opened by name, Fix Missing, Internalize Resources, Clean VARs, the
-  Database's Packages and Resources tabs (and their right-click menus),
-  Downloads and Sources. Find Dependencies' Hub chip now opens the Hub page in
-  the app instead of the browser. Versionless and ".latest" names open the
-  newest version's page
-- **Choose where the database lives**: Settings → Database → Location shows the
-  file (Default, or Custom folder), moves it to another folder, and back to the
-  default. A move copies it there (compacted), flushes and checks the copy,
-  then restarts the app to use it. The old file stays until the new one has
-  started twice (or "Delete it now"). A folder that already has a database
-  asks once: use the one there, or replace it with yours (the one there is
-  kept beside it as `.replaced.db`), with both databases' sizes and counts.
-  Network drives, OneDrive / Dropbox / Google Drive folders and too little
-  free space are refused; removable and FAT32 drives get a warning. No move
-  starts while something runs, and nothing starts during one. If the folder
-  isn't there at start (a drive unplugged), the app asks: try again, use the
-  default folder for now, or quit
-- **Six more themes** from the Stitch specs: Emerald Flow, Glacier Frost,
-  Indigo Pulse and Crimson Solar (light), Violet Pulse and Solar Core (dark),
-  each with its own gradient buttons, focus colour and tag colours
-- **Get a package from your saved sources, on the pages that need it**: every
-  page downloads a package by name the same way (the VaM Hub first, then the
-  links on the Sources page), straight into AddonPackages and without its
-  dependencies. It says where each download comes from ("From your sources ·
-  Pixeldrain", or "only v1 (v2 asked)").
-  - The **Downloads panel** has a box: type part of a name to search your
-    saved sources, or paste names (a list, a meta.json) to look each up, then
-    Get one or all.
-  - **VAR Packages**: the Missing view gets Get per row and Get all, filling
-    in as sources are found (Find & Download All is gone). A new status,
-    **Newer in your sources**, lists packages with a newer version saved; a
-    package's panel offers **Update from sources**. A search also shows what
-    your sources have that you don't.
-  - **Redownload** of a damaged copy uses a saved source when the Hub hasn't
-    got it.
-  - **Package Explorer** gets missing dependencies with one click, and opens
-    any package by name, with Download.
-  - The **Hub**'s search shows what your sources have that the Hub doesn't.
-- **Saving a source adds its package to the database when it's new**: its
-  file list (paths, CRCs, sizes) is read through the link without downloading
-  it, a few seconds a package in the background. So Fix Missing, Clean VARs
-  and the Resource List can use it before you download it. Links inside a zip,
-  or to a zip holding the .var, are added once downloaded
+- **View on Hub everywhere**: a Hub button wherever a package that's on the Hub is shown
+- **Choose where the database lives**: Settings → Database → Location moves it to another folder
+- **Six more themes**: Emerald Flow, Glacier Frost, Indigo Pulse, Crimson Solar, Violet Pulse, Solar Core
+- **Get packages from your saved sources**: Downloads panel, VAR Packages (Missing, and the new
+  "Newer in your sources"), Package Explorer, Hub search and Redownload
+- **Saved sources go into the database** without downloading, so Fix Missing and Clean VARs can use them
 
 ### Changed
-- **VAR Packages makes room for the packages**: two toolbar buttons hide or
-  show the folder tree (Explore) and the details panel, and are remembered.
-  On a window too narrow for both beside the grid, they slide over it
-  instead: clicking a package slides its details in, the folder tree opens
-  from its button and closes once you pick a folder, and Esc closes either
-- **Explore's subfolders wrap onto two lines** instead of one line with a
-  sideways scrollbar; "Show all N folders" opens the rest
-- **VAR Packages filters clear in one click**: a set filter (Status, Type,
-  Location, Author) shows an x beside it, and **Clear all** resets the search,
-  the Status and every filter. The Size and Scene image filters are gone
-- **The app opens on VAR Packages**, your library, and the sidebar is in two
-  groups: your library (VAR Packages, Package Explorer, Hub, Sources), then
-  keeping it in shape (Fix Missing, Clean VARs, Internalize Resources,
-  Database)
-- **Resource List is now a tab of the Database page** (Database → Resources),
-  next to Packages: every file the database records, with the same search,
-  filters and duplicates panel
-- **Dependency Usage, Reclaim Space and Unique Resources are experimental**:
-  release builds no longer show them; debug builds list them under
-  "Experimental" in the sidebar
-- **Settings, laid out like the other pages**: four tabs (Library, Appearance,
-  Database, About), each setting a card. Changes save as you make them (no
-  Save button): "Saved." shows once they're written, or why they weren't.
-  Each card has Reset to default ("At default" when there's nothing to
-  reset), and Reset all settings to default lists what changes before it
-  does. Themes come in Classic and Obsidian groups
-- **Easier with a keyboard or a screen reader**: dialogs take the focus and
-  give it back, keyboard focus shows as a clear outline in every theme, the
-  Settings tabs and theme cards work with the arrow keys, and statuses,
-  progress and errors are announced. Error messages stay until closed
-- **The database is about a third of its size, and faster**: each package
-  name and folder is now stored once instead of in every one of millions of
-  rows. A 1.9 GB index becomes about 0.6 GB with nothing lost (every row
-  checked). The first start after updating converts it once, in a minute or
-  two, in a small window that shows its progress; the old file is copied
-  aside first as `vam_var_deduper.before-lean.db` (delete it once you're
-  happy). Faster with it: Fix Missing's lookups by path (2.9 s to 0.06 s),
-  the Resource List's category counts, deep pages and name search (from
-  0.5 to 2 s down to a few hundredths)
-- **Clean and Fix show their progress**: while Run Fixes or Clean writes a
-  package, the bar says what it's doing (backing up, writing, putting it in
-  place), how much is done, how long it has run and about how long is left.
-  Clean many shows the same for each package as well as the whole
-- **Sources, redesigned like the other pages**: two tabs, Find in a post and
-  Saved sources. The post sits beside its numbers (files found, new, in your
-  library, protected zips, and what couldn't be read), with the posts you
-  pasted lately to start from. The files found are listed by the post's
-  groups; selecting one shows its mirrors, its zip's password and the links
-  already saved for it. A bar at the bottom keeps the ticked count and Save
-  in reach, and a long scan can be stopped. Saved sources lists each saved
-  file once; select it to see all its links, how each has fared, and forget
-  one
-- **Sources is where links are added and removed**: a third tab, **Add by
-  hand**, holds the add-a-link form (the links already saved for the file show
-  above it) and **Import a list**, moved from the Database page. Saved sources
-  can forget the links of many files at once, and filter the failing ones.
-  Forget all links now asks first
-- **Downloads are one package by default**: Fix Missing, Find Dependencies,
-  the Hub update button and a .var clicked on a Hub page download only that
-  package, not its dependencies. On the Hub, Download is the package alone;
-  **+ N** beside it downloads its missing dependencies too (and what they
-  need), and the file picker still lets you tick dependencies
-- Looking up where a long list of packages can be downloaded is faster: the
-  1,161 missing dependencies of a large library took about 70 s, now 24 s
+- **The database is about a third of its size, and faster**. The first start converts it once
+  (a minute or two) and keeps the old file as `vam_var_deduper.before-lean.db`
+- **VAR Packages** is the start page; the folder tree and details panel can be hidden, and
+  filters clear in one click
+- **Settings** redesigned: four tabs, saves as you go, Reset to default on each setting
+- **Sources** redesigned, with Add by hand and Import a list moved in from Database
+- **Downloads get one package by default**; **+ N** on the Hub adds its missing dependencies
+- **Clean and Fix show progress** and time left
+- Sidebar grouped into your library, then upkeep
+- Resource List is now Database → Resources
+- Better keyboard and screen reader support
+- Explore's subfolders wrap onto two lines instead of scrolling sideways
+- Dependency Usage, Reclaim Space and Unique Resources are in debug builds only
+- Looking up downloads for long lists is about 3× faster
 
 ### Fixed
-- Unfolding a folder in Explore's folder tree no longer scrolls the tree back
-  up to the open folder
-- Hint text, gradient buttons and warning colours that were too faint to read
-  in several themes (Violet Pulse's buttons faded to white on pale pink; the
-  Clear database button was pale pink on the light themes)
-- The offload folder no longer shows up under Additional VAR folders, and a
-  new offload folder is scanned straight away
-- Settings no longer drops options it doesn't show when it saves, and a
-  settings file cut short by a crash falls back to its last good copy
-- "Set in Settings" opens the tab with the VaM directory
-- A `.var` that isn't a package (often a Hub login page saved by a download
-  that ran while logged out) no longer stops a check: it's skipped and listed
-  in the warnings, which say what it is so you can download it again
+- Explore's folder tree no longer jumps back up when you unfold a folder
+- Text and buttons too faint to read in several themes
+- The offload folder no longer shows under Additional VAR folders
+- Settings no longer loses options when it saves; a damaged settings file falls back to its last good copy
+- A `.var` that isn't a package (such as a saved Hub login page) is skipped with a warning
+  instead of stopping a check
+- "Set in Settings" opens the right tab
 
 ## [0.2.0] - 2026-10-10
 
