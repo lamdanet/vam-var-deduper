@@ -22507,3 +22507,150 @@ button.vpx-seg:hover {
   flex: 1 1 0;
   min-width: 0;
 }
+
+/* --- Package Explorer: Repair package ---------------------------------------- */
+.dialog-card.pkg-rp-card {
+  width: min(720px, 100%);
+  max-height: min(820px, 90vh);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dialog-card.pkg-rp-card h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dialog-card .pkg-rp-lead {
+  margin: 0;
+}
+
+.pkg-rp-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-right: 2px;
+}
+
+.pkg-rp-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dialog-card .pkg-rp-sec h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.pkg-rp-sec h4 small {
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.dialog-card .pkg-rp-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.pkg-rp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.pkg-rp-row.is-info {
+  cursor: default;
+}
+
+.pkg-rp-row.is-info > .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.pkg-rp-row input[type="checkbox"] {
+  margin-top: 2px;
+}
+
+.pkg-rp-row:has(input:disabled) {
+  opacity: 0.6;
+}
+
+.pkg-rp-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pkg-rp-main b {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.pkg-rp-main small {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.pkg-rp-name {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.pkg-rp-name .material-symbols-outlined {
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.pkg-rp-bad,
+.pkg-rp-good {
+  overflow-wrap: anywhere;
+}
+
+.pkg-rp-bad {
+  color: var(--danger-text);
+}
+
+.pkg-rp-good {
+  color: var(--success-text);
+}
+
+.pkg-rp-ok {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--success-text);
+  font-size: 13px;
+}
+
+.pkg-rp-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pkg-rp-foot .dialog-actions {
+  margin: 0 0 0 auto;
+}

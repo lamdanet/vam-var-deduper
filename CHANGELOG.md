@@ -12,6 +12,11 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Added
+- **Repair package** (Package Explorer): removes meta.json dependencies nothing inside uses, points
+  references at files the package has itself, and saves file names as UTF-8 so VaM shows Chinese and
+  Japanese names right. Package Explorer now says which missing dependencies VaM really needs
+
 ### Changed
 - **Delete dialog redesigned**: it opens already showing what uses the package and what it uses,
   ticks the dependencies nothing else needs, and warns as you tick if something still needs one

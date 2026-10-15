@@ -6495,6 +6495,9 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
     depQuery: "",
     depExpand: { left: false, right: false },
     shared: null,
+    // inspect_package_repair: what its meta.json lists that nothing inside
+    // uses, references to its own files, names VaM can't read.
+    repair: null,
     missing: !onDisk,
     avail: { state: "idle" },
   });
@@ -6529,6 +6532,12 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
     .then((details) => {
       if (token !== PKG.token) return;
       PKG.details = details ?? { error: "No details" };
+      pkgRenderAll();
+    })
+    .then(() => invoke("inspect_package_repair", { filePath: item.file_path }))
+    .then((repair) => {
+      if (token !== PKG.token) return;
+      PKG.repair = repair ?? null;
       pkgRenderAll();
     })
     .catch((e) => {
@@ -6922,22 +6931,86 @@ function pkgCount(n, one, many) {
 
 // The package's state in plain sentences, worst first. `act` names the
 // action that fixes it, when there is one.
+// What the package's own files use a dependency for (inspect_package_repair),
+// by family; null until known.
+function pkgRepairDep(id) {
+  const rep = PKG.repair;
+  if (!rep?.deps) return null;
+  const base = pkgDepBase(id);
+  return rep.deps.find((d) => pkgDepBase(d.key) === base) ?? null;
+}
+
+function pkgDepBase(id) {
+  return String(id ?? "").replace(/\.(\d+|latest|min\d+)$/i, "").toLowerCase();
+}
+
+// Listed in meta.json, but nothing inside needs it: missing or not, VaM never
+// loads anything from it.
+function pkgDepUnneeded(id) {
+  return ["self", "unused", "covered"].includes(pkgRepairDep(id)?.status);
+}
+
+// Missing and needed only for morphs: VaM skips morphs it can't find.
+function pkgDepMorphsOnly(id) {
+  const r = pkgRepairDep(id);
+  return r?.status === "needed" && r.plugins === 0 && r.others === 0 && r.morphs > 0;
+}
+
 function pkgHealth(item, details) {
   const out = [];
   const add = (level, icon, text, act = null) => out.push({ level, icon, text, act });
   const lib = item.__lib;
   const deps = details?.dependencies ?? [];
-  const missing = deps.filter((d) => d.status === "missing").length;
-  const dbOnly = deps.filter((d) => d.status === "indexed").length;
+  const absent = (d) => d.status === "missing" || d.status === "indexed";
+  // Once its files are read, only the dependencies it really uses count.
+  const used = (d) => !pkgDepUnneeded(d.id) && !pkgDepMorphsOnly(d.id);
+  const missing = deps.filter((d) => d.status === "missing" && used(d)).length;
+  const dbOnly = deps.filter((d) => d.status === "indexed" && used(d)).length;
+  const morphsOnly = deps.filter((d) => absent(d) && pkgDepMorphsOnly(d.id)).length;
+  const rep = PKG.repair && !PKG.repair.error ? PKG.repair : null;
+  const unneeded = rep ? rep.deps.filter((d) => pkgDepUnneeded(d.key)) : [];
+  const unneededAbsent = deps.filter((d) => absent(d) && pkgDepUnneeded(d.id)).length;
   const loadable = (d) => d.status === "found" || d.status === "other_version";
-  const offDeps = deps.filter((d) => d.offloaded && loadable(d)).length;
-  const other = deps.filter((d) => d.status === "other_version" && !d.offloaded).length;
+  const offDeps = deps.filter((d) => d.offloaded && loadable(d) && !pkgDepUnneeded(d.id)).length;
+  const other = deps.filter((d) => d.status === "other_version" && !d.offloaded && !pkgDepUnneeded(d.id)).length;
   if (details && !details.readable) add("err", "error", "It can't be read: the file is damaged or isn't a package.");
   if (lib && item.damaged) {
     add("err", "broken_image", `Damaged: ${item.damaged} failed its check.`, "redownload");
   }
-  if (missing) add("err", "link_off", `${pkgCount(missing, "dependency is", "dependencies are")} missing, so VaM will show errors when it loads.`, "find-deps");
+  if (missing) {
+    add(
+      "err",
+      "link_off",
+      rep
+        ? `${pkgCount(missing, "dependency it uses is", "dependencies it uses are")} missing, so VaM shows errors for ${missing === 1 ? "it" : "them"} when it loads.`
+        : `${pkgCount(missing, "dependency is", "dependencies are")} missing, so VaM will show errors when it loads.`,
+      "find-deps",
+    );
+  }
   if (dbOnly) add("warn", "inventory_2", `${pkgCount(dbOnly, "dependency isn't", "dependencies aren't")} installed (only the database knows ${dbOnly === 1 ? "it" : "them"}).`, "find-deps");
+  if (morphsOnly) {
+    add("info", "face", `${pkgCount(morphsOnly, "missing dependency is", "missing dependencies are")} only used for a few morphs; VaM skips morphs it can't find, without an error.`);
+  }
+  if (unneeded.length) {
+    add(
+      unneededAbsent ? "warn" : "info",
+      "playlist_remove",
+      `meta.json lists ${pkgCount(unneeded.length, "dependency", "dependencies")} nothing inside needs${
+        unneededAbsent ? ` (${unneededAbsent} of them missing)` : ""
+      }. VaM loads nothing from ${unneeded.length === 1 ? "it" : "them"}.`,
+      "repair",
+    );
+  }
+  if (rep?.names?.length) {
+    const scene = rep.names.some((n) => /^saves\/scene\//i.test(n.fixed));
+    add(
+      "warn",
+      "translate",
+      `${pkgCount(rep.names.length, "file name isn't", "file names aren't")} saved as UTF-8, so VaM shows ${rep.names.length === 1 ? "it" : "them"} garbled${scene ? " (its scene among them)" : ""}.`,
+      // One Repair button covers both rows.
+      unneeded.length ? null : "repair",
+    );
+  }
   if (lib && item.offloaded) add("warn", "archive", "Offloaded: VaM doesn't load it until you restore it.", "restore");
   if (lib && item.disabled) add("warn", "power_settings_new", "Disabled: VaM doesn't load it.", "enable");
   if (offDeps) add("warn", "archive", `${pkgCount(offDeps, "dependency is", "dependencies are")} offloaded; restore ${offDeps === 1 ? "it" : "them"} so this works in VaM.`, "restore-deps");
@@ -6966,7 +7039,7 @@ function pkgHealth(item, details) {
 // Label and icon of the button for a health action.
 function pkgFixButton(act, item, details) {
   const deps = details?.dependencies ?? [];
-  const absent = deps.filter((d) => d.status === "missing" || d.status === "indexed").length;
+  const absent = deps.filter((d) => (d.status === "missing" || d.status === "indexed") && !pkgDepUnneeded(d.id) && !pkgDepMorphsOnly(d.id)).length;
   return (
     {
       redownload: ["download", "Redownload", "Replace it with a fresh copy from the Hub"],
@@ -6980,6 +7053,7 @@ function pkgFixButton(act, item, details) {
       "add-source": ["add_link", "Add a download link", "Save a link where it can be downloaded"],
       "open-downloads": ["download", "Open Downloads", "See the download's progress"],
       "fix-refs": ["healing", "Fix references", "Pick replacements and fix them in Fix Missing"],
+      repair: ["build", "Repair…", "See what it would tidy in meta.json and its file names, then repair it (with a backup)"],
     }[act] ?? null
   );
 }
@@ -7797,12 +7871,27 @@ function pkgDepGetHtml(id) {
   return `<span class="material-symbols-outlined pkg-dep-act" title="${info ? "No source: open it to add a download link" : "Looking for a source…"}">${info ? "add_link" : "more_horiz"}</span>`;
 }
 
+// What its own files use a dependency for, for the row's second line.
+function pkgDepUseText(id) {
+  const r = pkgRepairDep(id);
+  if (!r) return "";
+  if (r.status === "self") return " · itself";
+  if (r.status === "unused") return " · nothing inside uses it";
+  if (r.status === "covered") return " · only for files it has itself";
+  const parts = [
+    r.plugins ? pkgCount(r.plugins, "plugin", "plugins") : "",
+    r.morphs ? pkgCount(r.morphs, "morph", "morphs") : "",
+    r.others ? pkgCount(r.others, "file", "files") : "",
+  ].filter(Boolean);
+  return parts.length ? ` · used for ${parts.join(", ")}` : "";
+}
+
 function pkgDepListHtml(deps, users) {
   const needs = deps
     .map((d) => {
       const loadable = d.status === "found" || d.status === "other_version";
       return pkgDepRowHtml(d.id, {
-        sub: d.status === "other_version" && d.resolved_id ? ` → v${d.resolved_id.split(".").pop()}` : "",
+        sub: `${d.status === "other_version" && d.resolved_id ? ` → v${d.resolved_id.split(".").pop()}` : ""}${pkgDepUseText(d.id)}`,
         color: pkgDepColor(d),
         mark: d.offloaded && loadable ? "↓" : { found: "✓", other_version: "≈", indexed: "?", missing: "✕" }[d.status] ?? "✕",
         status: pkgDepLabel(d),
@@ -9211,6 +9300,239 @@ async function pkgSetCreatorFlag(creator, flag) {
   );
 }
 
+// ---- Repair package ---------------------------------------------------------------
+// Tidies what VaM never uses: meta.json dependencies nothing inside refers to,
+// references to other packages for files it carries itself (pointed at its
+// own copy), and file names stored without the UTF-8 flag. Backed by
+// package_repair.rs; Fix Missing stays the tool for references to files it
+// doesn't have.
+
+const PKG_REPAIR = { running: false, taskId: null };
+
+// Where the original goes: the backup folder chosen in Fix Missing, else
+// fix-var-backup in the VaM folder. Never beside the package: VaM loads every
+// .var under AddonPackages, a backup there included.
+function pkgRepairBackupDir() {
+  const chosen = fmBackupDir();
+  if (chosen) return chosen;
+  const vam = String(vamDir() || "").replace(/[\\/]+$/, "");
+  return vam ? `${vam}\\fix-var-backup` : "";
+}
+
+function pkgRepairOpen() {
+  const rep = PKG.repair;
+  const item = PKG.item;
+  if (!item || PKG.missing) return;
+  if (!rep) {
+    showToast("Still reading the package…", "info");
+    return;
+  }
+  if (rep.error) {
+    showToast(`Couldn't read it: ${rep.error}`, "error");
+    return;
+  }
+  const card = $("pkg-repair-card");
+  if (!card) return;
+  const removable = rep.deps.filter((d) => pkgDepUnneeded(d.key));
+  const needed = rep.deps.filter((d) => d.status === "needed");
+  const reason = {
+    self: "It lists itself.",
+    unused: "Nothing inside refers to it.",
+    covered: "Only for files this package has itself.",
+  };
+  const nested = (d) => (d.nested ? `<span class="chip" title="Packages meta.json nests under it, copied from that package's own list">+${d.nested} nested</span>` : "");
+  const depRows = removable
+    .map(
+      (d, i) => `<label class="pkg-rp-row">
+        <input type="checkbox" data-rp-dep="${escapeAttribute(d.key)}" data-rp-covered="${d.status === "covered"}" checked />
+        <span class="pkg-rp-main"><b>${escapeHtml(d.key)}</b><small>${escapeHtml(reason[d.status])}${
+          d.status === "covered" ? ` ${pkgCount(d.inside, "reference", "references")}, pointed at its own copy.` : ""
+        }</small></span>${nested(d)}</label>`,
+    )
+    .join("");
+  const kinds = (d) =>
+    [d.plugins ? pkgCount(d.plugins, "plugin", "plugins") : "", d.morphs ? pkgCount(d.morphs, "morph", "morphs") : "", d.others ? pkgCount(d.others, "file", "files") : ""]
+      .filter(Boolean)
+      .join(", ");
+  const neededRows = needed
+    .map(
+      (d) => `<div class="pkg-rp-row is-info" title="${escapeAttribute(d.samples.join("\n"))}">
+        <span class="material-symbols-outlined">${d.plugins ? "extension" : d.morphs && !d.others ? "face" : "description"}</span>
+        <span class="pkg-rp-main"><b>${escapeHtml(d.key)}</b><small>Used for ${escapeHtml(kinds(d))}${
+          d.plugins ? ": VaM shows an error if it's missing." : d.morphs && !d.others ? ": VaM skips missing morphs quietly." : "."
+        }${d.inside ? ` ${pkgCount(d.inside, "other reference is", "other references are")} to files it has.` : ""}</small></span>${nested(d)}</div>`,
+    )
+    .join("");
+  const names = rep.names ?? [];
+  const nameRows = names
+    .slice(0, 8)
+    .map(
+      (n) => `<div class="pkg-rp-name"><span class="pkg-rp-bad" title="What VaM reads">${escapeHtml(n.stored)}</span>
+        <span class="material-symbols-outlined">arrow_forward</span><span class="pkg-rp-good">${escapeHtml(n.fixed)}</span></div>`,
+    )
+    .join("");
+  const backupDir = pkgRepairBackupDir();
+  const nothing = !removable.length && !rep.redirectable && !names.length;
+  card.innerHTML = `
+    <h3 id="pkg-repair-title">Repair ${escapeHtml(libTitle(item))}</h3>
+    <p class="pkg-rp-lead">Tidies what VaM doesn't use. Its scenes, looks and everything VaM loads stay the same.</p>
+    <div class="pkg-rp-body">
+      ${
+        nothing
+          ? `<div class="pkg-rp-ok"><span class="material-symbols-outlined">check_circle</span>Nothing to repair: its meta.json matches what's inside, and its file names are UTF-8.</div>`
+          : ""
+      }
+      ${
+        removable.length
+          ? `<section class="pkg-rp-sec"><h4>Remove from meta.json <small>${removable.length}</small></h4>
+             <p class="pkg-rp-note">Listed as dependencies, but VaM loads nothing from them for this package. This is why they showed as missing.</p>${depRows}</section>`
+          : ""
+      }
+      ${
+        rep.redirectable
+          ? `<section class="pkg-rp-sec"><label class="pkg-rp-row is-toggle"><input type="checkbox" id="pkg-rp-redirect" checked />
+             <span class="pkg-rp-main"><b>Point ${pkgCount(rep.redirectable, "reference", "references")} at its own copies</b>
+             <small>They name another package for a file this one has at the same path. VaM uses this package's copy instead.</small></span></label></section>`
+          : ""
+      }
+      ${
+        names.length
+          ? `<section class="pkg-rp-sec"><h4>Save file names as UTF-8 <small>${names.length}</small></h4>
+             <p class="pkg-rp-note">Stored by an old zip tool without the UTF-8 mark, so VaM reads them as the garble on the left.</p>
+             ${nameRows}${names.length > 8 ? `<p class="pkg-rp-note">and ${names.length - 8} more</p>` : ""}</section>`
+          : ""
+      }
+      ${
+        needed.length
+          ? `<section class="pkg-rp-sec"><h4>Still needed <small>${needed.length}</small></h4>
+             <p class="pkg-rp-note">Its files use these, so they stay in meta.json.${
+               needed.some((d) => d.plugins) ? " For a missing plugin, Fix references can point it at a copy you have." : ""
+             }</p>${neededRows}
+             ${needed.some((d) => d.plugins) ? `<button type="button" class="ghost-button fm-small" data-rp-act="fix-refs"><span class="material-symbols-outlined">healing</span>Fix references…</button>` : ""}</section>`
+          : ""
+      }
+    </div>
+    <div id="pkg-rp-progress" class="progress-card hidden"><div class="progress-track"><div class="progress-bar" id="pkg-rp-bar"></div></div><p id="pkg-rp-msg" class="panel-subtitle"></p></div>
+    <div class="pkg-rp-foot">
+      ${
+        nothing
+          ? ""
+          : `<label class="check-row"><input type="checkbox" id="pkg-rp-backup" ${fmBackup() ? "checked" : ""} />
+             <span>Keep a backup ${backupDir ? `in ${escapeHtml(backupDir)}` : "in fix-var-backup next to it"}</span></label>`
+      }
+      <div class="dialog-actions">
+        <button type="button" class="ghost-button" data-rp-act="cancel">${nothing ? "Close" : "Cancel"}</button>
+        ${nothing ? "" : `<button type="button" class="primary-button" data-rp-act="apply">Repair</button>`}
+      </div>
+    </div>`;
+  pkgRepairSync();
+  $("pkg-repair-backdrop")?.classList.remove("hidden");
+  card.querySelector('[data-rp-act="cancel"]')?.focus();
+}
+
+// A dependency only covered by its own copies goes only when they're pointed
+// there; the Repair button says how much it does.
+function pkgRepairSync() {
+  const card = $("pkg-repair-card");
+  if (!card) return;
+  const redirect = $("pkg-rp-redirect")?.checked ?? false;
+  for (const box of card.querySelectorAll('[data-rp-covered="true"]')) {
+    box.disabled = !redirect;
+    if (!redirect) box.checked = false;
+  }
+  const deps = card.querySelectorAll("[data-rp-dep]:checked").length;
+  const names = PKG.repair?.names?.length ?? 0;
+  const apply = card.querySelector('[data-rp-act="apply"]');
+  if (apply) {
+    const any = deps || redirect || names;
+    apply.disabled = !any || PKG_REPAIR.running;
+    apply.textContent = deps ? `Repair · remove ${deps}` : "Repair";
+  }
+}
+
+function pkgRepairClose() {
+  if (PKG_REPAIR.running) return;
+  $("pkg-repair-backdrop")?.classList.add("hidden");
+}
+
+async function pkgRepairApply() {
+  const item = PKG.item;
+  const card = $("pkg-repair-card");
+  if (!item || !card || PKG_REPAIR.running) return;
+  const request = {
+    file_path: item.file_path,
+    remove_deps: [...card.querySelectorAll("[data-rp-dep]:checked")].map((b) => b.getAttribute("data-rp-dep")),
+    redirect: $("pkg-rp-redirect")?.checked ?? false,
+    backup: $("pkg-rp-backup")?.checked ?? false,
+    backup_dir: pkgRepairBackupDir() || null,
+  };
+  PKG_REPAIR.running = true;
+  card.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
+  $("pkg-rp-progress")?.classList.remove("hidden");
+  const bar = $("pkg-rp-bar");
+  let result = null;
+  let error = "";
+  try {
+    const handle = await invoke("start_repair_package_task", { request });
+    PKG_REPAIR.taskId = handle?.id ?? null;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 250));
+      const p = await invoke("get_task_progress", { taskId: PKG_REPAIR.taskId });
+      if (!p) break;
+      if (bar) bar.style.width = `${Math.round(Math.max(0, Math.min(1, Number(p.progress ?? 0))) * 100)}%`;
+      const msg = $("pkg-rp-msg");
+      if (msg) msg.textContent = p.message ?? "";
+      if (p.done) {
+        if (p.error) error = String(p.error);
+        result = p.repair_result ?? null;
+        break;
+      }
+    }
+  } catch (e) {
+    error = String(e?.message || e);
+  } finally {
+    if (PKG_REPAIR.taskId != null) invoke("clear_task", { taskId: PKG_REPAIR.taskId }).catch(() => {});
+    PKG_REPAIR.taskId = null;
+    PKG_REPAIR.running = false;
+  }
+  if (error || !result) {
+    showToast(`Repair failed: ${error || "no answer"}`, "error", 8000);
+    pkgRepairOpen();
+    return;
+  }
+  const done = [
+    result.removed_deps.length ? `removed ${pkgCount(result.removed_deps.length, "dependency", "dependencies")} from meta.json` : "",
+    result.redirected ? `pointed ${pkgCount(result.redirected, "reference", "references")} at its own copies` : "",
+    result.renamed ? `saved ${pkgCount(result.renamed, "file name", "file names")} as UTF-8` : "",
+  ].filter(Boolean);
+  showToast(`${libTitle(item)}: ${done.join(", ") || "nothing changed"}.${result.backup_path ? " The original is backed up." : ""}`, "success", 7000);
+  addLog(`Repair ${item.package_id}: ${done.join("; ") || "nothing changed"}${result.backup_path ? ` (backup: ${result.backup_path})` : ""}`);
+  $("pkg-repair-backdrop")?.classList.add("hidden");
+  await vpRefreshAfterMutation().catch(() => {});
+  pkgOpen(PKG.item, { fromHistory: true });
+}
+
+function setupPkgRepair() {
+  const backdrop = $("pkg-repair-backdrop");
+  backdrop?.addEventListener("click", (event) => {
+    if (event.target === backdrop) {
+      pkgRepairClose();
+      return;
+    }
+    const act = event.target.closest?.("[data-rp-act]")?.getAttribute("data-rp-act");
+    if (act === "cancel") pkgRepairClose();
+    if (act === "apply") pkgRepairApply().catch((e) => addLog(`Repair: ${String(e)}`));
+    if (act === "fix-refs" && PKG.item) {
+      pkgRepairClose();
+      fmOpen(PKG.item.file_path, { scan: true });
+    }
+  });
+  backdrop?.addEventListener("change", pkgRepairSync);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !backdrop?.classList.contains("hidden")) pkgRepairClose();
+  });
+}
+
 function pkgMoreMenu(event) {
   const item = PKG.item;
   if (!item) return;
@@ -9221,6 +9543,7 @@ function pkgMoreMenu(event) {
     ...(item.__lib ? [{ label: "Show in VAR Packages", action: () => pkgRevealInLibrary(item) }] : []),
     { label: "View all images", action: () => vpImagesOpen(item.file_path) },
     { label: "Fix missing resources…", action: () => fmOpen(item.file_path, { scan: true }) },
+    ...(PKG.missing ? [] : [{ label: "Repair package…", action: () => pkgRepairOpen() }]),
     { label: "Export scene image", action: () => exportOneSceneImage(item.file_path, item.package_id) },
     { label: "Add download source…", action: () => sourceOpen({ packageId: item.package_id, fileName: item.file_name || `${item.package_id}.var` }) },
     ...(() => {
@@ -9374,6 +9697,9 @@ function pkgRunAction(act, event) {
       break;
     case "check-refs":
       fmOpen(item.file_path, { scan: true });
+      break;
+    case "repair":
+      pkgRepairOpen();
       break;
     case "fix-refs":
       fmOpen(item.file_path);
@@ -29209,6 +29535,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupVarPackagesMaintenance();
   setupVarPackagesSelection();
   setupVarPackagesDeleteModal();
+  setupPkgRepair();
   setupVarPackagesImagesModal();
   setupDepScanDialog();
 
