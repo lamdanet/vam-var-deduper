@@ -87,6 +87,10 @@
                 <span class="material-symbols-outlined">healing</span>
                 <span class="sidebar-label">Fix Missing</span>
               </a>
+              <a class="sidebar-link" href="#" data-sidebar-link="repair-vars">
+                <span class="material-symbols-outlined">build</span>
+                <span class="sidebar-label">Repair VARs</span>
+              </a>
               <a class="sidebar-link" href="#" data-sidebar-link="clean-by-file">
                 <span class="material-symbols-outlined">compress</span>
                 <span class="sidebar-label">Clean VARs</span>
@@ -1409,6 +1413,10 @@
            source (rendered by app.js). -->
       <section id="cvf-view" class="app-main missing-resources-view fm-view cv-view hidden"></section>
 
+      <!-- Repair VARs: unused dependencies, meta.json and file names, for one
+           package or the whole library (rendered by app.js). -->
+      <section id="rv-view" class="app-main missing-resources-view fm-view rv-view hidden"></section>
+
       <!-- Sources: paste a forum post or links, see the .var files they deliver
            (inside MEGA folders, Pixeldrain lists and .zip archives too) and save
            them as download sources; browse the saved ones (rendered by app.js). -->
@@ -2241,11 +2249,6 @@
       </div>
     </div>
 
-    <!-- Package Explorer: Repair package (filled by pkgRepairOpen). -->
-    <div id="pkg-repair-backdrop" class="dialog-backdrop hidden">
-      <div id="pkg-repair-card" class="dialog-card pkg-rp-card" role="dialog" aria-modal="true" aria-labelledby="pkg-repair-title"></div>
-    </div>
-
     <!-- VAR Packages image gallery. Sits after #vp-delete-backdrop and before
          #dialog-backdrop for the usual DOM-order stacking reason (every
          .dialog-backdrop shares z-index 1400). The zoom lightbox it opens is
@@ -2495,6 +2498,8 @@
             if (duView) duView.classList.add("hidden");
             var cvfView = document.getElementById("cvf-view");
             if (cvfView) cvfView.classList.add("hidden");
+            var rvView = document.getElementById("rv-view");
+            if (rvView) rvView.classList.add("hidden");
             settings.classList.add("hidden");
             buildDb.classList.add("hidden");
             varPackages.classList.add("hidden");
@@ -2507,6 +2512,9 @@
             } else if ((route === "fix-missing" || route === "missing-resources") && fmView) {
               fmView.classList.remove("hidden");
               if (window.__refreshFixMissingView) window.__refreshFixMissingView();
+            } else if (route === "repair-vars" && rvView) {
+              rvView.classList.remove("hidden");
+              if (window.__refreshRepairView) window.__refreshRepairView();
             } else if (route === "clean-by-file" && cvfView) {
               cvfView.classList.remove("hidden");
               if (window.__refreshCleanByFileView) window.__refreshCleanByFileView();
