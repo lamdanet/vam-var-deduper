@@ -17,6 +17,8 @@ release time, it fills it with the commit messages since the last release.
   ticks the dependencies nothing else needs, and warns as you tick if something still needs one
 - **Clean VARs**: each copy you can choose has Explore, Show file, Hub and (for images) a full-size
   view, plus a right-click menu; Package Explorer's Back returns to the page you came from
+- **Clean VARs uses Preferred / Avoid like Fix Missing** instead of favorites: the same marks (set on
+  either page) put preferred copies first, and avoided ones are never suggested or chosen by themselves
 
 ## [0.3.1] - 2026-10-15
 

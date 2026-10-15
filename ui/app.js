@@ -9739,6 +9739,9 @@ function fmPrefsChanged() {
   if (state.vpHasListing && !state.varPackagesLoading) refreshVarPackagesFromFolder({ keepLoaded: true }).catch(() => {});
   else if (typeof renderVarPackages === "function") renderVarPackages();
   if (Array.isArray(FM.refs)) fmRefresh();
+  // Clean VARs ranks its copies by the same marks.
+  cvMemo = { report: undefined };
+  if (CV.report && cvVisible()) cvRefresh();
 }
 
 function fmAutoOk(c) {
@@ -14542,6 +14545,7 @@ function cvOpen(target, { scan = false } = {}) {
       configOpen: null,
       db: new Map(),
       tabs: new Map(),
+      prefChange: null,
     });
   }
   cvShowView();
@@ -14638,9 +14642,31 @@ function cvStaysText(item) {
   return { short: "", long: "" };
 }
 
-// Favourite package 2, favourite creator 1 (the former Clean VARs page's Favorite Source).
-function cvFav(pkg) {
-  return isPackageFavorite(pkg) ? 2 : isCreatorFavoriteForPackage(pkg) ? 1 : 0;
+// Which copies to point at follows the same Preferred / Avoid marks as Fix
+// Missing (one list, set_replacement_pref): preferred first, avoided last and
+// never chosen by itself.
+
+// The order a file's copies are listed in: frozen while the same file stays
+// open, so marking a card doesn't move it away from the mouse.
+let cvOrderFor = null;
+let cvOrderPrefs = new Map();
+function cvOrderPref(pkg) {
+  if (cvOrderFor !== CV.selFile) {
+    cvOrderFor = CV.selFile;
+    cvOrderPrefs = new Map(FM_PREFS);
+  }
+  return cvOrderPrefs.get(pkg) ?? 0;
+}
+
+// Sort key for a copy: not avoided, installed, already a dependency, preferred.
+function cvCopyKey(c, pref = fmPref) {
+  const p = pref(c.package_id);
+  return [p === -1 ? 1 : 0, c.installed ? 0 : 1, c.already_dependency ? 0 : 1, p === 1 ? 0 : 1];
+}
+
+function cvCmpKeys(x, y) {
+  for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
 }
 
 // The packages with copies of the package's files, worked out once per check.
@@ -14658,7 +14684,7 @@ function cvPackages() {
       map.get(c.package_id).items.push({ item, copy: c });
     }
   }
-  const rank = (p) => (p.dep ? 0 : 1) * 4 + (p.installed ? 0 : 2) + (cvFav(p.pkg) ? 0 : 1);
+  const rank = (p) => (fmPref(p.pkg) === -1 ? 8 : 0) + (p.dep ? 0 : 1) * 4 + (p.installed ? 0 : 2) + (fmPref(p.pkg) === 1 ? 0 : 1);
   const pkgs = [...map.values()]
     .map((p) => ({ ...p, bytes: p.items.reduce((n, x) => n + Number(x.item.size ?? 0), 0) }))
     .sort((a, b) => rank(a) - rank(b) || b.bytes - a.bytes || b.items.length - a.items.length);
@@ -14672,18 +14698,15 @@ function cvPkg(pkg) {
 }
 
 // The copy a file is best pointed at when nothing is chosen: installed, one
-// the package already depends on, a favourite (package, then creator, as the
-// old page's Favorite Source). Never one without the whole resource.
+// the package already depends on, a preferred source. Never one without the
+// whole resource, and never one in a package you avoid (as in Fix Missing).
 function cvSuggest(item) {
-  const key = (c) => [c.installed ? 0 : 1, c.already_dependency ? 0 : 1, 2 - cvFav(c.package_id)];
-  const cmp = (a, b) => {
-    const x = key(a);
-    const y = key(b);
-    for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
-    return 0;
-  };
   if (!cvFree(item)) return null;
-  return (item.copies ?? []).filter(cvUsable).sort(cmp)[0] ?? null;
+  return (
+    (item.copies ?? [])
+      .filter((c) => cvUsable(c) && fmPref(c.package_id) !== -1)
+      .sort((a, b) => cvCmpKeys(cvCopyKey(a), cvCopyKey(b)))[0] ?? null
+  );
 }
 
 // Unchosen files with a copy to suggest (the former Clean VARs page's Auto Target).
@@ -14841,6 +14864,77 @@ function cvChoosePkg(p, on) {
     if (on) cvPick(item, copy);
     else if (CV.picks.get(item.key)?.pkg === p.pkg) CV.picks.delete(item.key);
   }
+}
+
+// The thumbs up / down pair on a copy, the same as Fix Missing's.
+function cvPrefButtons(pkg) {
+  const pref = fmPref(pkg);
+  const id = escapeAttribute(pkg);
+  return `<button type="button" class="fm-icon-btn fm-pref-btn${pref === 1 ? " is-pref" : ""}" data-cv-pref="${id}" data-cv-pref-val="1" aria-pressed="${pref === 1}"
+      title="${pref === 1 ? "Preferred source: click to clear" : "Prefer as a source: suggested over other packages from now on, here and in Fix Missing"}"><span class="material-symbols-outlined">thumb_up</span></button>
+    <button type="button" class="fm-icon-btn fm-pref-btn${pref === -1 ? " is-avoid" : ""}" data-cv-pref="${id}" data-cv-pref-val="-1" aria-pressed="${pref === -1}"
+      title="${pref === -1 ? "Avoided source: click to clear" : "Avoid as a source: never suggested or chosen by itself, a warning when you choose it"}"><span class="material-symbols-outlined">thumb_down</span></button>`;
+}
+
+// Prefer, avoid, or clear (clicking the same one again), as Fix Missing does,
+// acting on the choices already made: preferring switches them to it where it
+// has the file; avoiding moves them to the next suggested copy (or keeps one
+// with no other copy). Clicking again clears it and puts those choices back.
+async function cvSetPref(pkg, val) {
+  if (!invoke || !pkg) return;
+  const prev = fmPref(pkg);
+  const next = prev === val ? 0 : val;
+  try {
+    await invoke("set_replacement_pref", { packageId: pkg, pref: next });
+  } catch (e) {
+    showToast(`Couldn't save that: ${String(e?.message || e)}`, "error");
+    return;
+  }
+  if (next) FM_PREFS.set(pkg, next);
+  else FM_PREFS.delete(pkg);
+  cvMemo = { report: undefined };
+  const name = pkgIdParts(pkg).name;
+  const last = CV.prefChange;
+  if (last && last.pkg === pkg && next === last.prev) {
+    for (const [key, pick] of last.before) CV.picks.set(key, pick);
+    CV.prefChange = null;
+    fmPrefsChanged();
+    cvFlash(`${name} is as it was.`);
+    cvRefresh();
+    return;
+  }
+  const before = new Map();
+  let moved = 0;
+  let kept = 0;
+  for (const item of cvItems()) {
+    const pick = CV.picks.get(item.key);
+    if (!pick || !cvFree(item)) continue;
+    if (next === 1 && pick.pkg !== pkg) {
+      const c = (item.copies ?? []).find((x) => x.package_id === pkg && cvUsable(x));
+      if (c) {
+        before.set(item.key, pick);
+        cvPick(item, c);
+        moved += 1;
+      }
+    } else if (next === -1 && pick.pkg === pkg) {
+      const b = cvSuggest(item);
+      if (b) {
+        before.set(item.key, pick);
+        cvPick(item, b);
+        moved += 1;
+      } else kept += 1;
+    }
+  }
+  CV.prefChange = { pkg, prev, before };
+  fmPrefsChanged();
+  cvFlash(
+    next === 1
+      ? `${name} is preferred.${moved ? ` ${pkgCount(moved, "choice", "choices")} switched to it.` : ""}`
+      : next === -1
+        ? `${name} is avoided.${moved ? ` ${pkgCount(moved, "choice", "choices")} moved to the next best copy.` : ""}${kept ? ` ${kept} kept: no other copy.` : ""}`
+        : `${name}: no preference any more.`,
+  );
+  cvRefresh();
 }
 
 function cvFlash(text) {
@@ -15262,7 +15356,7 @@ function cvRenderSummary() {
       ? `<button type="button" class="ghost-button fm-small" data-cv-act="choose-deps"><span class="material-symbols-outlined">done_all</span>Point those ${openDep.length} at packages it already depends on</button>`
       : "",
     open.length
-      ? `<button type="button" class="ghost-button fm-small" data-cv-act="choose-suggested" title="Each file gets its Suggested copy: installed, already a dependency, a favourite first"><span class="material-symbols-outlined">auto_fix_high</span>Choose the suggested copy for ${open.length === items.length ? "all" : "the other"} ${open.length}</button>`
+      ? `<button type="button" class="ghost-button fm-small" data-cv-act="choose-suggested" title="Each file gets its Suggested copy: installed, already a dependency, a preferred source first; never one you avoid"><span class="material-symbols-outlined">auto_fix_high</span>Choose the suggested copy for ${open.length === items.length ? "all" : "the other"} ${open.length}</button>`
       : "",
   ].join("");
   // The totals are in the Clean card; this says only what to do about them.
@@ -15295,12 +15389,13 @@ function cvRenderStrip() {
      <button type="button" class="accent-button fm-small" data-cv-act="apply" ${t.chosen && !CV.applying ? "" : "disabled"}>${CV.applying ? "Cleaning…" : t.chosen ? `Clean (${t.chosen})` : "Clean"}</button>`;
 }
 
-// Chips for a package: already a dependency, not installed, a favourite.
+// Chips for a package: already a dependency, not installed, Preferred / Avoid.
 function cvPkgChips(p) {
   return [
     p.dep ? `<span class="chip fm-chip-good" title="The package already lists it as a dependency: pointing there adds none">already a dependency</span>` : "",
     p.installed === false ? `<span class="chip fm-chip-warn" title="Only the database knows it: the package won't work until it's downloaded">not installed</span>` : "",
-    cvFav(p.pkg) ? `<span class="chip fm-chip-pref"><span class="material-symbols-outlined">star</span>${cvFav(p.pkg) === 2 ? "Favourite" : "Favourite creator"}</span>` : "",
+    fmPref(p.pkg) === 1 ? `<span class="chip fm-chip-pref" title="You prefer it as a source: suggested first, here and in Fix Missing"><span class="material-symbols-outlined">thumb_up</span>Preferred</span>` : "",
+    fmPref(p.pkg) === -1 ? `<span class="chip fm-chip-avoid" title="You avoid it as a source: never suggested or chosen by itself"><span class="material-symbols-outlined">thumb_down</span>Avoid</span>` : "",
   ].join("");
 }
 
@@ -15513,13 +15608,14 @@ function cvRenderDetail() {
         file && /\.(png|jpe?g)$/i.test(c.internal_path)
           ? `<button type="button" class="fm-icon-btn" data-cv-zoom-copy="${escapeAttribute(file)}" data-cv-zoom-entry="${escapeAttribute(c.internal_path)}" title="See this copy of the image"><span class="material-symbols-outlined">image_search</span></button>`
           : "",
+        cvPrefButtons(c.package_id),
         `<button type="button" class="fm-icon-btn" data-cv-explore="${name}" data-cv-explore-file="${escapeAttribute(file)}" title="Explore ${name}: contents, dependencies, what uses it"><span class="material-symbols-outlined">space_dashboard</span></button>`,
         file
           ? `<button type="button" class="fm-icon-btn" data-cv-show="${escapeAttribute(file)}" title="Show the file"><span class="material-symbols-outlined">folder_open</span></button>`
           : "",
         hubLinkHtml(c.package_id),
       ].join("");
-      return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}${usable ? "" : " is-disabled"}" role="radio" tabindex="${usable ? 0 : -1}" aria-checked="${chosen}" aria-disabled="${!usable}" data-cv-copy="${escapeAttribute(c.package_id)}">
+      return `<div class="fm-cand-row has-thumb${chosen ? " is-selected" : ""}${usable ? "" : " is-disabled"}${fmPref(c.package_id) === -1 ? " is-avoided" : ""}" role="radio" tabindex="${usable ? 0 : -1}" aria-checked="${chosen}" aria-disabled="${!usable}" data-cv-copy="${escapeAttribute(c.package_id)}">
           ${p.installed === false || !p.file ? `<span class="fm-cand-thumb iz-no-thumb"><span class="material-symbols-outlined">deployed_code</span></span>` : `${libThumbHtml(p.file, libGradient(p.pkg), "fm-cand-thumb")}</div>`}
           <div class="fm-cand-top">
             <span class="fm-cand-pick"><span class="material-symbols-outlined fm-cand-radio">${chosen ? "radio_button_checked" : "radio_button_unchecked"}</span><span class="fm-cand-name" title="${escapeAttribute(`${c.package_id}:/${c.internal_path}`)}">${fmPkgLabelHtml(c.package_id)}</span></span>
@@ -15535,7 +15631,9 @@ function cvRenderDetail() {
         </div>`;
     })
     .join("");
-  const folderCards = cardsFor([...local].sort((a, b) => (a === suggest ? -1 : b === suggest ? 1 : 0)));
+  // Usable copies first (one missing part of the resource can't be chosen).
+  const cardKey = (c) => [cvUsable(c) ? 0 : 1, ...cvCopyKey(c, cvOrderPref)];
+  const folderCards = cardsFor([...local].sort((a, b) => cvCmpKeys(cardKey(a), cardKey(b))));
   const dbList = !db || (db.loading && !dbCopies.length)
     ? `<p class="fm-none-line"><span class="material-symbols-outlined fm-spin">progress_activity</span> Looking in the database…</p>`
     : db.error && !dbCopies.length
@@ -15678,6 +15776,10 @@ function cvOnClick(e) {
     fmExplore(el.getAttribute("data-cv-explore"), el.getAttribute("data-cv-explore-file"));
     return;
   }
+  if ((el = q("[data-cv-pref]"))) {
+    cvSetPref(el.getAttribute("data-cv-pref"), Number(el.getAttribute("data-cv-pref-val")));
+    return;
+  }
   if ((el = q("[data-cv-zoom-copy]"))) {
     const entry = el.getAttribute("data-cv-zoom-entry");
     invoke("get_var_image", { filePath: el.getAttribute("data-cv-zoom-copy"), entry })
@@ -15710,7 +15812,10 @@ function cvOnClick(e) {
     const c = [...(item?.copies ?? []), ...(CV.db.get(item?.key)?.copies ?? [])].find((x) => x.package_id === pkgId);
     if (item && c && cvUsable(c) && cvFree(item)) {
       if (CV.picks.get(item.key)?.pkg === c.package_id) CV.picks.delete(item.key);
-      else cvPick(item, c);
+      else {
+        cvPick(item, c);
+        if (fmPref(c.package_id) === -1) cvFlash("Chosen, though you marked that package to avoid.");
+      }
       cvRefresh();
     }
     return;
