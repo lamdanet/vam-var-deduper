@@ -5,6 +5,7 @@
 // behind (test exe + pdb in deps/, plus an incremental cache). For each kind of
 // build (app or tests, full build or check, per profile) this keeps only the
 // newest and deletes the rest. Dependencies and build-script outputs are left alone.
+// It also deletes test scratch folders a failed or stopped test run left behind.
 //
 //   node scripts/prune-target.mjs [--dry-run] [target-dir ...]
 //
@@ -15,6 +16,7 @@
 // CARGO_TARGET_DIR too, if it set one).
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -129,3 +131,36 @@ for (const target of targets) {
 
 const gb = (freed / 1024 ** 3).toFixed(2);
 console.log(`${dryRun ? "Would free" : "Freed"} ${gb} GB of old ${crate} build output` + (failed ? ` (${failed} in use, skipped)` : ""));
+
+// Scratch folders the tests leave behind when a run fails or is stopped:
+// tmp_* in the repo root, and vvd_* / vam_* / vam-var-deduper-test-* in the
+// system temp folder (the app's own vam-var-archives there is left alone).
+// Only ones untouched for an hour, so a test still running keeps its folder.
+freed = 0;
+failed = 0;
+const scratch = [
+  [root, /^tmp_/],
+  [os.tmpdir(), /^(?:vvd_|vam_|vam-var-deduper-test-)/],
+];
+const hourAgo = Date.now() - 60 * 60 * 1000;
+let scratchCount = 0;
+for (const [dir, pattern] of scratch) {
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((n) => pattern.test(n));
+  } catch {}
+  for (const name of names) {
+    const p = path.join(dir, name);
+    try {
+      if (!fs.statSync(p).isDirectory() || newestMtime(p) > hourAgo) continue;
+    } catch {
+      continue;
+    }
+    scratchCount++;
+    remove(p);
+  }
+}
+if (scratchCount) {
+  const mb = (freed / 1024 ** 2).toFixed(0);
+  console.log(`${dryRun ? "Would free" : "Freed"} ${mb} MB in ${scratchCount} test scratch folders` + (failed ? ` (${failed} in use, skipped)` : ""));
+}
