@@ -13,26 +13,18 @@ release time, it fills it with the commit messages since the last release.
 ## [Unreleased]
 
 ### Added
-- **Repair VARs** page: for one package or the whole library, shows everything wrong with a package
-  together and repairs it in one go: unused dependencies (listed in meta.json, used by nothing inside,
-  often with long nested chains), meta.json (creator and name that don't match the file, packages it
-  uses but doesn't list, format), and file names not saved as UTF-8, which VaM shows garbled.
-  Package Explorer now says which missing dependencies VaM really needs
+- **Repair VARs**: for one package or the whole library, removes meta.json dependencies nothing
+  uses, fixes meta.json (creator, name, unlisted packages) and saves garbled file names as UTF-8
+- Package Explorer says which missing dependencies VaM really needs
 
 ### Changed
-- **Delete dialog redesigned**: it opens already showing what uses the package and what it uses,
-  ticks the dependencies nothing else needs, and warns as you tick if something still needs one
-- **Clean VARs**: each copy you can choose has Explore, Show file, Hub and (for images) a full-size
-  view, plus a right-click menu; Package Explorer's Back returns to the page you came from
-- **Clean VARs uses Preferred / Avoid like Fix Missing** instead of favorites: the same marks (set on
-  either page) put preferred copies first, and avoided ones are never suggested or chosen by themselves
+- **Delete dialog** shows at once what uses the package and what it uses, with thumbnails
+- **Clean VARs**: details for every copy you can choose, and Preferred / Avoid instead of favorites
+- Package Explorer's Back returns to the page you came from
 
 ### Fixed
-- Fix Missing and Internalize Resources keep backups in fix-var-backup in the VaM folder when no
-  folder is chosen, instead of asking first; never inside AddonPackages, where VaM would load them
-- Package Explorer showed the creator from meta.json instead of the package name ("by kesuen" for a
-  vamxw package); it now shows the package's creator, with meta.json's name beside it when it differs
-- "Prefer their copies" for a creator is gone: Clean VARs chooses by Preferred / Avoid now
+- Package Explorer showed meta.json's creator instead of the package's ("by kesuen" for vamxw)
+- Backups go to fix-var-backup in the VaM folder by default, never inside AddonPackages
 
 ## [0.3.1] - 2026-10-15
 
