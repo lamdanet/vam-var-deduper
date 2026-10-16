@@ -65,7 +65,9 @@ pub(crate) struct RepairDep {
     pub(crate) key: String,
     /// `"self"` (the package itself) | `"unused"` (nothing inside refers to
     /// it) | `"covered"` (every reference is to a file this package has) |
-    /// `"needed"` (some reference is to a file only it has).
+    /// `"skippable"` (not in the library, and used only for morphs, which VaM
+    /// skips when it can't find them) | `"needed"` (some reference is to a
+    /// file only it has).
     pub(crate) status: String,
     pub(crate) refs: u32,
     /// References to files this package also has.
@@ -79,6 +81,8 @@ pub(crate) struct RepairDep {
     /// loads the package itself (`GetLatestPackageUid("Creator.Name")`).
     /// Any of these keeps it: what the code does with it can't be seen.
     pub(crate) named: u32,
+    /// In the library (any version); `None` when the library isn't known.
+    pub(crate) installed: Option<bool>,
     /// Packages its meta.json nests under this one (a snapshot of that
     /// package's own tree).
     pub(crate) nested: u32,
@@ -150,6 +154,14 @@ pub(crate) struct RepairRequest {
     /// nothing else in it changes.
     #[serde(default)]
     pub(crate) clean_meta: bool,
+    /// Leave out what VaM skips: the morph entries for "skippable"
+    /// dependencies, and those dependencies.
+    #[serde(default)]
+    pub(crate) drop_skipped: bool,
+    /// Clear the lists meta.json copies under the dependencies it keeps; VaM
+    /// reads those from each dependency itself.
+    #[serde(default)]
+    pub(crate) trim_nested: bool,
     #[serde(default)]
     pub(crate) backup: bool,
     #[serde(default)]
@@ -163,6 +175,10 @@ pub(crate) struct RepairResult {
     pub(crate) added_deps: Vec<String>,
     /// meta.json fields set: "creator", "package_name", "format".
     pub(crate) meta_fixed: Vec<String>,
+    /// Morph entries left out (for skippable dependencies).
+    pub(crate) morphs_dropped: u32,
+    /// Nested entries cleared under the dependencies it keeps.
+    pub(crate) nested_trimmed: u32,
     pub(crate) redirected: u32,
     pub(crate) renamed: u32,
     pub(crate) backup_path: Option<String>,
@@ -490,6 +506,7 @@ fn scan(path: &Path) -> Result<Scan> {
                 morphs: g.map_or(0, |g| g.morphs),
                 others: g.map_or(0, |g| g.others),
                 named,
+                installed: None,
                 nested: count_nested(v),
                 samples: g.map(|g| g.samples.clone()).unwrap_or_default(),
             }
@@ -571,21 +588,100 @@ fn meta_issues(package_id: &str, meta: Option<&Value>, raw: Option<&[u8]>, undec
     out
 }
 
+/// What the library knows that a package can't: which families are installed
+/// (for "skippable"), and their licenses (for dependencies it adds).
+#[derive(Default)]
+pub(crate) struct Library {
+    pub(crate) families: Option<HashSet<String>>,
+    pub(crate) licenses: HashMap<String, String>,
+}
+
+impl Library {
+    /// From the VAR Packages listing when it's loaded; else the file names in
+    /// `roots` (a walk, no archive is opened), without licenses.
+    fn from_state(state: &AppState, roots: &[String]) -> Self {
+        {
+            let cache = state.var_packages_folder_cache.lock().ok();
+            if let Some(items) = cache.as_ref().and_then(|c| c.as_ref()).map(|c| &c.items) {
+                return Self {
+                    families: Some(items.iter().map(|it| base_lc(&it.package_id)).collect()),
+                    licenses: licenses(items),
+                };
+            }
+        }
+        let families = library_files(state, roots).ok().filter(|f| !f.is_empty()).map(|files| {
+            files
+                .iter()
+                .filter_map(|(p, _)| p.file_stem().and_then(|s| s.to_str()).map(base_lc))
+                .collect()
+        });
+        Self { families, licenses: HashMap::new() }
+    }
+}
+
+/// A needed dependency that isn't installed and is used only for morphs
+/// (outside its own files): VaM skips those morphs, so nothing changes in VaM
+/// without them.
+fn mark_skippable(report: &mut RepairReport, lib: &Library) {
+    let Some(families) = &lib.families else { return };
+    for d in &mut report.deps {
+        let installed = families.contains(&base_lc(&d.key));
+        d.installed = Some(installed);
+        if d.status == "needed" && !installed && d.morphs > 0 && d.plugins == 0 && d.others == 0 && d.named == 0 {
+            d.status = "skippable".to_string();
+        }
+    }
+}
+
+/// Removes, from every array in `v`, the objects whose `uid` points into one
+/// of `families` (a morph entry: `{"uid": "Pkg.1:/Custom/…/x.vmi", …}`).
+/// Returns how many went.
+fn drop_uids(v: &mut Value, families: &HashSet<String>) -> u32 {
+    let points_into = |o: &serde_json::Map<String, Value>| {
+        o.get("uid").and_then(Value::as_str).is_some_and(|uid| {
+            uid.split_once(":/").is_some_and(|(pkg, _)| families.contains(&base_lc(pkg)))
+        })
+    };
+    let mut n = 0;
+    match v {
+        Value::Array(items) => {
+            let before = items.len();
+            items.retain(|x| !x.as_object().is_some_and(points_into));
+            n += (before - items.len()) as u32;
+            for x in items {
+                n += drop_uids(x, families);
+            }
+        }
+        Value::Object(map) => {
+            for x in map.values_mut() {
+                n += drop_uids(x, families);
+            }
+        }
+        _ => {}
+    }
+    n
+}
+
 /// What could be repaired in a package. Reads its text files once.
 #[tauri::command(async)]
-pub(crate) fn inspect_package_repair(file_path: String) -> Result<RepairReport, String> {
-    scan(Path::new(&file_path)).map(|s| s.report).map_err(|e| e.to_string())
+pub(crate) fn inspect_package_repair(file_path: String, roots: Option<Vec<String>>, state: State<'_, AppState>) -> Result<RepairReport, String> {
+    let lib = Library::from_state(&state, &roots.unwrap_or_default());
+    let mut report = scan(Path::new(&file_path)).map(|s| s.report).map_err(|e| e.to_string())?;
+    mark_skippable(&mut report, &lib);
+    Ok(report)
 }
 
 /// Rewrites the package with the chosen repairs (file names are always put
 /// right when it's rewritten). Binary entries are copied without
 /// recompressing; the new file replaces the old one only once it's complete.
-/// `licenses`: lowercase family -> licenseType of the installed package, for
-/// dependencies it adds.
-pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String, String>, progress: Progress<'_>) -> Result<RepairResult> {
+/// `lib`: what's installed (for skippable dependencies) and their licenses
+/// (for dependencies it adds).
+pub(crate) fn repair_package(request: &RepairRequest, lib: &Library, progress: Progress<'_>) -> Result<RepairResult> {
+    let licenses = &lib.licenses;
     let target = Path::new(&request.file_path);
     progress(0.01, "Reading the package");
-    let found = scan(target)?;
+    let mut found = scan(target)?;
+    mark_skippable(&mut found.report, lib);
     let redirects = if request.redirect { found.redirects.clone() } else { BTreeMap::new() };
     let mut result = RepairResult::default();
 
@@ -609,7 +705,17 @@ pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String,
         Vec::new()
     };
     let clean = request.clean_meta && fixable("format");
-    let meta_changes = !remove.is_empty() || fix_creator || fix_name || !add.is_empty() || clean;
+    // Skippable dependencies: their morph entries are left out of the text
+    // files, then the dependency goes if that took all of them.
+    let skipped: Vec<&RepairDep> = if request.drop_skipped {
+        found.report.deps.iter().filter(|d| d.status == "skippable").collect()
+    } else {
+        Vec::new()
+    };
+    let strip: HashSet<String> = skipped.iter().map(|d| base_lc(&d.key)).collect();
+    let mut dropped_by_family: HashMap<String, u32> = HashMap::new();
+    let trim = request.trim_nested && found.report.deps.iter().any(|d| d.nested > 0 && !remove.contains(&d.key));
+    let meta_changes = !remove.is_empty() || fix_creator || fix_name || !add.is_empty() || clean || !strip.is_empty() || trim;
     if !meta_changes && redirects.is_empty() && found.names.is_empty() {
         return Err(anyhow!(NOTHING_TO_REPAIR));
     }
@@ -647,6 +753,8 @@ pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String,
         let options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .system(System::Unix);
+        // Written last, once the text files say which dependencies are left.
+        let mut meta_entry: Option<(String, Vec<u8>)> = None;
         for i in 0..source.len() {
             written(done, total);
             let mut entry = source.by_index(i)?;
@@ -662,11 +770,64 @@ pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String,
             if inner.eq_ignore_ascii_case(META_PATH) {
                 let mut raw = Vec::new();
                 entry.read_to_end(&mut raw)?;
+                meta_entry = Some((name, raw));
+                continue;
+            } else if (!redirects.is_empty() || !strip.is_empty()) && holds_refs(&inner) {
+                let mut raw = Vec::new();
+                entry.read_to_end(&mut raw)?;
+                if !redirects.is_empty() {
+                    if let Some(updated) = rewrite_external_text_payload(&raw, &redirects) {
+                        if let Some((before, _)) = decode_text(&raw) {
+                            result.redirected += redirects.keys().map(|k| before.matches(k.as_str()).count() as u32).sum::<u32>();
+                        }
+                        raw = updated;
+                    }
+                }
+                let lc = inner.to_ascii_lowercase();
+                if !strip.is_empty() && (lc.ends_with(".json") || lc.ends_with(".vap")) {
+                    if let Ok(mut doc) = read_json_bytes(&raw, &inner) {
+                        let mut per: HashMap<String, u32> = HashMap::new();
+                        for fam in &strip {
+                            let n = drop_uids(&mut doc, &HashSet::from([fam.clone()]));
+                            if n > 0 {
+                                per.insert(fam.clone(), n);
+                            }
+                        }
+                        if !per.is_empty() {
+                            for (fam, n) in per {
+                                *dropped_by_family.entry(fam).or_default() += n;
+                                result.morphs_dropped += n;
+                            }
+                            raw = dump_json_bytes(&doc)?;
+                        }
+                    }
+                }
+                out.start_file(&name, options)?;
+                out.write_all(&raw)?;
+                continue;
+            } else if found.names.contains_key(&i) {
+                out.raw_copy_file_rename(entry, &name)?;
+            } else {
+                out.raw_copy_file(entry)?;
+            }
+        }
+        if let Some((name, raw)) = meta_entry.take() {
                 if !meta_changes {
                     // Untouched: the bytes it had, BOM and all.
                     out.start_file(&name, options)?;
                     out.write_all(&raw)?;
-                    continue;
+                    out.finish()?;
+                    return Ok(());
+                }
+                // A skippable dependency goes only when every morph entry for
+                // it was left out; otherwise something still refers to it.
+                let mut remove = remove.clone();
+                for d in &skipped {
+                    if dropped_by_family.get(&base_lc(&d.key)).copied().unwrap_or(0) >= d.morphs {
+                        remove.insert(d.key.clone());
+                    } else {
+                        result.kept_deps.push(d.key.clone());
+                    }
                 }
                 let mut meta = read_json_bytes(&raw, "meta.json")?;
                 if let Some(obj) = meta.as_object_mut() {
@@ -699,25 +860,20 @@ pub(crate) fn repair_package(request: &RepairRequest, licenses: &HashMap<String,
                         deps.insert(pkg.clone(), serde_json::json!({ "licenseType": license, "dependencies": {} }));
                         result.added_deps.push(pkg.clone());
                     }
+                    if trim {
+                        for v in deps.values_mut() {
+                            let n = count_nested(v);
+                            if n > 0 {
+                                if let Some(o) = v.as_object_mut() {
+                                    o.insert("dependencies".into(), Value::Object(serde_json::Map::new()));
+                                    result.nested_trimmed += n;
+                                }
+                            }
+                        }
+                    }
                 }
                 out.start_file(&name, options)?;
                 out.write_all(&dump_json_bytes(&meta)?)?;
-            } else if !redirects.is_empty() && holds_refs(&inner) {
-                let mut raw = Vec::new();
-                entry.read_to_end(&mut raw)?;
-                if let Some(updated) = rewrite_external_text_payload(&raw, &redirects) {
-                    if let Some((before, _)) = decode_text(&raw) {
-                        result.redirected += redirects.keys().map(|k| before.matches(k.as_str()).count() as u32).sum::<u32>();
-                    }
-                    raw = updated;
-                }
-                out.start_file(&name, options)?;
-                out.write_all(&raw)?;
-            } else if found.names.contains_key(&i) {
-                out.raw_copy_file_rename(entry, &name)?;
-            } else {
-                out.raw_copy_file(entry)?;
-            }
         }
         out.finish()?;
         Ok(())
@@ -747,6 +903,8 @@ pub(crate) struct RepairSummary {
     /// Nested entries under those, i.e. what made it look short of packages.
     pub(crate) unneeded_nested: u32,
     pub(crate) redirectable: u32,
+    /// Dependencies used only for morphs VaM can't find (not in the library).
+    pub(crate) skippable: u32,
     pub(crate) names: u32,
     /// Fixable meta.json issue codes.
     pub(crate) meta: Vec<String>,
@@ -761,24 +919,26 @@ pub(crate) struct RepairScanResult {
     pub(crate) packages: Vec<RepairSummary>,
 }
 
-fn summarize(path: &Path, size: u64) -> Option<RepairSummary> {
+fn summarize(path: &Path, size: u64, lib: &Library) -> Option<RepairSummary> {
     let package_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let base = RepairSummary { file_path: path.display().to_string(), package_id, size_bytes: size, ..RepairSummary::default() };
-    let report = match scan(path) {
+    let mut report = match scan(path) {
         Ok(found) => found.report,
         Err(e) => return Some(RepairSummary { error: Some(e.to_string()), ..base }),
     };
+    mark_skippable(&mut report, lib);
     let unneeded: Vec<&RepairDep> = report.deps.iter().filter(|d| matches!(d.status.as_str(), "self" | "unused" | "covered")).collect();
     let summary = RepairSummary {
         unneeded: unneeded.len() as u32,
         covered: unneeded.iter().filter(|d| d.status == "covered").count() as u32,
         unneeded_nested: unneeded.iter().map(|d| d.nested).sum(),
         redirectable: report.redirectable,
+        skippable: report.deps.iter().filter(|d| d.status == "skippable").count() as u32,
         names: report.names.len() as u32,
         meta: report.meta.iter().filter(|m| m.fixable).map(|m| m.code.clone()).collect(),
         ..base
     };
-    let any = summary.unneeded + summary.redirectable + summary.names > 0 || !summary.meta.is_empty();
+    let any = summary.unneeded + summary.redirectable + summary.skippable + summary.names > 0 || !summary.meta.is_empty();
     any.then_some(summary)
 }
 
@@ -835,6 +995,7 @@ fn register_task(state: &AppState, phase: &str, message: &str) -> Result<(u64, A
 #[tauri::command]
 pub(crate) fn start_repair_scan_task(roots: Vec<String>, state: State<'_, AppState>) -> Result<TaskHandle, String> {
     let files = library_files(&state, &roots).map_err(|e| e.to_string())?;
+    let lib = Library::from_state(&state, &roots);
     let (task_id, cancel) = register_task(&state, "repair_scan_starting", "Listing packages")?;
     let tasks = Arc::clone(&state.tasks);
     thread::spawn(move || {
@@ -848,7 +1009,7 @@ pub(crate) fn start_repair_scan_task(roots: Vec<String>, state: State<'_, AppSta
                 }
                 // A bug on one odd package must not stall the whole check: it
                 // shows as that package's error instead.
-                let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| summarize(path, *size))).unwrap_or_else(|_| {
+                let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| summarize(path, *size, &lib))).unwrap_or_else(|_| {
                     Some(RepairSummary {
                         file_path: path.display().to_string(),
                         package_id: path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string(),
@@ -900,13 +1061,12 @@ pub(crate) struct RepairBatchResult {
 /// Repairs packages one after another. One that fails (locked, damaged) is
 /// reported and the rest go on; cancel_task stops before the next one.
 #[tauri::command]
-pub(crate) fn start_repair_packages_task(requests: Vec<RepairRequest>, state: State<'_, AppState>) -> Result<TaskHandle, String> {
-    let licenses = state
-        .var_packages_folder_cache
-        .lock()
-        .ok()
-        .and_then(|c| c.as_ref().map(|c| licenses(&c.items)))
-        .unwrap_or_default();
+pub(crate) fn start_repair_packages_task(
+    requests: Vec<RepairRequest>,
+    roots: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> Result<TaskHandle, String> {
+    let lib = Library::from_state(&state, &roots.unwrap_or_default());
     let (task_id, cancel) = register_task(&state, "repair_starting", "Starting the repair")?;
     let tasks = Arc::clone(&state.tasks);
     let folder_cache = Arc::clone(&state.var_packages_folder_cache);
@@ -924,7 +1084,7 @@ pub(crate) fn start_repair_packages_task(requests: Vec<RepairRequest>, state: St
                 let msg = if requests.len() > 1 { format!("{} of {}: {name}: {m}", i + 1, requests.len()) } else { m.to_string() };
                 set_task_progress(&tasks, task_id, "repair_writing", (i as f64 + f) / n, msg);
             };
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| repair_package(request, &licenses, &step)))
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| repair_package(request, &lib, &step)))
                 .unwrap_or_else(|_| Err(anyhow!("an internal error (see the log); the package was left as it was")));
             match outcome {
                 Ok(result) => out.done.push(RepairDone { file_path: request.file_path.clone(), result }),
@@ -1051,10 +1211,12 @@ mod tests {
                 fix_package_name: false,
                 add_undeclared: false,
                 clean_meta: false,
+                drop_skipped: false,
+                trim_nested: false,
                 backup: true,
                 backup_dir: Some(dir.join("backup").display().to_string()),
             },
-            &HashMap::new(),
+            &Library::default(),
             &crate::utils::no_progress,
         )
         .unwrap();
@@ -1153,10 +1315,12 @@ mod tests {
                 fix_package_name: true,
                 add_undeclared: true,
                 clean_meta: true,
+                drop_skipped: false,
+                trim_nested: false,
                 backup: false,
                 backup_dir: None,
             },
-            &licenses,
+            &Library { families: None, licenses },
             &crate::utils::no_progress,
         )
         .unwrap();
@@ -1171,6 +1335,72 @@ mod tests {
         assert_eq!(v["creatorName"], "vamxw");
         assert_eq!(v["packageName"], "Fox");
         assert_eq!(v["dependencies"]["MacGruber.PostMagic.3"]["licenseType"], "CC BY-SA");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skipped_morphs_and_nested_lists_go() {
+        let dir = tmp("skip");
+        let var = dir.join("me.Scene.1.var");
+        write_var(
+            &var,
+            json!({"dependencies": {
+                "CR400.qingyi.latest": {"dependencies": {"TSX.Thin.2": {}, "LIII.xila.latest": {}}},
+                "Have.Morphs.1": {"dependencies": {"X.Y.1": {}}},
+                "lv.Plugin.1": {},
+            }}),
+            &[(
+                "Saves/scene/s.json",
+                r#"{"atoms":[{"storables":[{"id":"geometry","morphs":[
+                    {"uid":"CR400.qingyi.latest:/Custom/Atom/Person/Morphs/female/a.vmi","name":"a","value":"0.5"},
+                    {"uid":"Have.Morphs.1:/Custom/Atom/Person/Morphs/female/b.vmi","name":"b","value":"1"},
+                    {"name":"c","value":"0.2"}]},
+                    {"id":"PluginManager","plugins":{"plugin#0":"lv.Plugin.1:/Custom/Scripts/p.cslist"}}]}]}"#,
+            )],
+            &[],
+        );
+        // "Have.Morphs" is installed; CR400 and lv.Plugin aren't.
+        let lib = Library { families: Some(HashSet::from(["have.morphs".to_string()])), licenses: HashMap::new() };
+        let mut r = scan(&var).unwrap().report;
+        mark_skippable(&mut r, &lib);
+        let st = |k: &str| r.deps.iter().find(|d| d.key == k).unwrap().status.clone();
+        assert_eq!(st("CR400.qingyi.latest"), "skippable");
+        assert_eq!(st("Have.Morphs.1"), "needed", "installed: its morphs load");
+        assert_eq!(st("lv.Plugin.1"), "needed", "a missing plugin is an error, not skipped");
+
+        let res = repair_package(
+            &RepairRequest {
+                file_path: var.display().to_string(),
+                remove_deps: vec![],
+                remove_unneeded: true,
+                redirect: true,
+                fix_creator: false,
+                fix_package_name: false,
+                add_undeclared: false,
+                clean_meta: false,
+                drop_skipped: true,
+                trim_nested: true,
+                backup: false,
+                backup_dir: None,
+            },
+            &lib,
+            &crate::utils::no_progress,
+        )
+        .unwrap();
+        assert_eq!(res.removed_deps, ["CR400.qingyi.latest"]);
+        assert_eq!(res.morphs_dropped, 1);
+        assert_eq!(res.nested_trimmed, 1, "the one under Have.Morphs; CR400's went with it");
+        let mut z = ZipArchive::new(fs::File::open(&var).unwrap()).unwrap();
+        let mut m = String::new();
+        z.by_name("meta.json").unwrap().read_to_string(&mut m).unwrap();
+        let meta: Value = serde_json::from_str(&m).unwrap();
+        let keys: Vec<&String> = meta["dependencies"].as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["Have.Morphs.1", "lv.Plugin.1"]);
+        assert_eq!(meta["dependencies"]["Have.Morphs.1"]["dependencies"], json!({}));
+        let mut sc = String::new();
+        z.by_name("Saves/scene/s.json").unwrap().read_to_string(&mut sc).unwrap();
+        assert!(!sc.contains("CR400.qingyi"), "{sc}");
+        assert!(sc.contains("Have.Morphs.1:/") && sc.contains("\"name\": \"c\"") || sc.contains("\"name\":\"c\""), "{sc}");
         let _ = fs::remove_dir_all(dir);
     }
 }
