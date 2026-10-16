@@ -12,6 +12,8 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-16
+
 ### Added
 - **Repair VARs**: for one package or the whole library, removes meta.json dependencies nothing
   uses, fixes meta.json (creator, name, unlisted packages) and saves garbled file names as UTF-8
