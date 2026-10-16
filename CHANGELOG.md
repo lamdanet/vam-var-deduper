@@ -12,6 +12,8 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-16
+
 ### Added
 - **Repair VARs** can leave out morphs VaM skips (from packages you don't have) with their
   dependency, and trim the dependency lists copied under the ones it keeps
