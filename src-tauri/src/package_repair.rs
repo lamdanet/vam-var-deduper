@@ -159,7 +159,8 @@ pub(crate) struct RepairRequest {
     #[serde(default)]
     pub(crate) drop_skipped: bool,
     /// Clear the lists meta.json copies under the dependencies it keeps; VaM
-    /// reads those from each dependency itself.
+    /// reads those from each dependency itself. A package its files use that
+    /// was only nested becomes a dependency of its own first.
     #[serde(default)]
     pub(crate) trim_nested: bool,
     #[serde(default)]
@@ -221,6 +222,23 @@ fn ref_kind(path: &str) -> &'static str {
     } else {
         "other"
     }
+}
+
+/// The licenseType a nested entry for `pkg`'s family has, anywhere under `v`.
+fn nested_license(v: &Value, pkg: &str) -> Option<String> {
+    let nested = v.get("dependencies")?.as_object()?;
+    let want = base_lc(pkg);
+    for (k, child) in nested {
+        if base_lc(k) == want {
+            if let Some(l) = child.get("licenseType").and_then(Value::as_str) {
+                return Some(l.to_string());
+            }
+        }
+        if let Some(l) = nested_license(child, pkg) {
+            return Some(l);
+        }
+    }
+    None
 }
 
 fn count_nested(v: &Value) -> u32 {
@@ -699,7 +717,10 @@ pub(crate) fn repair_package(request: &RepairRequest, lib: &Library, progress: P
     let fixable = |code: &str| found.report.meta.iter().any(|m| m.code == code && m.fixable);
     let fix_creator = request.fix_creator && fixable("creator");
     let fix_name = request.fix_package_name && fixable("package_name");
-    let add: Vec<String> = if request.add_undeclared {
+    // Trimming the nested lists keeps whatever its files use: a package that
+    // was only nested becomes a dependency of its own.
+    let trimming = request.trim_nested && found.report.deps.iter().any(|d| d.nested > 0);
+    let add: Vec<String> = if request.add_undeclared || trimming {
         undeclared_to_add(&found.report.undeclared).map(|u| u.package.clone()).collect()
     } else {
         Vec::new()
@@ -856,7 +877,12 @@ pub(crate) fn repair_package(request: &RepairRequest, lib: &Library, progress: P
                         if deps.contains_key(pkg) {
                             continue;
                         }
-                        let license = licenses.get(&base_lc(pkg)).cloned().unwrap_or_else(|| "PC EA".to_string());
+                        // The license the nested entry gave it, else the installed
+                        // package's.
+                        let nested_license = deps.values().find_map(|v| nested_license(v, pkg));
+                        let license = nested_license
+                            .or_else(|| licenses.get(&base_lc(pkg)).cloned())
+                            .unwrap_or_else(|| "PC EA".to_string());
                         deps.insert(pkg.clone(), serde_json::json!({ "licenseType": license, "dependencies": {} }));
                         result.added_deps.push(pkg.clone());
                     }
@@ -905,6 +931,8 @@ pub(crate) struct RepairSummary {
     pub(crate) redirectable: u32,
     /// Dependencies used only for morphs VaM can't find (not in the library).
     pub(crate) skippable: u32,
+    /// Nested entries under the dependencies it keeps (what "Trim" clears).
+    pub(crate) kept_nested: u32,
     pub(crate) names: u32,
     /// Fixable meta.json issue codes.
     pub(crate) meta: Vec<String>,
@@ -934,11 +962,12 @@ fn summarize(path: &Path, size: u64, lib: &Library) -> Option<RepairSummary> {
         unneeded_nested: unneeded.iter().map(|d| d.nested).sum(),
         redirectable: report.redirectable,
         skippable: report.deps.iter().filter(|d| d.status == "skippable").count() as u32,
+        kept_nested: report.deps.iter().filter(|d| matches!(d.status.as_str(), "needed" | "skippable")).map(|d| d.nested).sum(),
         names: report.names.len() as u32,
         meta: report.meta.iter().filter(|m| m.fixable).map(|m| m.code.clone()).collect(),
         ..base
     };
-    let any = summary.unneeded + summary.redirectable + summary.skippable + summary.names > 0 || !summary.meta.is_empty();
+    let any = summary.unneeded + summary.redirectable + summary.skippable + summary.kept_nested + summary.names > 0 || !summary.meta.is_empty();
     any.then_some(summary)
 }
 
@@ -1401,6 +1430,55 @@ mod tests {
         z.by_name("Saves/scene/s.json").unwrap().read_to_string(&mut sc).unwrap();
         assert!(!sc.contains("CR400.qingyi"), "{sc}");
         assert!(sc.contains("Have.Morphs.1:/") && sc.contains("\"name\": \"c\"") || sc.contains("\"name\":\"c\""), "{sc}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn trimming_promotes_a_nested_package_its_files_use() {
+        let dir = tmp("promote");
+        let var = dir.join("me.Scene.1.var");
+        write_var(
+            &var,
+            json!({"dependencies": {
+                "kk.Wife.latest": {"licenseType": "FC", "dependencies": {
+                    "Used.Hair.2": {"licenseType": "CC BY", "dependencies": {}},
+                    "Unused.Thing.1": {"licenseType": "FC", "dependencies": {}},
+                }},
+            }}),
+            &[(
+                "Saves/scene/s.json",
+                r#"{"a":"kk.Wife.latest:/Custom/x.vmi","h":"Used.Hair.2:/Custom/Hair/h.vam"}"#,
+            )],
+            &[],
+        );
+        let res = repair_package(
+            &RepairRequest {
+                file_path: var.display().to_string(),
+                remove_deps: vec![],
+                remove_unneeded: true,
+                redirect: true,
+                fix_creator: false,
+                fix_package_name: false,
+                add_undeclared: false,
+                clean_meta: false,
+                drop_skipped: false,
+                trim_nested: true,
+                backup: false,
+                backup_dir: None,
+            },
+            &Library::default(),
+            &crate::utils::no_progress,
+        )
+        .unwrap();
+        assert_eq!(res.added_deps, ["Used.Hair.2"], "used, so it becomes a dependency of its own");
+        assert_eq!(res.nested_trimmed, 2);
+        let mut z = ZipArchive::new(fs::File::open(&var).unwrap()).unwrap();
+        let mut m = String::new();
+        z.by_name("meta.json").unwrap().read_to_string(&mut m).unwrap();
+        let meta: Value = serde_json::from_str(&m).unwrap();
+        assert_eq!(meta["dependencies"]["kk.Wife.latest"]["dependencies"], json!({}));
+        assert_eq!(meta["dependencies"]["Used.Hair.2"]["licenseType"], "CC BY", "the nested entry's license");
+        assert!(meta["dependencies"].get("Unused.Thing.1").is_none());
         let _ = fs::remove_dir_all(dir);
     }
 }
