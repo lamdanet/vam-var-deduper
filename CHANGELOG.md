@@ -12,6 +12,12 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Changed
+- **Repair VARs** keeps dependencies its files use, downloaded or not: leaving out the morphs VaM
+  skips is now an option you turn on
+- Trimming nested lists makes a package its files use a dependency of its own; a **Nested lists**
+  filter finds packages with lists to trim, and Package Explorer points them out
+
 ## [0.4.1] - 2026-10-16
 
 ### Added

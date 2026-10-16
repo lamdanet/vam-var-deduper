@@ -7001,6 +7001,15 @@ function pkgHealth(item, details) {
       "repair-deps",
     );
   }
+  const keptNested = rep ? rep.deps.filter((d) => d.status === "needed" || d.status === "skippable").reduce((n, d) => n + (d.nested || 0), 0) : 0;
+  if (keptNested) {
+    add(
+      "info",
+      "account_tree",
+      `meta.json carries ${pkgCount(keptNested, "nested entry", "nested entries")} copied from its dependencies; they show up when you download its dependencies.`,
+      "repair-deps",
+    );
+  }
   const metaFix = (rep?.meta ?? []).filter((m) => m.fixable);
   if (metaFix.length) {
     const creator = metaFix.find((m) => m.code === "creator");
@@ -9386,7 +9395,7 @@ function rvStoreSet(key, value) {
 // The list's filter: "all", or one kind of problem.
 function rvFilter() {
   const f = rvStore(RV_STORE.filter, "all");
-  return RV_KINDS.some((x) => x.key === f) ? f : "all";
+  return f === "nested" || RV_KINDS.some((x) => x.key === f) ? f : "all";
 }
 
 function rvView() {
@@ -9411,9 +9420,10 @@ function rvRedirect() {
   return rvStore(RV_STORE.redirect, "1") === "1";
 }
 
-// Leave out the morphs VaM skips (and the dependency they're from).
+// Leave out the morphs VaM skips (and the dependency they're from). Off
+// unless chosen: a dependency its files use stays, downloaded or not.
 function rvSkip() {
-  return rvStore(RV_STORE.skip, "1") === "1";
+  return rvStore(RV_STORE.skip, "0") === "1";
 }
 
 // Clear the lists copied under the dependencies it keeps.
@@ -9484,6 +9494,7 @@ function rvSummaryOf(filePath, report) {
     unneeded_nested: unneeded.reduce((n, d) => n + (d.nested || 0), 0),
     redirectable: report.redirectable || 0,
     skippable: (report.deps ?? []).filter((d) => d.status === "skippable").length,
+    kept_nested: (report.deps ?? []).filter((d) => d.status === "needed" || d.status === "skippable").reduce((n, d) => n + (d.nested || 0), 0),
     names: (report.names ?? []).length,
     meta: (report.meta ?? []).filter((m) => m.fixable).map((m) => m.code),
     error: null,
@@ -9494,7 +9505,7 @@ function rvUpdateSummary(filePath, report) {
   const list = RV.lib.packages;
   const i = list.findIndex((p) => p.file_path === filePath);
   const s = rvSummaryOf(filePath, report);
-  const any = s.unneeded || s.redirectable || s.skippable || s.names || s.meta.length;
+  const any = s.unneeded || s.redirectable || s.skippable || s.kept_nested || s.names || s.meta.length;
   if (i >= 0 && any) list[i] = s;
   else if (i >= 0) list.splice(i, 1);
   else if (any) list.push(s);
@@ -9503,11 +9514,13 @@ function rvUpdateSummary(filePath, report) {
 // Does a summary have something of this kind ("all": anything) to repair?
 function rvHas(s, kind = "all") {
   if (!s || s.error || s.pending) return false;
-  const deps = s.unneeded > 0 || s.redirectable > 0 || s.skippable > 0;
+  const deps = s.unneeded > 0 || s.redirectable > 0 || (rvSkip() && s.skippable > 0);
+  const nested = s.kept_nested > 0;
   if (kind === "deps") return deps;
+  if (kind === "nested") return nested;
   if (kind === "meta") return s.meta.length > 0;
   if (kind === "names") return s.names > 0;
-  return deps || s.meta.length > 0 || s.names > 0;
+  return deps || nested || s.meta.length > 0 || s.names > 0;
 }
 
 // The rows of the list: the picked package first, then the library check's.
@@ -9619,8 +9632,11 @@ function rvChipsHtml(s) {
       : "";
   return [
     deps ? `<span class="chip fm-chip-warn" title="Unused dependencies">${escapeHtml(deps)}</span>` : "",
-    s.skippable
+    s.skippable && rvSkip()
       ? `<span class="chip fm-chip-warn" title="Not in your library and used only for morphs, which VaM skips">${pkgCount(s.skippable, "only for missing morphs", "only for missing morphs")}</span>`
+      : "",
+    s.kept_nested
+      ? `<span class="chip fm-chip-warn" title="Entries copied under the dependencies it keeps; they show up when you download its dependencies">${s.kept_nested} nested to trim</span>`
       : "",
     s.meta.length
       ? `<span class="chip fm-chip-warn" title="${escapeAttribute(s.meta.map((c) => RV_META_LABELS[c] || c).join("\n"))}">meta.json: ${escapeHtml(
@@ -9644,7 +9660,9 @@ function rvRenderFilters() {
       ${escapeHtml(label)}<span>${n}</span></button>`;
   host.innerHTML = [
     chip("all", "All", pkgs.filter((x) => rvHas(x)).length),
-    ...RV_KINDS.map((k) => chip(k.key, k.title, pkgs.filter((x) => rvHas(x, k.key)).length)),
+    chip("deps", "Unused dependencies", pkgs.filter((x) => rvHas(x, "deps")).length),
+    chip("nested", "Nested lists", pkgs.filter((x) => rvHas(x, "nested")).length),
+    ...RV_KINDS.filter((k) => k.key !== "deps").map((k) => chip(k.key, k.title, pkgs.filter((x) => rvHas(x, k.key)).length)),
   ].join("");
 }
 
@@ -9717,14 +9735,14 @@ function rvRenderDetail() {
   // The kinds it has something to repair in, then a short "fine" line for the
   // rest; still-needed dependencies show even when nothing goes.
   const sections = RV_KINDS.map((k) => {
-    const has = rvHas(sum, k.key);
-    const keep = k.key === "deps" && (rep.deps ?? []).some((d) => d.status === "needed");
+    const has = rvHas(sum, k.key) || (k.key === "deps" && rvHas(sum, "nested"));
+    const keep = k.key === "deps" && (rep.deps ?? []).some((d) => d.status === "needed" || d.status === "skippable");
     if (!has && !keep) return "";
     return `<section class="rv-sec${has ? "" : " is-fine"}">
         <h3 class="rv-sec-title"><span class="material-symbols-outlined">${k.icon}</span>${escapeHtml(k.title)}</h3>
         ${builders[k.key](rep)}</section>`;
   }).join("");
-  const fine = RV_KINDS.filter((k) => !rvHas(sum, k.key)).map((k) => k.title.toLowerCase());
+  const fine = RV_KINDS.filter((k) => !rvHas(sum, k.key) && !(k.key === "deps" && rvHas(sum, "nested"))).map((k) => k.title.toLowerCase());
   host.innerHTML = `
     <div class="rv-detail-head">${rvDetailHead(fp)}</div>
     <div class="rv-detail-body">
@@ -9764,10 +9782,11 @@ function rvKinds(d) {
 function rvDepsHtml(rep) {
   const deps = rep.deps ?? [];
   const removable = deps.filter((d) => d.status in RV_DEP_REASON);
-  const skippable = deps.filter((d) => d.status === "skippable");
-  const needed = deps.filter((d) => d.status === "needed");
-  const redirect = rvRedirect();
   const skip = rvSkip();
+  const skippable = deps.filter((d) => d.status === "skippable");
+  // Kept unless leaving them out: used, downloaded or not.
+  const needed = deps.filter((d) => d.status === "needed" || (d.status === "skippable" && !skip));
+  const redirect = rvRedirect();
   const trim = rvTrim();
   const nested = (d) => (d.nested ? `<span class="chip" title="Packages meta.json nests under it, copied from that package's own list">+${d.nested} nested</span>` : "");
   const rows = removable
@@ -9780,7 +9799,7 @@ function rvDepsHtml(rep) {
         }</small></span>${nested(d)}</label>`;
     })
     .join("");
-  const skipRows = skippable
+  const skipRows = (skip ? skippable : [])
     .map(
       (d) => `<div class="rv-item is-info${skip ? "" : " is-off"}" title="${escapeAttribute((d.samples ?? []).join("\n"))}">
         <span class="material-symbols-outlined">face</span>
@@ -9809,6 +9828,8 @@ function rvDepsHtml(rep) {
   const keptNested = deps
     .filter((d) => d.status === "needed" || (d.status === "skippable" && !skip) || (d.status === "covered" && !redirect))
     .reduce((n, d) => n + (d.nested || 0), 0);
+  // Packages its files use that were only nested: Trim makes them its own.
+  const promote = (rep.undeclared ?? []).filter((u) => u.refs > u.inside).map((u) => u.package);
   const toggle = (opt, on, title, sub) => `<label class="rv-item is-toggle"><input type="checkbox" data-rv-opt="${opt}" ${on ? "checked" : ""} />
       <span class="rv-item-main"><b>${title}</b><small>${sub}</small></span></label>`;
   return `
@@ -9827,10 +9848,10 @@ function rvDepsHtml(rep) {
         ? toggle(
             "skip",
             skip,
-            `Leave out ${pkgCount(skippable.reduce((n, d) => n + d.morphs, 0), "morph", "morphs")} VaM skips`,
-            `From ${pkgCount(skippable.length, "package", "packages")} you don't have, used for nothing else. Their entries come out of its scenes and presets, and the ${
+            `Also leave out ${pkgCount(skippable.reduce((n, d) => n + d.morphs, 0), "morph", "morphs")} VaM skips`,
+            `Optional. From ${pkgCount(skippable.length, "package", "packages")} you don't have, used for nothing else. Their entries come out of its scenes and presets and the ${
               skippable.length === 1 ? "dependency goes" : "dependencies go"
-            }, so it needs ${skippable.length === 1 ? "it" : "them"} no more.`,
+            }. Off, ${skippable.length === 1 ? "it stays" : "they stay"} as ${skippable.length === 1 ? "a dependency" : "dependencies"} to download later.`,
           )
         : ""
     }
@@ -9840,7 +9861,9 @@ function rvDepsHtml(rep) {
             "trim",
             trim,
             `Trim ${pkgCount(keptNested, "nested entry", "nested entries")}`,
-            "meta.json copies each dependency's own list under it. This package doesn't need those: VaM reads them from the dependency itself when it's there.",
+            `meta.json copies each dependency's own list under it, which is why they show up when you download its dependencies. This package doesn't need them: VaM reads them from the dependency itself when it's there.${
+              promote.length ? ` ${promote.join(", ")} ${promote.length === 1 ? "is" : "are"} used by its files, so ${promote.length === 1 ? "it becomes a dependency" : "they become dependencies"} of its own.` : ""
+            }`,
           )
         : ""
     }
