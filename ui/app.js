@@ -6534,7 +6534,7 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
       PKG.details = details ?? { error: "No details" };
       pkgRenderAll();
     })
-    .then(() => invoke("inspect_package_repair", { filePath: item.file_path }))
+    .then(() => invoke("inspect_package_repair", { filePath: item.file_path, roots: vpDeleteRootDirs() }))
     .then((repair) => {
       if (token !== PKG.token) return;
       PKG.repair = repair ?? null;
@@ -6953,7 +6953,7 @@ function pkgDepUnneeded(id) {
 // Missing and needed only for morphs: VaM skips morphs it can't find.
 function pkgDepMorphsOnly(id) {
   const r = pkgRepairDep(id);
-  return r?.status === "needed" && r.plugins === 0 && r.others === 0 && !r.named && r.morphs > 0;
+  return r?.status === "skippable" || (r?.status === "needed" && r.plugins === 0 && r.others === 0 && !r.named && r.morphs > 0);
 }
 
 function pkgHealth(item, details) {
@@ -7160,6 +7160,7 @@ function pkgActionsHtml(item, details, primaryAct) {
     ...(extractable ? [pkgIconAct("extract", "person_add", "Extract presets: save clothing, hair, morphs or looks of its people", { label: "Extract" })] : []),
     pkgIconAct("verify", "verified", "Check every file inside against its checksum", { label: "Check" }),
     pkgIconAct("check-refs", "healing", "Check its references for missing files (in Fix Missing)", { label: "Check refs" }),
+    pkgIconAct("repair", "build", "Repair it: unused dependencies, meta.json, file names (in Repair VARs)", { label: "Repair" }),
   ];
   return `${primary}<div class="pkg-tools" role="group" aria-label="Library">${library.join("")}</div>
     <div class="pkg-tools" role="group" aria-label="Tools">${tools.join("")}</div>
@@ -7891,6 +7892,7 @@ function pkgDepUseText(id) {
   if (r.status === "self") return " · itself";
   if (r.status === "unused") return " · nothing inside uses it";
   if (r.status === "covered") return " · only for files it has itself";
+  if (r.status === "skippable") return ` · only for ${pkgCount(r.morphs, "morph", "morphs")} VaM skips`;
   const parts = [
     r.plugins ? pkgCount(r.plugins, "plugin", "plugins") : "",
     r.morphs ? pkgCount(r.morphs, "morph", "morphs") : "",
@@ -9327,7 +9329,7 @@ async function pkgSetCreatorFlag(creator, flag) {
 // from the library check. The list can be narrowed to one kind of problem. Backed by package_repair.rs; Fix
 // Missing stays the page for references to files a package doesn't have.
 
-const RV_STORE = { filter: "rv.filter", backup: "rv.backup", backupDir: "rv.backupDir", redirect: "rv.redirect" };
+const RV_STORE = { filter: "rv.filter", backup: "rv.backup", backupDir: "rv.backupDir", redirect: "rv.redirect", skip: "rv.skip", trim: "rv.trim" };
 const RV_KINDS = [
   { key: "deps", icon: "playlist_remove", title: "Unused dependencies", sub: "Listed in meta.json, used by nothing inside" },
   { key: "meta", icon: "data_object", title: "meta.json", sub: "Creator, name, unlisted packages, format" },
@@ -9409,6 +9411,16 @@ function rvRedirect() {
   return rvStore(RV_STORE.redirect, "1") === "1";
 }
 
+// Leave out the morphs VaM skips (and the dependency they're from).
+function rvSkip() {
+  return rvStore(RV_STORE.skip, "1") === "1";
+}
+
+// Clear the lists copied under the dependencies it keeps.
+function rvTrim() {
+  return rvStore(RV_STORE.trim, "1") === "1";
+}
+
 function rvBackup() {
   return rvStore(RV_STORE.backup, "1") === "1";
 }
@@ -9449,7 +9461,7 @@ async function rvLoadReport(filePath, { force = false } = {}) {
   rvRenderDetail();
   let report;
   try {
-    report = await invoke("inspect_package_repair", { filePath });
+    report = await invoke("inspect_package_repair", { filePath, roots: vpDeleteRootDirs() });
   } catch (e) {
     report = { error: String(e?.message || e) };
   }
@@ -9471,6 +9483,7 @@ function rvSummaryOf(filePath, report) {
     covered: unneeded.filter((d) => d.status === "covered").length,
     unneeded_nested: unneeded.reduce((n, d) => n + (d.nested || 0), 0),
     redirectable: report.redirectable || 0,
+    skippable: (report.deps ?? []).filter((d) => d.status === "skippable").length,
     names: (report.names ?? []).length,
     meta: (report.meta ?? []).filter((m) => m.fixable).map((m) => m.code),
     error: null,
@@ -9481,7 +9494,7 @@ function rvUpdateSummary(filePath, report) {
   const list = RV.lib.packages;
   const i = list.findIndex((p) => p.file_path === filePath);
   const s = rvSummaryOf(filePath, report);
-  const any = s.unneeded || s.redirectable || s.names || s.meta.length;
+  const any = s.unneeded || s.redirectable || s.skippable || s.names || s.meta.length;
   if (i >= 0 && any) list[i] = s;
   else if (i >= 0) list.splice(i, 1);
   else if (any) list.push(s);
@@ -9490,10 +9503,11 @@ function rvUpdateSummary(filePath, report) {
 // Does a summary have something of this kind ("all": anything) to repair?
 function rvHas(s, kind = "all") {
   if (!s || s.error || s.pending) return false;
-  if (kind === "deps") return s.unneeded > 0 || s.redirectable > 0;
+  const deps = s.unneeded > 0 || s.redirectable > 0 || s.skippable > 0;
+  if (kind === "deps") return deps;
   if (kind === "meta") return s.meta.length > 0;
   if (kind === "names") return s.names > 0;
-  return s.unneeded > 0 || s.redirectable > 0 || s.meta.length > 0 || s.names > 0;
+  return deps || s.meta.length > 0 || s.names > 0;
 }
 
 // The rows of the list: the picked package first, then the library check's.
@@ -9605,6 +9619,9 @@ function rvChipsHtml(s) {
       : "";
   return [
     deps ? `<span class="chip fm-chip-warn" title="Unused dependencies">${escapeHtml(deps)}</span>` : "",
+    s.skippable
+      ? `<span class="chip fm-chip-warn" title="Not in your library and used only for morphs, which VaM skips">${pkgCount(s.skippable, "only for missing morphs", "only for missing morphs")}</span>`
+      : "",
     s.meta.length
       ? `<span class="chip fm-chip-warn" title="${escapeAttribute(s.meta.map((c) => RV_META_LABELS[c] || c).join("\n"))}">meta.json: ${escapeHtml(
           s.meta.map((c) => (RV_META_LABELS[c] || c).toLowerCase()).join(", "),
@@ -9747,8 +9764,11 @@ function rvKinds(d) {
 function rvDepsHtml(rep) {
   const deps = rep.deps ?? [];
   const removable = deps.filter((d) => d.status in RV_DEP_REASON);
+  const skippable = deps.filter((d) => d.status === "skippable");
   const needed = deps.filter((d) => d.status === "needed");
   const redirect = rvRedirect();
+  const skip = rvSkip();
+  const trim = rvTrim();
   const nested = (d) => (d.nested ? `<span class="chip" title="Packages meta.json nests under it, copied from that package's own list">+${d.nested} nested</span>` : "");
   const rows = removable
     .map((d) => {
@@ -9760,11 +9780,21 @@ function rvDepsHtml(rep) {
         }</small></span>${nested(d)}</label>`;
     })
     .join("");
+  const skipRows = skippable
+    .map(
+      (d) => `<div class="rv-item is-info${skip ? "" : " is-off"}" title="${escapeAttribute((d.samples ?? []).join("\n"))}">
+        <span class="material-symbols-outlined">face</span>
+        <span class="rv-item-main"><b>${escapeHtml(d.key)}</b><small>Not in your library, and used only for ${pkgCount(d.morphs, "morph", "morphs")}. VaM skips ${
+          d.morphs === 1 ? "it" : "them"
+        }, so the package looks the same without ${d.morphs === 1 ? "it" : "them"}.</small></span>${nested(d)}</div>`,
+    )
+    .join("");
+  const absent = needed.filter((d) => d.installed === false);
   const keep = needed
     .map(
       (d) => `<div class="rv-item is-info" title="${escapeAttribute((d.samples ?? []).join("\n"))}">
         <span class="material-symbols-outlined">${d.named ? "code" : d.plugins ? "extension" : d.morphs && !d.others ? "face" : "description"}</span>
-        <span class="rv-item-main"><b>${escapeHtml(d.key)}</b><small>Used for ${escapeHtml(rvKinds(d))}${
+        <span class="rv-item-main"><b>${escapeHtml(d.key)}${d.installed === false ? ` <span class="chip fm-chip-warn">not in your library</span>` : ""}</b><small>Used for ${escapeHtml(rvKinds(d))}${
           d.named
             ? ": a plugin may load it itself, so it stays."
             : d.plugins
@@ -9775,18 +9805,64 @@ function rvDepsHtml(rep) {
         }</small></span>${nested(d)}</div>`,
     )
     .join("");
+  // The lists copied under what stays (removed ones take theirs with them).
+  const keptNested = deps
+    .filter((d) => d.status === "needed" || (d.status === "skippable" && !skip) || (d.status === "covered" && !redirect))
+    .reduce((n, d) => n + (d.nested || 0), 0);
+  const toggle = (opt, on, title, sub) => `<label class="rv-item is-toggle"><input type="checkbox" data-rv-opt="${opt}" ${on ? "checked" : ""} />
+      <span class="rv-item-main"><b>${title}</b><small>${sub}</small></span></label>`;
   return `
     ${
       rep.redirectable
-        ? `<label class="rv-item is-toggle"><input type="checkbox" data-rv-opt="redirect" ${redirect ? "checked" : ""} />
-           <span class="rv-item-main"><b>Point ${pkgCount(rep.redirectable, "reference", "references")} at its own copies</b>
-           <small>They name another package for a file this one has at the same path. VaM then uses this package's copy.</small></span></label>`
+        ? toggle(
+            "redirect",
+            redirect,
+            `Point ${pkgCount(rep.redirectable, "reference", "references")} at its own copies`,
+            "They name another package for a file this one has at the same path. VaM then uses this package's copy.",
+          )
         : ""
     }
-    <h4 class="rv-h">Remove from meta.json <small>${removable.length}</small></h4>
-    ${removable.length ? `<p class="rv-note">Listed as dependencies, but VaM loads nothing from them for this package. They're why it looked short of packages.</p>${rows}` : `<p class="rv-note">Every dependency it lists is used.</p>`}
-    ${needed.length ? `<h4 class="rv-h">Still needed <small>${needed.length}</small></h4><p class="rv-note">Its files use these, so they stay.${needed.some((d) => d.plugins) ? " For a missing plugin, Fix Missing can point it at a copy you have." : ""}</p>${keep}` : ""}
-    ${needed.some((d) => d.plugins) ? `<button type="button" class="ghost-button fm-small" data-rv-act="fix-missing"><span class="material-symbols-outlined">healing</span>Open in Fix Missing</button>` : ""}`;
+    ${
+      skippable.length
+        ? toggle(
+            "skip",
+            skip,
+            `Leave out ${pkgCount(skippable.reduce((n, d) => n + d.morphs, 0), "morph", "morphs")} VaM skips`,
+            `From ${pkgCount(skippable.length, "package", "packages")} you don't have, used for nothing else. Their entries come out of its scenes and presets, and the ${
+              skippable.length === 1 ? "dependency goes" : "dependencies go"
+            }, so it needs ${skippable.length === 1 ? "it" : "them"} no more.`,
+          )
+        : ""
+    }
+    ${
+      keptNested
+        ? toggle(
+            "trim",
+            trim,
+            `Trim ${pkgCount(keptNested, "nested entry", "nested entries")}`,
+            "meta.json copies each dependency's own list under it. This package doesn't need those: VaM reads them from the dependency itself when it's there.",
+          )
+        : ""
+    }
+    <h4 class="rv-h">Remove from meta.json <small>${removable.length + (skip ? skippable.length : 0)}</small></h4>
+    ${
+      removable.length || skippable.length
+        ? `<p class="rv-note">VaM loads nothing from these for this package. They're why it looked short of packages.</p>${rows}${skipRows}`
+        : `<p class="rv-note">Every dependency it lists is used.</p>`
+    }
+    ${
+      needed.length
+        ? `<h4 class="rv-h">Still needed <small>${needed.length}</small></h4><p class="rv-note">Its files use these, so they stay.${
+            absent.length ? " For ones you don't have, Fix Missing can point the files at a copy in another package, or Internalize can copy them in so it needs nothing else." : ""
+          }</p>${keep}`
+        : ""
+    }
+    ${
+      absent.length
+        ? `<div class="rv-acts"><button type="button" class="ghost-button fm-small" data-rv-act="fix-missing"><span class="material-symbols-outlined">healing</span>Find copies (Fix Missing)</button>
+           <button type="button" class="ghost-button fm-small" data-rv-act="internalize"><span class="material-symbols-outlined">download_for_offline</span>Copy them in (Internalize)</button></div>`
+        : ""
+    }`;
 }
 
 function rvMetaHtml(rep) {
@@ -9840,6 +9916,8 @@ function rvRequest(filePath, { one = false } = {}) {
     fix_package_name: RV.metaFix.package_name,
     add_undeclared: RV.metaFix.undeclared,
     clean_meta: RV.metaFix.format,
+    drop_skipped: rvSkip(),
+    trim_nested: rvTrim(),
   };
   if (one) req.remove_deps = [...document.querySelectorAll("#rv-detail [data-rv-dep]:checked")].map((b) => b.getAttribute("data-rv-dep"));
   else req.remove_unneeded = true;
@@ -9856,7 +9934,7 @@ async function rvApply(requests) {
   let out = null;
   let error = "";
   try {
-    const handle = await invoke("start_repair_packages_task", { requests });
+    const handle = await invoke("start_repair_packages_task", { requests, roots: vpDeleteRootDirs() });
     RV.applyTask = handle?.id ?? null;
     for (;;) {
       await new Promise((r) => setTimeout(r, 300));
@@ -9890,6 +9968,8 @@ async function rvApply(requests) {
       r.added_deps.length ? `added ${r.added_deps.join(", ")}` : "",
       r.meta_fixed.length ? `set ${r.meta_fixed.join(", ")}` : "",
       r.redirected ? `${r.redirected} references to its own copies` : "",
+      r.morphs_dropped ? `left out ${r.morphs_dropped} morphs VaM skips` : "",
+      r.nested_trimmed ? `trimmed ${r.nested_trimmed} nested entries` : "",
       r.renamed ? `${r.renamed} names as UTF-8` : "",
     ].filter(Boolean);
     addLog(`Repair VARs: ${rvId(d.file_path)}: ${parts.join("; ") || "nothing changed"}${r.backup_path ? ` (backup: ${r.backup_path})` : ""}`);
@@ -9993,6 +10073,8 @@ async function rvOnClick(e) {
       rvApply([...RV.ticked].map((fp) => rvRequest(fp)));
     } else if (act === "fix-missing" && RV.sel) {
       fmOpen(RV.sel, { scan: true });
+    } else if (act === "internalize" && RV.sel) {
+      izOpen(RV.sel, { scan: true });
     }
     return;
   }
@@ -10014,6 +10096,12 @@ function rvOnChange(e) {
     rvRenderList();
   } else if (t.matches?.('[data-rv-opt="redirect"]')) {
     rvStoreSet(RV_STORE.redirect, t.checked ? "1" : "0");
+    rvRenderDetail();
+  } else if (t.matches?.('[data-rv-opt="skip"]')) {
+    rvStoreSet(RV_STORE.skip, t.checked ? "1" : "0");
+    rvRenderDetail();
+  } else if (t.matches?.('[data-rv-opt="trim"]')) {
+    rvStoreSet(RV_STORE.trim, t.checked ? "1" : "0");
     rvRenderDetail();
   } else if (t.matches?.('[data-rv-opt="backup"]')) {
     rvStoreSet(RV_STORE.backup, t.checked ? "1" : "0");
@@ -10206,6 +10294,7 @@ function pkgRunAction(act, event) {
     case "check-refs":
       fmOpen(item.file_path, { scan: true });
       break;
+    case "repair":
     case "repair-deps":
     case "repair-meta":
     case "repair-names":
@@ -11377,6 +11466,7 @@ function fmInfoHtml() {
         <div class="fm-info-acts">
           <button type="button" class="ghost-button fm-small" data-fm-act="explore"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
           <button type="button" class="ghost-button fm-small" data-fm-act="show-file"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+          <button type="button" class="ghost-button fm-small" data-fm-act="repair" title="Open it in Repair VARs: unused dependencies, meta.json, file names"><span class="material-symbols-outlined">build</span>Repair</button>
         </div>
       </div>
     </div>`;
@@ -11443,6 +11533,7 @@ function fmPkgLineHtml(extra) {
         <div class="fm-hero-acts">
           <button type="button" class="ghost-button fm-small" data-fm-act="explore" title="Open it in Package Explorer"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
           <button type="button" class="ghost-button fm-small" data-fm-act="show-file" title="${escapeAttribute(FM.target)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+          <button type="button" class="ghost-button fm-small" data-fm-act="repair" title="Open it in Repair VARs: unused dependencies, meta.json, file names"><span class="material-symbols-outlined">build</span>Repair</button>
           <button type="button" class="ghost-button fm-small" data-fm-act="scan" ${FM.scanning ? "disabled" : ""} title="${escapeAttribute(
             `Looks in AddonPackages${extra.length ? ` + ${pkgCount(extra.length, "folder", "folders")}` : ""}; the database ${fmDbMode() ? "always" : "when your folders have no copy"}`,
           )}"><span class="material-symbols-outlined">refresh</span>${FM.scanning ? "Checking…" : "Check again"}</button>
@@ -12841,6 +12932,9 @@ function fmOnClick(e) {
     case "explore":
       if (FM.target) pkgOpen(FM.item?.__lib ? FM.item : FM.target);
       break;
+    case "repair":
+      if (FM.target) rvOpen(FM.target);
+      break;
     case "show-file":
       invoke("show_in_explorer", { path: FM.target }).catch(() => {});
       break;
@@ -13621,6 +13715,7 @@ function izRenderSource() {
           <div class="fm-hero-acts">
             <button type="button" class="ghost-button fm-small" data-iz-act="explore" title="Open it in Package Explorer"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
             <button type="button" class="ghost-button fm-small" data-iz-act="show-file" title="${escapeAttribute(IZ.target)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+            <button type="button" class="ghost-button fm-small" data-iz-act="repair" title="Open it in Repair VARs: unused dependencies, meta.json, file names"><span class="material-symbols-outlined">build</span>Repair</button>
             <button type="button" class="ghost-button fm-small" data-iz-act="scan" ${IZ.scanning ? "disabled" : ""} title="${escapeAttribute(
               `Looks in AddonPackages${extra.length ? ` + ${pkgCount(extra.length, "folder", "folders")}` : ""}`,
             )}"><span class="material-symbols-outlined">refresh</span>${IZ.scanning ? "Checking…" : "Check again"}</button>
@@ -14383,6 +14478,9 @@ function izOnClick(e) {
       break;
     case "explore":
       if (IZ.target) pkgOpen(IZ.item?.__lib ? IZ.item : IZ.target);
+      break;
+    case "repair":
+      if (IZ.target) rvOpen(IZ.target);
       break;
     case "show-file":
       invoke("show_in_explorer", { path: IZ.target }).catch(() => {});
@@ -16026,6 +16124,7 @@ function cvRenderSource() {
           <div class="fm-hero-acts">
             <button type="button" class="ghost-button fm-small" data-cv-act="explore"><span class="material-symbols-outlined">space_dashboard</span>Explore</button>
             <button type="button" class="ghost-button fm-small" data-cv-act="show-file" title="${escapeAttribute(CV.target)}"><span class="material-symbols-outlined">folder_open</span>Show file</button>
+            <button type="button" class="ghost-button fm-small" data-cv-act="repair" title="Open it in Repair VARs: unused dependencies, meta.json, file names"><span class="material-symbols-outlined">build</span>Repair</button>
             <button type="button" class="ghost-button fm-small" data-cv-act="scan" ${CV.scanning || CV.applying ? "disabled" : ""}><span class="material-symbols-outlined">refresh</span>${CV.scanning ? "Checking…" : "Check again"}</button>
           </div>
         </div>
@@ -16691,6 +16790,9 @@ function cvOnClick(e) {
     case "explore":
       if (CV.target) pkgOpen(CV.item?.__lib ? CV.item : CV.target);
       break;
+    case "repair":
+      if (CV.target) rvOpen(CV.target);
+      break;
     case "show-file":
       invoke("show_in_explorer", { path: CV.target }).catch(() => {});
       break;
@@ -16780,6 +16882,7 @@ function cvPkgMenuItems(pkgId, file) {
   if (!id) return [];
   return [
     { label: "Explore details", action: () => fmExplore(id, file || "") },
+    ...(file ? [{ label: "Repair in Repair VARs", action: () => rvOpen(file) }] : []),
     ...hubMenuItem(id),
     { separator: true },
     ...(file
@@ -17379,6 +17482,7 @@ function cmRenderSource() {
       <button type="button" class="ghost-button fm-small" data-cm-act="scan" ${busy}><span class="material-symbols-outlined">refresh</span>${CM.scanning ? "Checking…" : "Check again"}</button>
       <button type="button" class="fm-icon-btn" data-cm-act="explore" title="Explore it"><span class="material-symbols-outlined">space_dashboard</span></button>
       <button type="button" class="fm-icon-btn" data-cm-act="show-file" title="Show the file"><span class="material-symbols-outlined">folder_open</span></button>
+      <button type="button" class="fm-icon-btn" data-cm-act="repair" title="Repair it in Repair VARs"><span class="material-symbols-outlined">build</span></button>
       <button type="button" class="ghost-button fm-small" data-cm-act="change-source" ${busy}><span class="material-symbols-outlined">swap_horiz</span>Change source</button>
     </div>`;
   libThumbWatch(host);
@@ -17886,6 +17990,9 @@ function cmOnClick(e) {
       break;
     case "explore":
       if (CM.source) pkgOpen(CM.item?.__lib ? CM.item : CM.source);
+      break;
+    case "repair":
+      if (CM.source) rvOpen(CM.source);
       break;
     case "show-file":
       invoke("show_in_explorer", { path: CM.source }).catch(() => {});
@@ -21147,6 +21254,7 @@ function libContextMenu(event, item) {
       ]
     : [
         { label: "Open Details", action: () => openPackageDetails(item, "folder") },
+        { label: "Repair…", action: () => rvOpen(filePath) },
         { label: "Show its folder", action: () => vpxReveal(filePath) },
         {
           label: "Show in Explorer",
@@ -26133,6 +26241,7 @@ function setupDatabasePackages() {
     const onDisk = Boolean(item.indexed);
     showContextMenu(event.clientX, event.clientY, [
       { label: "Open Details", action: () => openPackageDetails(item, "db") },
+      ...(item.indexed && item.file_path ? [{ label: "Repair…", action: () => rvOpen(item.file_path) }] : []),
       ...hubMenuItem(item.package_id),
       ...(onDisk
         ? [

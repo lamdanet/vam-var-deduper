@@ -12,6 +12,12 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Added
+- **Repair VARs** can leave out morphs VaM skips (from packages you don't have) with their
+  dependency, and trim the dependency lists copied under the ones it keeps
+- Repair is one click from Fix Missing, Internalize, Clean VARs, VAR Packages, Database and
+  Package Explorer
+
 ## [0.4.0] - 2026-10-16
 
 ### Added

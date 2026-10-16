@@ -23043,3 +23043,9 @@ button.vpx-seg:hover {
     max-height: none;
   }
 }
+
+.rv-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
