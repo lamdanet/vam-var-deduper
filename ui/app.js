@@ -4871,9 +4871,10 @@ async function refreshVarPackagesFromFolder({
     state.varPackagesFacets = null;
   }
   if (forceRescan) LIB_DETAILS.cache.clear();
-  if (append) {
-    // Only the "loading more" indicators change; redrawing every card here
-    // made each scroll chunk cost a full grid layout.
+  if (append || (!reset && (state.varPackagesItems ?? []).length)) {
+    // Only the loading indicators change: the cards on screen stay until the
+    // new ones arrive. Redrawing them here cost a full grid layout per search,
+    // filter or scroll chunk.
     $("var-packages-progress")?.classList.remove("hidden");
     libRenderLoadMore();
   } else {
@@ -6528,16 +6529,18 @@ async function pkgOpen(target, { fromHistory = false } = {}) {
       });
     return;
   }
+  // Both at once: the repair check is the slower read.
+  invoke("inspect_package_repair", { filePath: item.file_path, roots: vpDeleteRootDirs() })
+    .then((repair) => {
+      if (token !== PKG.token) return;
+      PKG.repair = repair ?? null;
+      if (PKG.details) pkgRenderAll();
+    })
+    .catch(() => {});
   invoke("get_var_package_details", { filePath: item.file_path })
     .then((details) => {
       if (token !== PKG.token) return;
       PKG.details = details ?? { error: "No details" };
-      pkgRenderAll();
-    })
-    .then(() => invoke("inspect_package_repair", { filePath: item.file_path, roots: vpDeleteRootDirs() }))
-    .then((repair) => {
-      if (token !== PKG.token) return;
-      PKG.repair = repair ?? null;
       pkgRenderAll();
     })
     .catch((e) => {
@@ -7570,7 +7573,7 @@ function pkgRenderContent() {
           )
           .join("")
       : "";
-    pkgChipsFade(chipsHost);
+    pkgChipsFadeSoon(chipsHost);
   }
   if (!content.length) {
     host.innerHTML = `<div class="pkg-empty"><span class="material-symbols-outlined">photo_library</span>
@@ -8757,6 +8760,12 @@ function pkgFileRows() {
 }
 
 // A chip row that runs past its box fades at the edge it continues past.
+// Reads layout, so a render asks for it after the frame (pkgChipsFadeSoon)
+// instead of forcing a layout in the middle of drawing.
+function pkgChipsFadeSoon(row) {
+  if (row) requestAnimationFrame(() => pkgChipsFade(row));
+}
+
 function pkgChipsFade(row) {
   if (!row) return;
   const max = row.scrollWidth - row.clientWidth;
@@ -8814,7 +8823,7 @@ function pkgRenderFileCats() {
           ${c.icon ? `<span class="material-symbols-outlined">${c.icon}</span>` : ""}${escapeHtml(c.label)}<small>${c.n.toLocaleString()} · ${escapeHtml(formatBytesLocal(c.bytes))}</small></button>`,
     )
     .join("");
-  pkgChipsFade(host);
+  pkgChipsFadeSoon(host);
 }
 
 function pkgSetFileCat(key) {
