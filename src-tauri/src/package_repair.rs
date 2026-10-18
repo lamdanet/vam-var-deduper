@@ -316,6 +316,7 @@ fn misnamed_entries<R: Read + Seek>(archive: &mut ZipArchive<R>, file: &mut fs::
 /// names can hold characters a general parser can't tell from the text
 /// around them (`Nails!.3`, `Rich Wilder.Solara`, `【Flat_Shoes】…(001-576)`).
 /// `text_lc` is `text` with ASCII lowercased, so byte offsets match.
+#[cfg(test)]
 fn refs_to_family(text: &str, text_lc: &str, family_lc: &str) -> Vec<(String, String)> {
     let bytes = text.as_bytes();
     let needle = format!("{family_lc}.");
@@ -358,6 +359,7 @@ fn refs_to_family(text: &str, text_lc: &str, family_lc: &str) -> Vec<(String, St
 
 /// How often a family's name appears as a whole name (not inside a longer
 /// one), with or without a version and path after it.
+#[cfg(test)]
 fn family_mentions(text_lc: &str, family_lc: &str) -> u32 {
     let bytes = text_lc.as_bytes();
     let is_name = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-') || b >= 0x80;
@@ -370,6 +372,103 @@ fn family_mentions(text_lc: &str, family_lc: &str) -> u32 {
             before_ok && after_ok
         })
         .count() as u32
+}
+
+/// What `FamilyFinder::find` returns: (family, package as written, path) per
+/// reference, and how often each family's name appears.
+type FamilyHits = (Vec<(String, String, String)>, HashMap<String, u32>);
+
+/// Every listed family found in one pass over a text, instead of two passes
+/// per family (a package with 20 dependencies read each scene 40 times).
+/// Same rules as `refs_to_family` and `family_mentions`, which stay (in
+/// tests) as the reference this is checked against.
+struct FamilyFinder {
+    re: regex::Regex,
+    /// family -> the shorter listed families it starts with, followed by a
+    /// dot (`a.b` for `a.b.c`): a match of the longer one is a mention of
+    /// those too, as the per-family search counted it.
+    shorter: HashMap<String, Vec<String>>,
+}
+
+impl FamilyFinder {
+    fn new(listed: &BTreeSet<String>) -> Option<Self> {
+        if listed.is_empty() {
+            return None;
+        }
+        // Longest first, so at one position the longer name wins.
+        let mut fams: Vec<&String> = listed.iter().collect();
+        fams.sort_by_key(|f| std::cmp::Reverse(f.len()));
+        let pattern = fams.iter().map(|f| regex::escape(f)).collect::<Vec<_>>().join("|");
+        let re = regex::RegexBuilder::new(&pattern).size_limit(64 << 20).build().ok()?;
+        let shorter = listed
+            .iter()
+            .map(|f| {
+                let sub: Vec<String> = listed
+                    .iter()
+                    .filter(|g| g.len() < f.len() && f.starts_with(g.as_str()) && f.as_bytes()[g.len()] == b'.')
+                    .cloned()
+                    .collect();
+                (f.clone(), sub)
+            })
+            .filter(|(_, sub)| !sub.is_empty())
+            .collect();
+        Some(Self { re, shorter })
+    }
+
+    /// (family, package as written, path) for each reference, and how often
+    /// each family's name appears at all (references included).
+    fn find(&self, text: &str, text_lc: &str) -> FamilyHits {
+        let bytes = text_lc.as_bytes();
+        let is_name = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-') || b >= 0x80;
+        let mut refs = Vec::new();
+        let mut mentions: HashMap<String, u32> = HashMap::new();
+        for m in self.re.find_iter(text_lc) {
+            let at = m.start();
+            if at > 0 {
+                let prev = bytes[at - 1];
+                if prev.is_ascii_alphanumeric() || matches!(prev, b'_' | b'-' | b'.') || prev >= 0x80 {
+                    continue;
+                }
+            }
+            let fam = m.as_str();
+            let end = m.end();
+            if end >= bytes.len() || !is_name(bytes[end]) {
+                *mentions.entry(fam.to_string()).or_default() += 1;
+            }
+            if let Some(sub) = self.shorter.get(fam) {
+                for g in sub {
+                    *mentions.entry(g.clone()).or_default() += 1;
+                }
+            }
+            // `<family>.<version>:/<path>`
+            if end >= bytes.len() || bytes[end] != b'.' {
+                continue;
+            }
+            let ver_start = end + 1;
+            let rest = &text_lc[ver_start..];
+            let ver_len = if rest.starts_with("latest") {
+                6
+            } else {
+                let digits_from = if rest.starts_with("min") { 3 } else { 0 };
+                let n = rest[digits_from..].bytes().take_while(u8::is_ascii_digit).count();
+                if n == 0 {
+                    continue;
+                }
+                digits_from + n
+            };
+            let after = ver_start + ver_len;
+            if !text_lc[after..].starts_with(":/") {
+                continue;
+            }
+            let path_start = after + 2;
+            let path_end = text[path_start..].find(['"', '\'', '\r', '\n']).map_or(text.len(), |i| path_start + i);
+            let path = text[path_start..path_end].trim_end();
+            if !path.is_empty() {
+                refs.push((fam.to_string(), text[at..after].to_string(), path.to_string()));
+            }
+        }
+        (refs, mentions)
+    }
 }
 
 struct Scan {
@@ -429,6 +528,7 @@ fn scan(path: &Path) -> Result<Scan> {
         .and_then(Value::as_object)
         .map(|m| m.keys().map(|k| base_lc(k)).filter(|b| *b != own).collect())
         .unwrap_or_default();
+    let finder = FamilyFinder::new(&listed);
     let mut tally = |groups: &mut HashMap<String, Group>, pkg: &str, ref_path: &str| {
         let g = groups.entry(base_lc(pkg)).or_default();
         if g.display.is_empty() {
@@ -466,13 +566,19 @@ fn scan(path: &Path) -> Result<Scan> {
         // parser's cut-short reading of one (`Wilder.Solara` for `Rich
         // Wilder.Solara`) isn't taken for another package.
         let mut exact: HashMap<String, Vec<String>> = HashMap::new();
-        for family in &listed {
-            let found = refs_to_family(&text, &text_lc, family);
-            let bare = family_mentions(&text_lc, family).saturating_sub(found.len() as u32);
-            if bare > 0 {
-                groups.entry(family.clone()).or_default().named += bare;
+        if let Some(finder) = &finder {
+            let (found, mentions) = finder.find(&text, &text_lc);
+            let mut ref_count: HashMap<&str, u32> = HashMap::new();
+            for (fam, _, _) in &found {
+                *ref_count.entry(fam.as_str()).or_default() += 1;
             }
-            for (pkg, ref_path) in found {
+            for (fam, n) in &mentions {
+                let bare = n.saturating_sub(ref_count.get(fam.as_str()).copied().unwrap_or(0));
+                if bare > 0 {
+                    groups.entry(fam.clone()).or_default().named += bare;
+                }
+            }
+            for (_, pkg, ref_path) in found {
                 tally(&mut groups, &pkg, &ref_path);
                 exact.entry(ref_path).or_default().push(pkg);
             }
@@ -680,11 +786,48 @@ fn drop_uids(v: &mut Value, families: &HashSet<String>) -> u32 {
     n
 }
 
+/// What a check found per package file, under the size and modified time it
+/// had: a later check (the library again, Package Explorer, Repair VARs) only
+/// reads packages that changed since. In memory for the session.
+type ReportCache = Mutex<HashMap<String, (u64, u128, RepairReport)>>;
+
+fn report_cache() -> &'static ReportCache {
+    static CACHE: std::sync::OnceLock<ReportCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn fingerprint(path: &Path) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    Some((meta.len(), modified))
+}
+
+/// The package's report (before what the library knows is applied), read
+/// again only when the file changed.
+fn cached_report(path: &Path) -> Result<RepairReport> {
+    let key = path.display().to_string();
+    let fp = fingerprint(path);
+    if let Some((size, modified)) = fp {
+        if let Ok(cache) = report_cache().lock() {
+            if let Some((s, m, report)) = cache.get(&key) {
+                if *s == size && *m == modified {
+                    return Ok(report.clone());
+                }
+            }
+        }
+    }
+    let report = scan(path)?.report;
+    if let (Some((size, modified)), Ok(mut cache)) = (fp, report_cache().lock()) {
+        cache.insert(key, (size, modified, report.clone()));
+    }
+    Ok(report)
+}
+
 /// What could be repaired in a package. Reads its text files once.
 #[tauri::command(async)]
 pub(crate) fn inspect_package_repair(file_path: String, roots: Option<Vec<String>>, state: State<'_, AppState>) -> Result<RepairReport, String> {
     let lib = Library::from_state(&state, &roots.unwrap_or_default());
-    let mut report = scan(Path::new(&file_path)).map(|s| s.report).map_err(|e| e.to_string())?;
+    let mut report = cached_report(Path::new(&file_path)).map_err(|e| e.to_string())?;
     mark_skippable(&mut report, &lib);
     Ok(report)
 }
@@ -950,8 +1093,8 @@ pub(crate) struct RepairScanResult {
 fn summarize(path: &Path, size: u64, lib: &Library) -> Option<RepairSummary> {
     let package_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let base = RepairSummary { file_path: path.display().to_string(), package_id, size_bytes: size, ..RepairSummary::default() };
-    let mut report = match scan(path) {
-        Ok(found) => found.report,
+    let mut report = match cached_report(path) {
+        Ok(report) => report,
         Err(e) => return Some(RepairSummary { error: Some(e.to_string()), ..base }),
     };
     mark_skippable(&mut report, lib);
@@ -1265,6 +1408,26 @@ mod tests {
         assert!(s.contains("SELF:/Custom/m.vmi") && s.contains("c.Plugin.1:/"));
         assert!(z.by_name("Saves/scene/异界上仙风神.json").is_ok());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn one_pass_finds_what_the_per_family_search_finds() {
+        let listed: BTreeSet<String> = ["a.b", "a.b.c", "jackaroo.eyes_lips_nails!", "aroo.eyes_lips_nails!", "rich wilder.solara", "cheesyfx.bodylanguage_resources", "cheesyfx.bodylanguage", "x.y"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let text = r#"{"1":"a.b.c.2:/p/one.vmi","2":"a.b.latest:/p/two.jpg","3":"Jackaroo.Eyes_Lips_Nails!.3:/x.jpg",
+            "4":"Rich Wilder.Solara.min2:/s.vmi","5":"GetLatestPackageUid(\"CheesyFX.BodyLanguage_Resources\")",
+            "6":"xa.b.1:/no.jpg","7":"a.b.c.d.e","8":"x.y.foo","9":"x.y_z.1:/no"}"#;
+        let text_lc = text.to_ascii_lowercase();
+        let finder = FamilyFinder::new(&listed).unwrap();
+        let (refs, mentions) = finder.find(text, &text_lc);
+        for fam in &listed {
+            let old_refs = refs_to_family(text, &text_lc, fam);
+            let new_refs: Vec<(String, String)> = refs.iter().filter(|(f, _, _)| f == fam).map(|(_, p, q)| (p.clone(), q.clone())).collect();
+            assert_eq!(new_refs, old_refs, "references to {fam}");
+            assert_eq!(mentions.get(fam).copied().unwrap_or(0), family_mentions(&text_lc, fam), "mentions of {fam}");
+        }
     }
 
     #[test]
