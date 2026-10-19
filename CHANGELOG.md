@@ -12,6 +12,8 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-19
+
 ### Changed
 - **Faster**: Repair VARs' library check takes about a third of the time, and checking again only
   reads packages that changed; a package's repair check is about 5x quicker
