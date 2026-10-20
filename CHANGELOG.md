@@ -12,6 +12,10 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Fixed
+- After offloading several packages, Restore wasn't offered for them: the selection now follows
+  packages to where they moved
+
 ## [0.4.3] - 2026-10-19
 
 ### Changed

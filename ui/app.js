@@ -5367,6 +5367,11 @@ async function offloadConfirm() {
     showToast("Stopped before anything moved.", "info");
   }
 
+  // The selection follows the moved packages to where they are now: left at
+  // their old paths (still "not offloaded"), they offered Offload again and
+  // never Restore.
+  vpRekeySelection(moved, { offloaded: !restore });
+
   // Keep the moved package in view: it is now at its new path.
   const lead = moved.find((m) => OFFLOAD.items.some((it) => it.file_path === m.from));
   if (lead) state.vpRevealPath = lead.to;
@@ -23790,6 +23795,24 @@ function vpClearSelection() {
 
 // Drop the given paths from the selection (post-delete/move). Lowercased
 // compare — NTFS paths are case-insensitive and plan rows may differ in case.
+// Selected packages that moved (`[{ from, to }]`) are selected at their new
+// path, with `patch` applied (e.g. `{ offloaded: true }`) until the next
+// listing replaces the snapshot with the fresh row.
+function vpRekeySelection(moved, patch = {}) {
+  let changed = false;
+  for (const m of moved ?? []) {
+    const key = [...state.vpSelected.keys()].find((k) => k.toLowerCase() === String(m.from).toLowerCase());
+    if (!key) continue;
+    const snap = state.vpSelected.get(key);
+    state.vpSelected.delete(key);
+    const fileName = String(m.to).split(/[\\/]/).pop();
+    state.vpSelected.set(m.to, { ...snap, ...patch, file_path: m.to, file_name: fileName || snap?.file_name });
+    if (state.vpSelAnchor === key) state.vpSelAnchor = m.to;
+    changed = true;
+  }
+  if (changed) vpSyncSelectionUi();
+}
+
 function vpPruneSelection(paths) {
   const gone = new Set((paths ?? []).map((p) => String(p).toLowerCase()));
   if (!gone.size) return;
