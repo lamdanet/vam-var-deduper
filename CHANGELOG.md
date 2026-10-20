@@ -12,6 +12,8 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-20
+
 ### Changed
 - **Scan Dependencies redesigned**: it says whether the package is ready in VaM, with Download and
   Move to AddonPackages as one-click fixes; dependencies grouped by where they are, filters with
