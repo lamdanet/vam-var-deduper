@@ -23,8 +23,6 @@ release time, it fills it with the commit messages since the last release.
 ### Fixed
 - Package Explorer didn't show that a package is offloaded (or offer Restore) when it was opened
   from somewhere other than the loaded VAR Packages page
-
-### Fixed
 - After offloading several packages, Restore wasn't offered for them: the selection now follows
   packages to where they moved
 
