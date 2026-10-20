@@ -21243,65 +21243,60 @@ function libBackgroundMenu(event) {
   showContextMenu(event.clientX, event.clientY, items);
 }
 
+// A package's right-click menu. Everyday actions first; every fixing tool
+// once, under "Repair & clean"; occasional tools under "More". Entries that
+// don't apply to the package (or the selection) aren't shown at all.
 function libContextMenu(event, item) {
   const filePath = item.file_path;
   const packageId = item.package_id;
-  const fav = _favoritePackages.has(packageId);
   const multi = state.vpSelected.size > 1 && state.vpSelected.has(filePath);
-  const items = multi
-    ? [
-        { label: "Offload selected…", action: () => libRunAction("bulk-offload") },
-        { label: "Restore selected…", action: () => libRunAction("bulk-restore") },
-        { label: "Scan dependencies of selected…", action: () => libRunAction("bulk-scan-deps") },
-        { label: "Add to favorites", action: () => libRunAction("bulk-favorite") },
-        {
-          label: "Replacement source",
-          submenu: [
-            { label: "Prefer selected (Fix Missing chooses them first)", action: () => libSetReplacementPref(libSelectedSnaps().map((s) => s.package_id), 1) },
-            { label: "Avoid selected (never chosen by themselves)", action: () => libSetReplacementPref(libSelectedSnaps().map((s) => s.package_id), -1) },
-            { label: "No preference for selected", action: () => libSetReplacementPref(libSelectedSnaps().map((s) => s.package_id), 0) },
-          ],
-        },
+  showContextMenu(event.clientX, event.clientY, multi ? libSelectionMenuItems() : libPackageMenuItems(item));
+}
+
+function libPackageMenuItems(item) {
+  const filePath = item.file_path;
+  const packageId = item.package_id;
+  const fav = _favoritePackages.has(packageId);
+  const log = (e) => addLog(`VAR Packages: ${String(e)}`);
+  const srcUpdate = libSourceUpdate(item);
+  const updates = [
+    ...(item.hub_update_version ? [{ label: `Update to v${item.hub_update_version}`, action: () => libHubUpdate([item]) }] : []),
+    ...(srcUpdate && Number(item.hub_update_version ?? 0) < srcUpdate.newest
+      ? [{ label: `Update from sources to v${srcUpdate.newest}`, action: () => libSourceUpdateGet(item) }]
+      : []),
+    ...(item.damaged || !item.readable ? [{ label: "Redownload", action: () => libRedownload([item]) }] : []),
+  ];
+  return [
+    { label: "Open details", action: () => openPackageDetails(item, "folder") },
+    ...(item.hub_resource_id ? [{ label: "View on Hub", action: () => libViewOnHub(item.hub_resource_id) }] : []),
+    { label: "Show in Explorer", action: () => invoke("show_in_explorer", { path: filePath }).catch(log) },
+    { label: fav ? "Remove from favorites" : "Add to favorites", action: () => togglePackageFavorite(packageId) },
+    ...(updates.length ? [{ separator: true }, ...updates] : []),
+    { separator: true },
+    { label: "Scan dependencies…", action: () => depStartScan({ filePath, packageId }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`)) },
+    { label: item.offloaded ? "Restore to AddonPackages…" : "Offload…", action: () => offloadOpen([item], Boolean(item.offloaded)) },
+    ...(item.offloaded ? [] : [{ label: item.disabled ? "Enable" : "Disable…", action: () => libSetDisabled([item], !item.disabled) }]),
+    {
+      label: "Repair & clean",
+      submenu: sendToEntries([
+        { label: "Repair (unused dependencies, meta.json, names)…", action: () => rvOpen(filePath) },
+        { label: "Fix missing resources…", action: () => fmOpen(filePath, { scan: true }) },
+        { label: "Clean VARs: make it smaller…", action: () => sendVarToTargetPage("clean-vars", filePath) },
+        { label: "Clean VARs: clean others against it…", action: () => sendVarToTargetPage("clean-many", filePath) },
+        { label: "Internalize resources…", action: () => sendVarToTargetPage("internalize-resources", filePath) },
+        { label: "Check integrity", action: () => libVerify([item], { recheck: true }) },
+        { label: "Dependency usage", page: "dependency-usage", action: () => sendVarToTargetPage("dependency-usage", filePath) },
+      ]),
+    },
+    {
+      label: "More",
+      submenu: [
+        { label: t("varPackagesImagesOpen"), action: () => vpImagesOpen(filePath) },
+        { label: "Export scene image", action: () => exportOneSceneImage(filePath, packageId) },
+        { label: "Extract presets…", action: () => extractOpen([item]) },
+        { label: "Add download source…", action: () => sourceOpen({ packageId, fileName: item.file_name || `${packageId}.var` }) },
         { separator: true },
-        { label: "Clean Duplicates of selected…", action: () => libRunAction("bulk-clean") },
-        { label: "Organize selected by Creator…", action: () => libRunAction("bulk-organize") },
-        { label: "Export selected Scene Images", action: () => libRunAction("bulk-export") },
-        { label: "Extract presets from selected…", action: () => libRunAction("bulk-extract") },
-        { label: "Check integrity of selected", action: () => libRunAction("bulk-verify") },
-        { label: "Mark selected as installed", action: () => libRunAction("bulk-mark-installed") },
-        { label: "Mark selected as dependencies", action: () => libRunAction("bulk-mark-dependency") },
-        ...(libSelectedSnaps().some((s) => !s.disabled && !s.offloaded)
-          ? [{ label: "Disable selected…", action: () => libRunAction("bulk-disable") }]
-          : []),
-        ...(libSelectedSnaps().some((s) => s.disabled && !s.offloaded)
-          ? [{ label: "Enable selected", action: () => libRunAction("bulk-enable") }]
-          : []),
-        ...(libSelectedSnaps().some((s) => s.hub_update_file)
-          ? [{ label: "Update selected from the Hub", action: () => libRunAction("bulk-update") }]
-          : []),
-        { separator: true },
-        libSelectAllItem(),
-        { label: "Deselect", action: () => libRunAction("bulk-clear") },
-        { separator: true },
-        {
-          label: `Delete ${state.vpSelected.size} packages (Recycle Bin)`,
-          danger: true,
-          action: () => libRunAction("bulk-delete"),
-        },
-      ]
-    : [
-        { label: "Open Details", action: () => openPackageDetails(item, "folder") },
-        { label: "Repair…", action: () => rvOpen(filePath) },
-        { label: "Show its folder", action: () => vpxReveal(filePath) },
-        {
-          label: "Show in Explorer",
-          action: () =>
-            invoke("show_in_explorer", { path: filePath }).catch((e) => addLog(`VAR Packages: ${String(e)}`)),
-        },
-        {
-          label: fav ? "Remove from favorites" : "Add to favorites",
-          action: () => togglePackageFavorite(packageId),
-        },
+        { label: item.installed ? "Mark as dependency" : "Mark as installed", action: () => libSetRole([item], !item.installed) },
         {
           label: "Replacement source",
           submenu: [
@@ -21310,73 +21305,67 @@ function libContextMenu(event, item) {
             ...(fmPref(packageId) ? [{ label: "No preference", action: () => libSetReplacementPref([packageId], 0) }] : []),
           ],
         },
-        {
-          label: item.offloaded ? "Restore to AddonPackages…" : "Offload…",
-          action: () => offloadOpen([item], Boolean(item.offloaded)),
-        },
         { separator: true },
-        {
-          label: "Scan Dependencies…",
-          action: () =>
-            depStartScan({ filePath, packageId }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`)),
-        },
-        {
-          label: "Add download source…",
-          action: () => sourceOpen({ packageId, fileName: item.file_name || `${packageId}.var` }),
-        },
-        { label: "Export Scene Image", action: () => exportOneSceneImage(filePath, packageId) },
-        { label: "Extract presets…", action: () => extractOpen([item]) },
-        { label: "Fix missing resources…", action: () => fmOpen(filePath, { scan: true }) },
-        { label: "Check integrity", action: () => libVerify([item], { recheck: true }) },
-        {
-          label: item.installed ? "Mark as dependency" : "Mark as installed",
-          action: () => libSetRole([item], !item.installed),
-        },
-        ...(item.offloaded
-          ? []
-          : [{ label: item.disabled ? "Enable" : "Disable…", action: () => libSetDisabled([item], !item.disabled) }]),
-        ...(item.damaged || !item.readable
-          ? [{ label: "Redownload", action: () => libRedownload([item]) }]
-          : []),
-        ...(libSourceUpdate(item) && Number(item.hub_update_version ?? 0) < libSourceUpdate(item).newest
-          ? [{ label: `Update from sources to v${libSourceUpdate(item).newest}`, action: () => libSourceUpdateGet(item) }]
-          : []),
-        ...(item.hub_update_version
-          ? [{ label: `Update to v${item.hub_update_version}`, action: () => libHubUpdate([item]) }]
-          : []),
-        ...(item.hub_resource_id ? [{ label: "View on Hub", action: () => libViewOnHub(item.hub_resource_id) }] : []),
+        { label: "Show its folder here", action: () => vpxReveal(filePath) },
         // Offloaded packages are filed by Restore, not moved into AddonPackages here.
         ...(item.offloaded
           ? []
-          : [
-              {
-                label: "Move to creator folder",
-                action: () =>
-                  vpMoveToCreatorFolder(filePath).catch((e) => addLog(`Move to creator folder: ${String(e)}`)),
-              },
-            ]),
+          : [{ label: "Move to creator folder", action: () => vpMoveToCreatorFolder(filePath).catch((e) => addLog(`Move to creator folder: ${String(e)}`)) }]),
+        { label: "Copy file path", action: () => copyTextToClipboard(filePath).catch(log) },
+      ],
+    },
+    { separator: true },
+    libSelectAllItem(),
+    { separator: true },
+    { label: "Delete (Recycle Bin)…", danger: true, action: () => vpDeleteOne(filePath, null).catch(log) },
+  ];
+}
+
+function libSelectionMenuItems() {
+  const snaps = libSelectedSnaps();
+  const n = snaps.length;
+  const ids = () => libSelectedSnaps().map((s) => s.package_id);
+  const some = (test) => snaps.some(test);
+  return [
+    ...(some((s) => !s.offloaded) ? [{ label: `Offload ${some((s) => s.offloaded) ? "the active ones" : "them"}…`, action: () => libRunAction("bulk-offload") }] : []),
+    ...(some((s) => s.offloaded) ? [{ label: `Restore ${some((s) => !s.offloaded) ? "the offloaded ones" : "them"} to AddonPackages…`, action: () => libRunAction("bulk-restore") }] : []),
+    ...(some((s) => !s.disabled && !s.offloaded) ? [{ label: "Disable…", action: () => libRunAction("bulk-disable") }] : []),
+    ...(some((s) => s.disabled && !s.offloaded) ? [{ label: "Enable", action: () => libRunAction("bulk-enable") }] : []),
+    { label: "Scan their dependencies…", action: () => libRunAction("bulk-scan-deps") },
+    ...(some((s) => s.hub_update_file) ? [{ label: "Update from the Hub", action: () => libRunAction("bulk-update") }] : []),
+    { label: "Add to favorites", action: () => libRunAction("bulk-favorite") },
+    {
+      label: "Repair & clean",
+      submenu: [
+        { label: "Clean duplicates…", action: () => libRunAction("bulk-clean") },
+        { label: "Check integrity", action: () => libRunAction("bulk-verify") },
+      ],
+    },
+    {
+      label: "More",
+      submenu: [
+        { label: "Organize by creator…", action: () => libRunAction("bulk-organize") },
+        { label: "Export scene images", action: () => libRunAction("bulk-export") },
+        { label: "Extract presets…", action: () => libRunAction("bulk-extract") },
+        { separator: true },
+        { label: "Mark as installed", action: () => libRunAction("bulk-mark-installed") },
+        { label: "Mark as dependencies", action: () => libRunAction("bulk-mark-dependency") },
         {
-          label: "Send to",
-          submenu: sendToEntries([
-            { label: "Clean VARs", action: () => sendVarToTargetPage("clean-vars", filePath) },
-            { label: "Clean VARs, as the source", action: () => sendVarToTargetPage("clean-many", filePath) },
-            { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", filePath) },
-            { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", filePath) },
-            { label: "Dependency Usage", page: "dependency-usage", action: () => sendVarToTargetPage("dependency-usage", filePath) },
-          ]),
+          label: "Replacement source",
+          submenu: [
+            { label: "Prefer (Fix Missing chooses them first)", action: () => libSetReplacementPref(ids(), 1) },
+            { label: "Avoid (never chosen by themselves)", action: () => libSetReplacementPref(ids(), -1) },
+            { label: "No preference", action: () => libSetReplacementPref(ids(), 0) },
+          ],
         },
-        { separator: true },
-        { label: t("varPackagesImagesOpen"), action: () => vpImagesOpen(filePath) },
-        { separator: true },
-        libSelectAllItem(),
-        { separator: true },
-        {
-          label: "Delete (Recycle Bin)",
-          danger: true,
-          action: () => vpDeleteOne(filePath, null).catch((e) => addLog(`VAR Packages: ${String(e)}`)),
-        },
-      ];
-  showContextMenu(event.clientX, event.clientY, items);
+      ],
+    },
+    { separator: true },
+    libSelectAllItem(),
+    { label: "Deselect", action: () => libRunAction("bulk-clear") },
+    { separator: true },
+    { label: `Delete ${n} packages (Recycle Bin)…`, danger: true, action: () => libRunAction("bulk-delete") },
+  ];
 }
 
 // Clicks shared by the grid, the table, the Missing table and the details
