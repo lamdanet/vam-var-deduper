@@ -16590,6 +16590,17 @@ button.pkg-bar-row:not(:disabled):hover {
   color: var(--lib-text-2);
 }
 
+/* Where it is, when VaM doesn't load it. */
+.pkg-chip-state.is-offloaded {
+  background: color-mix(in srgb, var(--accent-warn) 18%, transparent);
+  color: var(--warn-text);
+}
+
+.pkg-chip-state.is-disabled {
+  background: color-mix(in srgb, var(--lib-text) 10%, transparent);
+  color: var(--lib-text-2);
+}
+
 .pkg-health {
   display: flex;
   flex-direction: column;

@@ -18,6 +18,11 @@ release time, it fills it with the commit messages since the last release.
   counts, one action per row and the rest in its ⋯ menu
 - **VAR Packages right-click menu** is shorter: everyday actions first, every fixing tool once under
   Repair & clean, the rest under More; with several selected, it only offers what fits them
+- **Package Explorer** has a Clean button beside Check refs and Repair, and lists each action once
+
+### Fixed
+- Package Explorer didn't show that a package is offloaded (or offer Restore) when it was opened
+  from somewhere other than the loaded VAR Packages page
 
 ### Fixed
 - After offloading several packages, Restore wasn't offered for them: the selection now follows

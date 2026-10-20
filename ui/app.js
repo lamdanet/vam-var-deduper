@@ -6280,6 +6280,24 @@ function pkgBareItem(filePath, extra = {}) {
   };
 }
 
+// Offloaded: the listing says so, or the file is in the offload folder (a
+// package opened by path, from Repair VARs or a search, isn't on the loaded
+// page, so the listing can't say).
+function pkgOffloaded(item) {
+  return Boolean(item?.offloaded) || Boolean(item?.file_path && offloadDir() && depPathUnder(item.file_path, offloadDir()));
+}
+
+function pkgDisabled(item) {
+  return Boolean(item?.disabled) || Boolean(PKG.details && !PKG.details.error && PKG.details.disabled);
+}
+
+// Offload / Restore can act on it: it's in AddonPackages or the offload folder.
+function pkgMovable(item) {
+  const fp = item?.file_path;
+  if (!fp) return false;
+  return item.__lib || depPathUnder(fp, vamAddonPackagesDir()) || pkgOffloaded(item);
+}
+
 function pkgResolveItem(target) {
   const fp = typeof target === "string" ? target : target?.file_path;
   // Only the database knows it: explored by id.
@@ -6919,6 +6937,11 @@ function pkgGalleryEntries() {
 function pkgChipsHtml(item, details) {
   const type = LIB_TYPE_BY_KEY[details?.pkg_type || item.pkg_type] ?? libType(item);
   const chips = [`<span class="lib-chip lib-chip-type" style="background:${type.color}cc">${escapeHtml(type.label)}</span>`];
+  if (pkgOffloaded(item)) {
+    chips.push(`<span class="lib-chip pkg-chip-state is-offloaded" title="In the offload folder: VaM doesn't load it until you restore it"><span class="material-symbols-outlined">archive</span>Offloaded</span>`);
+  } else if (pkgDisabled(item)) {
+    chips.push(`<span class="lib-chip pkg-chip-state is-disabled" title="Disabled: VaM doesn't load it"><span class="material-symbols-outlined">power_settings_new</span>Disabled</span>`);
+  }
   if (item.__lib) {
     chips.push(
       item.installed
@@ -7039,8 +7062,8 @@ function pkgHealth(item, details) {
       "repair-names",
     );
   }
-  if (lib && item.offloaded) add("warn", "archive", "Offloaded: VaM doesn't load it until you restore it.", "restore");
-  if (lib && item.disabled) add("warn", "power_settings_new", "Disabled: VaM doesn't load it.", "enable");
+  if (pkgOffloaded(item)) add("warn", "archive", "Offloaded: VaM doesn't load it until you restore it.", "restore");
+  else if (pkgDisabled(item)) add("warn", "power_settings_new", "Disabled: VaM doesn't load it.", "enable");
   if (offDeps) add("warn", "archive", `${pkgCount(offDeps, "dependency is", "dependencies are")} offloaded; restore ${offDeps === 1 ? "it" : "them"} so this works in VaM.`, "restore-deps");
   if (lib && item.on_hub === false) add("warn", "cloud_off", "Not on the Hub: once deleted, only a saved source (Sources page) can bring it back. Keep a backup.");
   if (item.hub_update_version) add("info", "upgrade", `Version ${item.hub_update_version} is on the Hub.`, "hub-update");
@@ -7094,7 +7117,8 @@ function pkgHealthHtml(item, details, primaryAct) {
   if (!rows.length) return "";
   return `<div class="pkg-health">${rows
     .map((h) => {
-      const fix = h.act && h.act !== primaryAct ? pkgFixButton(h.act, item, details) : null;
+      // Repair is always in the toolbar: its rows only say what's wrong.
+      const fix = h.act && h.act !== primaryAct && !h.act.startsWith("repair") ? pkgFixButton(h.act, item, details) : null;
       return `<div class="pkg-health-row is-${h.level}">
           <span class="material-symbols-outlined">${h.icon}</span>
           <span class="pkg-health-text">${escapeHtml(h.text)}</span>
@@ -7151,22 +7175,28 @@ function pkgActionsHtml(item, details, primaryAct) {
   // look inside it. Labels show when the hero is wide enough.
   const library = [pkgIconAct("favorite", "star", fav ? "Remove from favorites" : "Add to favorites", { on: fav, label: "Favorite" })];
   library.push(pkgIconAct("explorer", "folder_open", "Show the file in Explorer", { label: "Show file" }));
-  if (item.__lib) {
-    if (!item.offloaded && primaryAct !== "enable") {
+  // A health row that already offers the fix keeps it; the toolbar doesn't
+  // repeat it.
+  const healthActs = new Set(pkgHealthRows(item, details).map((h) => h.act).filter(Boolean));
+  if (primaryAct) healthActs.add(primaryAct);
+  if (pkgMovable(item)) {
+    const offloaded = pkgOffloaded(item);
+    const disabled = pkgDisabled(item);
+    if (!offloaded && !healthActs.has("enable")) {
       library.push(
-        pkgIconAct(item.disabled ? "enable" : "disable", "power_settings_new", item.disabled ? "Enable: let VaM load it again" : "Disable: VaM stops loading it; nothing is moved", {
-          on: item.disabled,
-          label: item.disabled ? "Enable" : "Disable",
+        pkgIconAct(disabled ? "enable" : "disable", "power_settings_new", disabled ? "Enable: let VaM load it again" : "Disable: VaM stops loading it; nothing is moved", {
+          on: disabled,
+          label: disabled ? "Enable" : "Disable",
         }),
       );
     }
-    if (primaryAct !== "restore") {
+    if (!healthActs.has("restore")) {
       library.push(
         pkgIconAct(
-          item.offloaded ? "restore" : "offload",
-          item.offloaded ? "unarchive" : "archive",
-          item.offloaded ? "Restore: move it back into AddonPackages" : "Offload: move it out of AddonPackages so VaM stops loading it",
-          { label: item.offloaded ? "Restore" : "Offload" },
+          offloaded ? "restore" : "offload",
+          offloaded ? "unarchive" : "archive",
+          offloaded ? "Restore: move it back into AddonPackages" : "Offload: move it out of AddonPackages so VaM stops loading it",
+          { label: offloaded ? "Restore" : "Offload" },
         ),
       );
     }
@@ -7175,13 +7205,14 @@ function pkgActionsHtml(item, details, primaryAct) {
   const tools = [
     pkgIconAct("scan-deps", "account_tree", "Scan dependencies: see where each one is; download, move, offload or delete them", { label: "Scan deps" }),
     ...(extractable ? [pkgIconAct("extract", "person_add", "Extract presets: save clothing, hair, morphs or looks of its people", { label: "Extract" })] : []),
-    pkgIconAct("verify", "verified", "Check every file inside against its checksum", { label: "Check" }),
-    pkgIconAct("check-refs", "healing", "Check its references for missing files (in Fix Missing)", { label: "Check refs" }),
+    pkgIconAct("check-refs", "healing", "Check its references for missing files, and point them at copies you have (in Fix Missing)", { label: "Check refs" }),
     pkgIconAct("repair", "build", "Repair it: unused dependencies, meta.json, file names (in Repair VARs)", { label: "Repair" }),
+    pkgIconAct("clean", "compress", "Clean it: point files at copies other packages have, so it gets smaller (in Clean VARs)", { label: "Clean" }),
+    pkgIconAct("verify", "verified", "Verify every file inside against its checksum: finds a damaged download", { label: "Verify" }),
   ];
   return `${primary}<div class="pkg-tools" role="group" aria-label="Library">${library.join("")}</div>
     <div class="pkg-tools" role="group" aria-label="Tools">${tools.join("")}</div>
-    <button type="button" class="pkg-act pkg-act-more" data-pkg-act="more" title="More: images, send to, creator, delete…">
+    <button type="button" class="pkg-act pkg-act-more" data-pkg-act="more" title="More: images, export, links, other tools, delete…">
       <span class="material-symbols-outlined">more_horiz</span><span>More</span></button>`;
 }
 
@@ -10175,8 +10206,6 @@ function pkgMoreMenu(event) {
   const items = [
     ...(item.__lib ? [{ label: "Show in VAR Packages", action: () => pkgRevealInLibrary(item) }] : []),
     { label: "View all images", action: () => vpImagesOpen(item.file_path) },
-    { label: "Fix missing resources…", action: () => fmOpen(item.file_path, { scan: true }) },
-    ...(PKG.missing ? [] : [{ label: "Repair in Repair VARs…", action: () => rvOpen(item.file_path) }]),
     { label: "Export scene image", action: () => exportOneSceneImage(item.file_path, item.package_id) },
     { label: "Add download source…", action: () => sourceOpen({ packageId: item.package_id, fileName: item.file_name || `${item.package_id}.var` }) },
     ...(() => {
@@ -10200,12 +10229,11 @@ function pkgMoreMenu(event) {
           },
         ]
       : []),
+    // Tools that have no button above (Check refs, Repair and Clean do).
     {
-      label: "Send to",
+      label: "Also in",
       submenu: sendToEntries([
-        { label: "Clean VARs", action: () => sendVarToTargetPage("clean-vars", item.file_path) },
-        { label: "Clean VARs, as the source", action: () => sendVarToTargetPage("clean-many", item.file_path) },
-        { label: "Fix Missing", action: () => sendVarToTargetPage("fix-missing", item.file_path) },
+        { label: "Clean VARs: clean others against it", action: () => sendVarToTargetPage("clean-many", item.file_path) },
         { label: "Internalize Resources", action: () => sendVarToTargetPage("internalize-resources", item.file_path) },
         { label: "Dependency Usage", page: "dependency-usage", action: () => sendVarToTargetPage("dependency-usage", item.file_path) },
       ]),
@@ -10314,10 +10342,14 @@ function pkgRunAction(act, event) {
       libSetDisabled([item], false);
       break;
     case "offload":
-      offloadOpen([item], false);
+      offloadOpen([{ ...item, offloaded: false }], false);
       break;
     case "restore":
-      offloadOpen([item], true);
+      // Known from where the file is, even off the loaded page.
+      offloadOpen([{ ...item, offloaded: true }], true);
+      break;
+    case "clean":
+      sendVarToTargetPage("clean-vars", item.file_path);
       break;
     case "hub-update":
       libHubUpdate([item]);
