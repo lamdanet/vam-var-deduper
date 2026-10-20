@@ -44,7 +44,7 @@ zip = { version = "8", default-features = false, features = ["deflate", "deflate
 # still returns Ok. Already in the tree via tao/tauri-runtime-wry, so this pulls
 # in no new compile.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows = { version = "0.62", features = ["Win32_Storage_FileSystem"] }
 
 [profile.dev]
 incremental = true
