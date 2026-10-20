@@ -15137,6 +15137,17 @@ button.lib-dep-ref:hover {
   margin-top: 4px;
 }
 
+/* Delete sits beside More, quiet until hovered. */
+.pkg-act.pkg-act-delete {
+  color: var(--lib-text-2);
+}
+
+.pkg-act.pkg-act-delete:hover {
+  border-color: color-mix(in srgb, var(--accent-danger) 55%, var(--lib-border));
+  background: color-mix(in srgb, var(--accent-danger) 12%, transparent);
+  color: var(--danger-text);
+}
+
 .pkg-act {
   display: inline-flex;
   align-items: center;

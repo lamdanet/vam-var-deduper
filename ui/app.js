@@ -7212,8 +7212,10 @@ function pkgActionsHtml(item, details, primaryAct) {
   ];
   return `${primary}<div class="pkg-tools" role="group" aria-label="Library">${library.join("")}</div>
     <div class="pkg-tools" role="group" aria-label="Tools">${tools.join("")}</div>
-    <button type="button" class="pkg-act pkg-act-more" data-pkg-act="more" title="More: images, export, links, other tools, delete…">
-      <span class="material-symbols-outlined">more_horiz</span><span>More</span></button>`;
+    <button type="button" class="pkg-act pkg-act-more" data-pkg-act="more" title="More: images, export, links, other tools">
+      <span class="material-symbols-outlined">more_horiz</span><span>More</span></button>
+    <button type="button" class="pkg-act pkg-act-delete" data-pkg-act="delete" title="Delete: see what uses it, then send it to the Recycle Bin">
+      <span class="material-symbols-outlined">delete</span><span>Delete</span></button>`;
 }
 
 function pkgRenderHero() {
@@ -10239,14 +10241,20 @@ function pkgMoreMenu(event) {
       ]),
     },
     { label: "Copy path", action: () => navigator.clipboard?.writeText(item.file_path).catch(() => {}) },
-    { separator: true },
-    {
-      label: "Delete (Recycle Bin)",
-      danger: true,
-      action: () => vpDeleteOne(item.file_path, null).catch((e) => addLog(`Package Explorer: ${String(e)}`)),
-    },
   ];
   showContextMenu(x, y, items);
+}
+
+// Delete from Package Explorer: the delete dialog (what uses it, what it
+// uses), then, once it's in the Recycle Bin, back to the page you came from;
+// the package isn't there to explore any more. The toast says it went.
+async function pkgDelete(item) {
+  if (!item?.file_path) return;
+  const removed = (await vpDeleteOne(item.file_path, null)) || [];
+  const gone = removed.some((p) => String(p).toLowerCase() === String(item.file_path).toLowerCase());
+  if (!gone || PKG.item?.file_path !== item.file_path) return;
+  PKG.history = PKG.history.filter((h) => !removed.some((p) => String(p).toLowerCase() === String(h.file_path).toLowerCase()));
+  pkgBack();
 }
 
 function pkgRevealInLibrary(item) {
@@ -10350,6 +10358,9 @@ function pkgRunAction(act, event) {
       break;
     case "clean":
       sendVarToTargetPage("clean-vars", item.file_path);
+      break;
+    case "delete":
+      pkgDelete(item).catch(log);
       break;
     case "hub-update":
       libHubUpdate([item]);
@@ -23432,6 +23443,7 @@ async function vpDeleteOne(filePath, trigger) {
     try {
       const freed = await invoke("delete_var_package", { filePath, roots: vpPruneRoots() });
       addLog(`Deleted ${fileName} (${formatBytesLocal(freed)} freed) — restorable from the Recycle Bin.`);
+      showToast(`Deleted ${fileName} · ${formatBytesLocal(freed)} freed. It's in the Recycle Bin if you need it back.`, "success", 5000);
       // A deleted file can't stay multi-selected.
       vpPruneSelection([filePath]);
       // The backend already dropped its folder cache; this repopulates the grid.
