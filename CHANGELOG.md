@@ -12,6 +12,11 @@ release time, it fills it with the commit messages since the last release.
 
 ## [Unreleased]
 
+### Changed
+- **Scan Dependencies redesigned**: it says whether the package is ready in VaM, with Download and
+  Move to AddonPackages as one-click fixes; dependencies grouped by where they are, filters with
+  counts, one action per row and the rest in its ⋯ menu
+
 ### Fixed
 - After offloading several packages, Restore wasn't offered for them: the selection now follows
   packages to where they moved

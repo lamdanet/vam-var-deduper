@@ -2128,9 +2128,17 @@
     </div>
 
     <div id="dep-scan-backdrop" class="dialog-backdrop hidden">
-      <div class="dialog-card dep-scan-card" role="dialog" aria-modal="true" aria-labelledby="dep-scan-title">
-        <h3 id="dep-scan-title">Dependencies</h3>
-        <div id="dep-scan-text-region" class="dep-scan-text-region hidden">
+      <div class="dialog-card dsx-card" role="dialog" aria-modal="true" aria-labelledby="dep-scan-title" aria-describedby="dep-scan-verdict">
+        <header class="dsx-head">
+          <div id="dep-scan-thumb" class="dsx-thumb"></div>
+          <div class="dsx-head-text">
+            <p id="dep-scan-eyebrow" class="dsx-eyebrow">Dependencies</p>
+            <h3 id="dep-scan-title" class="dsx-title">Dependencies</h3>
+            <p id="dep-scan-summary" class="dsx-sub"></p>
+          </div>
+        </header>
+
+        <div id="dep-scan-text-region" class="dsx-text hidden">
           <label class="dep-scan-text-label" for="dep-scan-text-input">
             Paste meta.json dependencies, a scene, or any text with <code>Creator.Pkg:/path</code> references.
           </label>
@@ -2138,49 +2146,53 @@
             placeholder="e.g.&#10;Creator.Package.1:/Custom/Atom/Person/Morphs/female/morph.vmi&#10;AnotherCreator.HairPack.latest"></textarea>
           <button id="dep-scan-analyze-text" class="primary-button dep-scan-analyze" type="button">Analyze</button>
         </div>
-        <!-- Folders the scan checks besides AddonPackages and the offload folder
-             (both always, set in Settings). Same list as Settings → Additional
-             VAR folders (shared stateKey "downloadVars"). -->
-        <div class="dep-scan-extra">
-          <div class="dep-scan-root-row">
-            <span class="dep-scan-root-label">Also scan these folders</span>
-            <button class="dep-scan-root-settings" id="dep-scan-root-settings" type="button">Settings</button>
-          </div>
-          <div id="dep-scan-extra-dirs" class="additional-dirs-list"></div>
-          <button id="dep-scan-add-folder" class="ghost-button" type="button"></button>
-          <p class="dep-scan-extra-hint">AddonPackages and the offload folder are always scanned. Adding or removing a folder re-runs the scan.</p>
-        </div>
-        <p id="dep-scan-summary"></p>
-        <div id="dep-scan-progress" class="progress-card dep-scan-progress hidden">
+
+        <div id="dep-scan-verdict" class="dsx-verdict hidden" role="status" aria-live="polite"></div>
+        <div id="dep-scan-progress" class="dsx-progress hidden">
           <div class="progress-track"><div class="progress-bar" id="dep-scan-bar"></div></div>
-          <p id="dep-scan-progress-message" class="panel-subtitle"></p>
+          <p id="dep-scan-progress-message" class="dsx-progress-msg"></p>
         </div>
-        <div id="dep-scan-filter" class="dep-scan-filter mode-switch" role="tablist" aria-label="Filter dependencies">
-          <button data-dep-filter="all" class="mode-button active" type="button" role="tab" aria-selected="true">All</button>
-          <button data-dep-filter="missing" class="mode-button" type="button" role="tab" aria-selected="false">Missing</button>
-          <button data-dep-filter="elsewhere" class="mode-button" type="button" role="tab" aria-selected="false"
-                  title="Offloaded, or only in another folder — VaM doesn't load them">Not in AddonPackages</button>
-        </div>
-        <div id="dep-scan-bulk" class="dep-scan-bulk hidden">
-          <label class="check-row dep-scan-check-all">
-            <input type="checkbox" id="dep-scan-check-all" />
-            <span id="dep-scan-check-label">Select all</span>
-          </label>
-          <span class="dep-scan-bulk-acts">
-            <button class="ghost-button dep-scan-action" type="button" data-dep-bulk="download">Download</button>
-            <button class="ghost-button dep-scan-action" type="button" data-dep-bulk="activate"
-                    title="Move the ticked packages from the offload folder or another folder into AddonPackages">Move to AddonPackages</button>
-            <button class="ghost-button dep-scan-action" type="button" data-dep-bulk="offload"
-                    title="Move the ticked packages out of AddonPackages into the offload folder">Offload</button>
-            <button class="ghost-button dep-scan-action dep-scan-act-danger" type="button" data-dep-bulk="delete"
-                    title="Send the ticked packages to the Recycle Bin">Delete</button>
-          </span>
-        </div>
-        <div id="dep-scan-list" class="dep-scan-list"></div>
-        <div class="dialog-actions">
-          <button id="dep-scan-download-all" class="primary-button" type="button">Download All Missing</button>
-          <button id="dep-scan-close" class="ghost-button" type="button">Close</button>
-        </div>
+
+        <div id="dep-scan-filter" class="dsx-filters" role="group" aria-label="Show"></div>
+        <div id="dep-scan-list" class="dsx-list"></div>
+
+        <footer class="dsx-foot">
+          <div id="dep-scan-bulk" class="dsx-bulk hidden">
+            <label class="check-row dsx-check-all">
+              <input type="checkbox" id="dep-scan-check-all" />
+              <span id="dep-scan-check-label">Select all</span>
+            </label>
+            <span class="dsx-bulk-acts">
+              <button class="ghost-button fm-small" type="button" data-dep-bulk="download">Download</button>
+              <button class="ghost-button fm-small" type="button" data-dep-bulk="activate"
+                      title="Move the ticked packages from the offload folder or another folder into AddonPackages">Move to AddonPackages</button>
+              <button class="ghost-button fm-small" type="button" data-dep-bulk="offload"
+                      title="Move the ticked packages out of AddonPackages into the offload folder">Offload</button>
+              <button class="ghost-button fm-small dsx-danger" type="button" data-dep-bulk="delete"
+                      title="Send the ticked packages to the Recycle Bin">Delete</button>
+            </span>
+          </div>
+          <div class="dsx-foot-row">
+            <!-- Folders the scan checks besides AddonPackages and the offload folder
+                 (both always, set in Settings). Same list as Settings → Additional
+                 VAR folders (shared stateKey "downloadVars"). -->
+            <details id="dep-scan-folders" class="dsx-folders">
+              <summary><span class="material-symbols-outlined" aria-hidden="true">folder_open</span><span id="dep-scan-scope">Checked against AddonPackages and the offload folder</span><span class="dsx-link">Change</span></summary>
+              <div class="dep-scan-extra">
+                <div class="dep-scan-root-row">
+                  <span class="dep-scan-root-label">Also scan these folders</span>
+                  <button class="dep-scan-root-settings" id="dep-scan-root-settings" type="button">Settings</button>
+                </div>
+                <div id="dep-scan-extra-dirs" class="additional-dirs-list"></div>
+                <button id="dep-scan-add-folder" class="ghost-button" type="button"></button>
+                <p class="dep-scan-extra-hint">AddonPackages and the offload folder are always scanned. Adding or removing a folder re-runs the scan.</p>
+              </div>
+            </details>
+            <div class="dialog-actions dsx-actions">
+              <button id="dep-scan-close" class="ghost-button" type="button">Close</button>
+            </div>
+          </div>
+        </footer>
       </div>
     </div>
 

@@ -24510,6 +24510,7 @@ function depUniqueDirs(dirs) {
 
 // Re-runs the open Scan Dependencies scan after its folder list changed.
 function depRescanAfterFolderChange() {
+  depRenderScope();
   const backdrop = $("dep-scan-backdrop");
   if (!backdrop || backdrop.classList.contains("hidden") || DEP_SCAN.running) return;
   if (DEP_SCAN.target) {
@@ -24530,13 +24531,12 @@ function depScanBusy(busy) {
   document.querySelectorAll("#dep-scan-extra-dirs .additional-dir-remove").forEach((el) => {
     el.disabled = busy;
   });
-  const all = $("dep-scan-download-all");
-  if (all) all.disabled = busy || depMissingDownloadable().length === 0;
   depBulkSync();
   // While a scan runs, Close becomes Cancel: hiding the modal would leave the
   // worker running behind it.
   depScanSetText("dep-scan-close", busy ? "Cancel" : "Close");
   $("dep-scan-progress")?.classList.toggle("hidden", !busy);
+  depRenderVerdict();
 }
 
 // Clone of vpRunTask: that one hardcodes #vp-plan-bar and returns
@@ -24574,7 +24574,42 @@ function depScanOpen() {
   // The hidden folders depend on the VaM and offload folders, which may have
   // changed since the list was last drawn.
   renderAdditionalDirs("depScan");
+  depRenderScope();
   $("dep-scan-backdrop")?.classList.remove("hidden");
+  $("dep-scan-close")?.focus();
+}
+
+// The dialog's header: the scanned package (its thumbnail and name), several,
+// or the paste box's text.
+function depRenderHead() {
+  const t = DEP_SCAN.target;
+  const paths = t?.filePaths ?? [];
+  const thumb = $("dep-scan-thumb");
+  if (thumb) {
+    if (paths.length === 1) {
+      thumb.innerHTML = `${libThumbHtml(paths[0], libGradient(depFileName(paths[0])), "dsx-thumb-img")}</div>`;
+      libThumbWatch(thumb);
+    } else {
+      thumb.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">${t ? "stacks" : "content_paste_search"}</span>`;
+    }
+  }
+  depScanSetText("dep-scan-eyebrow", t ? "Dependencies of" : "Find dependencies");
+  const one = paths.length === 1 ? libFindItem(paths[0]) ?? pkgBareItem(paths[0]) : null;
+  depScanSetText(
+    "dep-scan-title",
+    t ? (one ? libTitle(one) : t.label || `${paths.length} packages`) : "In a scene, a meta.json or any text",
+  );
+  const title = $("dep-scan-title");
+  if (title) title.title = paths.length === 1 ? paths[0] : "";
+}
+
+// "Checked against …": the folders, in one line; Change opens the list.
+function depRenderScope() {
+  const extra = depExtraDirs().length;
+  depScanSetText(
+    "dep-scan-scope",
+    `Checked against AddonPackages, the offload folder${extra ? ` and ${pkgCount(extra, "more folder", "more folders")}` : ""}`,
+  );
 }
 
 function depScanClose() {
@@ -24628,10 +24663,7 @@ async function depStartScan(target, { filter = "all" } = {}) {
   DEP_SCAN.checked.clear();
   DEP_SCAN.filter = filter;
   depApplyFilterUi();
-  depScanSetText(
-    "dep-scan-title",
-    `Scan Dependencies · ${filePaths.length === 1 ? label : `${filePaths.length} packages`}`,
-  );
+  depRenderHead();
   depScanSetText("dep-scan-summary", "");
   $("dep-scan-list").innerHTML = "";
 
@@ -24672,7 +24704,7 @@ function depStartTextScan() {
   DEP_SCAN.response = null;
   DEP_SCAN.filter = "all";
   depApplyFilterUi();
-  depScanSetText("dep-scan-title", "Find Dependencies");
+  depRenderHead();
   $("dep-scan-list").innerHTML = "";
   depRenderList(); // reset the Download-All button label/state
   // After depRenderList: with no items and no response it blanks the summary,
@@ -24722,12 +24754,35 @@ function depMissingDownloadable() {
   return DEP_SCAN.items.filter((it) => it.status === "missing" && it.url);
 }
 
+const DEP_FILTERS = [
+  ["all", "All", ""],
+  ["missing", "Missing", "is-bad"],
+  ["elsewhere", "Not in AddonPackages", "is-warn"],
+  ["addon", "In AddonPackages", "is-ok"],
+];
+
+// The filter chips, with how many each shows. Empty ones (but All) step aside.
 function depApplyFilterUi() {
-  document.querySelectorAll("#dep-scan-filter [data-dep-filter]").forEach((btn) => {
-    const on = btn.getAttribute("data-dep-filter") === DEP_SCAN.filter;
-    btn.classList.toggle("active", on);
-    btn.setAttribute("aria-selected", String(on));
-  });
+  const host = $("dep-scan-filter");
+  if (!host) return;
+  const items = DEP_SCAN.items;
+  if (!items.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const count = { all: items.length };
+  for (const it of items) {
+    const w = depLocation(it);
+    const k = w === "missing" ? "missing" : w === "addon" ? "addon" : ["offload", "other"].includes(w) ? "elsewhere" : null;
+    if (k) count[k] = (count[k] ?? 0) + 1;
+  }
+  if (!count[DEP_SCAN.filter]) DEP_SCAN.filter = "all";
+  host.innerHTML = DEP_FILTERS.filter(([k]) => k === "all" || count[k])
+    .map(
+      ([k, label, cls]) => `<button type="button" class="dsx-filter ${cls}${DEP_SCAN.filter === k ? " is-on" : ""}" data-dep-filter="${k}" aria-pressed="${DEP_SCAN.filter === k}">
+        ${cls ? `<span class="dsx-dot" aria-hidden="true"></span>` : ""}${escapeHtml(label)}<span class="dsx-n">${count[k] ?? 0}</span></button>`,
+    )
+    .join("");
 }
 
 // ============================================================
@@ -24897,9 +24952,150 @@ function depVisibleItems() {
   return DEP_SCAN.items.filter((it) => {
     if (DEP_SCAN.filter === "missing") return it.status === "missing";
     if (DEP_SCAN.filter === "elsewhere") return ["offload", "other"].includes(depLocation(it));
+    if (DEP_SCAN.filter === "addon") return depLocation(it) === "addon";
     return true;
   });
 }
+
+// The verdict: can VaM use it as it is, and the fixes as buttons.
+function depRenderVerdict() {
+  const el = $("dep-scan-verdict");
+  if (!el) return;
+  const res = DEP_SCAN.response;
+  if (DEP_SCAN.running) {
+    el.className = "dsx-verdict is-busy";
+    el.innerHTML = `<span class="material-symbols-outlined dsx-verdict-icon" aria-hidden="true">progress_activity</span>
+      <div class="dsx-verdict-text"><strong>Reading its dependencies…</strong></div>`;
+    return;
+  }
+  if (!res) {
+    el.className = "dsx-verdict hidden";
+    el.innerHTML = "";
+    return;
+  }
+  const items = DEP_SCAN.items;
+  const where = (w) => items.filter((it) => depLocation(it) === w);
+  const missing = where("missing");
+  const away = items.filter((it) => ["offload", "other"].includes(depLocation(it)));
+  const ready = where("addon").length;
+  const jobs = depActiveJobs();
+  const queueable = depMissingDownloadable().filter((it) => !findDownloadJob(it.pkg));
+  const noSource = missing.filter((it) => !it.url).length;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const notes = [];
+  const acts = [];
+  let cls = "is-ok";
+  let icon = "verified";
+  let head;
+  if (!items.length) {
+    head = "It needs no other package.";
+  } else if (!res.library_used) {
+    cls = "is-warn";
+    icon = "help";
+    head = `${plural(items.length, "dependency", "dependencies")}, but no library folder is set, so where they are is unknown.`;
+  } else if (missing.length || away.length) {
+    cls = missing.length ? "is-bad" : "is-warn";
+    icon = missing.length ? "error" : "warning";
+    head = `Not ready in VaM: ${ready} of ${plural(items.length, "dependency is", "dependencies are")} in AddonPackages.`;
+  } else {
+    head = `Ready in VaM: ${items.length === 1 ? "its dependency is" : `all ${items.length} dependencies are`} in AddonPackages.`;
+  }
+  if (missing.length) {
+    notes.push({
+      cls: "is-bad",
+      text: `${plural(missing.length, "is", "are")} missing, so VaM shows errors for ${missing.length === 1 ? "it" : "them"} when it loads.${
+        noSource ? ` ${noSource === missing.length ? (noSource === 1 ? "It has" : "They have") : `${noSource} of them have`} no download source yet: add a link from the ⋯ menu.` : ""
+      }`,
+    });
+    if (jobs.length) acts.push(`<button type="button" class="ghost-button fm-small" data-dep-verdict="cancel">Cancel downloads (${jobs.length})</button>`);
+    else if (queueable.length) {
+      const bytes = queueable.reduce((n, it) => n + (Number(it.size) || 0), 0);
+      acts.push(
+        `<button type="button" class="primary-button fm-small" data-dep-verdict="download"><span class="material-symbols-outlined">download</span>Download ${queueable.length}${bytes ? ` · ${escapeHtml(formatBytesLocal(bytes))}` : ""}</button>`,
+      );
+    }
+  }
+  if (away.length) {
+    notes.push({ cls: "is-warn", text: `${plural(away.length, "is", "are")} offloaded or in another folder, so VaM doesn't load ${away.length === 1 ? "it" : "them"}.` });
+    acts.push(
+      `<button type="button" class="ghost-button fm-small" data-dep-verdict="move"><span class="material-symbols-outlined">unarchive</span>Move ${away.length} to AddonPackages</button>`,
+    );
+  }
+  el.className = `dsx-verdict ${cls}`;
+  el.innerHTML = `<span class="material-symbols-outlined dsx-verdict-icon" aria-hidden="true">${icon}</span>
+    <div class="dsx-verdict-text"><strong>${escapeHtml(head)}</strong>${
+      notes.length ? `<ul>${notes.map((n) => `<li class="${n.cls}">${escapeHtml(n.text)}</li>`).join("")}</ul>` : ""
+    }</div>
+    ${acts.length ? `<div class="dsx-verdict-acts">${acts.join("")}</div>` : ""}`;
+}
+
+// A row's one main action (the rest are in its ⋯ menu).
+function depRowPrimary(it) {
+  const pkgAttr = escapeAttribute(it.pkg);
+  const where = depLocation(it);
+  if (it.deleted) return `<span class="dep-scan-act-note">Deleted · re-scan</span>`;
+  const job = it.status === "missing" ? findDownloadJob(it.pkg) : null;
+  if (job) {
+    return `<button class="ghost-button fm-small dsx-busy" type="button" disabled data-dep-job="${pkgAttr}">${escapeHtml(depJobButtonLabel(job))}</button>`;
+  }
+  if (where === "missing") {
+    return it.url
+      ? `<button class="ghost-button fm-small" type="button" data-dep-download="${pkgAttr}"><span class="material-symbols-outlined">download</span>Download</button>`
+      : `<button class="ghost-button fm-small" type="button" data-dep-add-source="${pkgAttr}" title="Add a Pixeldrain, MEGA, MediaFire or direct link for it"><span class="material-symbols-outlined">add_link</span>Add link</button>`;
+  }
+  if (where === "offload" || where === "other") {
+    return `<button class="ghost-button fm-small" type="button" data-dep-move="activate" data-dep-pkg="${pkgAttr}" title="Move it into AddonPackages so VaM loads it"><span class="material-symbols-outlined">unarchive</span>Move to AddonPackages</button>`;
+  }
+  return "";
+}
+
+// Everything else a row can do.
+function depRowMenu(it) {
+  const where = depLocation(it);
+  const items = [];
+  if (it.localPath && !it.deleted) {
+    items.push({ label: "Open details", action: () => depOpenDetails(it) });
+    items.push({ label: "Show in Explorer", action: () => invoke("show_in_explorer", { path: it.localPath }).catch((e) => addLog(`Scan Dependencies: ${String(e)}`)) });
+  }
+  if (where === "missing" && it.url && !findDownloadJob(it.pkg)) items.push({ label: "Download", action: () => depDownloadOne(it.pkg) });
+  if (where === "missing") items.push({ label: it.url ? "Change download link…" : "Add a download link…", action: () => depAddSource(it) });
+  if (where === "offload" || where === "other") items.push({ label: "Move to AddonPackages", action: () => depMovePackages([it.localPath], true) });
+  if (where === "addon") items.push({ label: "Offload", action: () => depMovePackages([it.localPath], false) });
+  items.push(...hubMenuItem(it.pkg));
+  items.push({ label: "Copy package name", action: () => copyTextToClipboard(it.pkg).catch(() => {}) });
+  if (it.localPath && !it.deleted) {
+    items.push({ separator: true }, { label: "Delete (Recycle Bin)…", danger: true, action: () => depDeleteOne(it.pkg) });
+  }
+  return items;
+}
+
+function depOpenDetails(it) {
+  if (DEP_SCAN.running || !it?.localPath) return;
+  // Read both before closing: depScanClose clears DEP_SCAN.items. The
+  // backdrop covers the page, so it closes before the package opens.
+  const pkg = it.pkg;
+  const path = it.localPath;
+  depScanClose();
+  openCandidatePackage(pkg, path);
+}
+
+function depAddSource(it) {
+  sourceOpen({
+    packageId: it.pkg,
+    // The row becomes downloadable straight away.
+    onSaved: (row) => {
+      Object.assign(it, { url: row.url, host: row.host, filename: row.filename, size: Number(row.size) || it.size });
+      depRenderList();
+    },
+  });
+}
+
+const DEP_GROUPS = [
+  ["missing", "Missing", (w) => w === "missing"],
+  ["unknown", "Unknown", (w) => w === "unknown" || w === "deleted"],
+  ["elsewhere", "Not in AddonPackages", (w) => w === "offload" || w === "other"],
+  ["addon", "In AddonPackages", (w) => w === "addon"],
+];
 
 function depRenderList() {
   const res = DEP_SCAN.response;
@@ -24908,14 +25104,19 @@ function depRenderList() {
 
   if (!total) {
     depScanSetText("dep-scan-summary", res ? "No dependencies declared." : "");
-  } else if (res?.library_used) {
-    const parts = [`${total} ${total === 1 ? "dependency" : "dependencies"}`, `${count("addon")} in AddonPackages`];
-    if (count("offload")) parts.push(`${count("offload")} offloaded`);
-    if (count("other")) parts.push(`${count("other")} in other folders`);
-    parts.push(`${count("missing")} missing`);
-    depScanSetText("dep-scan-summary", parts.join(" · "));
   } else {
-    depScanSetText("dep-scan-summary", `${total} dependencies · no library set, so availability is unknown`);
+    const missingBytes = DEP_SCAN.items.filter((it) => depLocation(it) === "missing").reduce((n, it) => n + (Number(it.size) || 0), 0);
+    const files = DEP_SCAN.target?.filePaths?.length ?? 0;
+    depScanSetText(
+      "dep-scan-summary",
+      [
+        pkgCount(total, "dependency", "dependencies"),
+        files > 1 ? `of ${files} packages` : "",
+        count("missing") ? `${count("missing")} missing${missingBytes ? ` (${formatBytesLocal(missingBytes)})` : ""}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
   }
 
   // Ticks only stay on rows that still have something to do.
@@ -24924,71 +25125,33 @@ function depRenderList() {
     if (!it || !depRowActions(it).length) DEP_SCAN.checked.delete(pkg);
   }
 
-  const rows = depVisibleItems()
-    .map((it) => {
-      const i = DEP_SCAN.items.indexOf(it);
-      const where = depLocation(it);
-      const pkgAttr = escapeAttribute(it.pkg);
-      let action = "";
-      const activeJob = it.status === "missing" ? findDownloadJob(it.pkg) : null;
-      if (it.deleted) {
-        // Recycled from this modal — see depDeleteOne for why it isn't "missing".
-        action = `<span class="dep-scan-act-note">Deleted — re-scan</span>`;
-      } else if (activeJob) {
-        action = `<button class="ghost-button dep-scan-action dep-scan-action-busy" type="button" disabled data-dep-job="${pkgAttr}">${escapeHtml(depJobButtonLabel(activeJob))}</button>`;
-      } else if (it.status === "missing" && it.url) {
-        action = `<button class="ghost-button dep-scan-action" type="button" data-dep-download="${pkgAttr}">Download</button>`;
-      } else if (it.status === "found" && it.localPath) {
-        // localPath is a file of the dep's FAMILY (the backend matches on the
-        // version-stripped base), so a row reading Creator.Pkg.3 can point at
-        // Creator.Pkg.7.var — name the delete after the real file.
-        const localName = it.filename || depFileName(it.localPath);
-        // Never `disabled` here: depRenderList runs while DEP_SCAN.running is
-        // still true (it clears in the scan's finally), so a busy-stamp would
-        // leave every button dead. The click handlers hold the running guard.
-        const move =
-          where === "addon"
-            ? `<button class="ghost-button dep-scan-action" type="button" data-dep-move="offload" data-dep-pkg="${pkgAttr}" title="Move it out of AddonPackages into the offload folder">Offload</button>`
-            : `<button class="ghost-button dep-scan-action" type="button" data-dep-move="activate" data-dep-pkg="${pkgAttr}" title="Move it into AddonPackages so VaM loads it">Move to AddonPackages</button>`;
-        action =
-          move +
-          `<button class="icon-button" type="button" data-dep-details="${pkgAttr}" title="Open this package's details"><span class="material-symbols-outlined">description</span></button>` +
-          `<button class="icon-button" type="button" data-dep-reveal="${pkgAttr}" title="Show in Explorer"><span class="material-symbols-outlined">folder_open</span></button>` +
-          `<button class="icon-button dep-scan-act-danger" type="button" data-dep-delete="${pkgAttr}" title="Send ${escapeAttribute(localName)} to the Recycle Bin" aria-label="Send ${escapeAttribute(localName)} to the Recycle Bin"><span class="material-symbols-outlined">delete</span></button>`;
-      } else if (it.status === "missing" && !it.url) {
-        // Neither the Hub nor a stored mirror link resolved a source for it:
-        // offer to add one.
-        action = `<span class="dep-scan-act-note">No source</span><button class="ghost-button dep-scan-action" type="button" data-dep-add-source="${pkgAttr}" title="Add a Pixeldrain, MEGA, MediaFire or direct link for it">Add link</button>`;
-      }
-      const checkable = depRowActions(it).length > 0;
-      return `<div class="dep-scan-row" data-dep-idx="${i}" data-dep-list="scan">
-  <input type="checkbox" class="dep-scan-check" data-dep-check="${pkgAttr}"${
-        DEP_SCAN.checked.has(it.pkg) ? " checked" : ""
-      }${checkable ? "" : " disabled"} aria-label="Select ${pkgAttr}" />
-  ${depCardHtml("scan", it)}
-  ${depLocationChip(it)}
-  <span class="dep-scan-act">${action}</span>
-</div>`;
-    })
-    .join("");
-  const empty = { missing: "No missing dependencies.", elsewhere: "Every dependency on disk is in AddonPackages." };
-  $("dep-scan-list").innerHTML = rows || `<div class="dep-scan-empty">${escapeHtml(empty[DEP_SCAN.filter] ?? "Nothing to show.")}</div>`;
-  depCardsActivate($("dep-scan-list"), "scan", DEP_SCAN.items);
-
-  const all = $("dep-scan-download-all");
-  const downloadable = depMissingDownloadable();
-  const pending = downloadable.filter((it) => !findDownloadJob(it.pkg)).length;
-  const active = depActiveJobs().length;
-  if (all) {
-    // While its downloads run, the same button cancels them.
-    all.dataset.mode = active ? "cancel" : "download";
-    all.disabled = active ? false : DEP_SCAN.running || pending === 0;
-    all.textContent = active
-      ? `Cancel Downloads (${active})`
-      : pending
-        ? `Download All Missing (${pending})`
-        : "Download All Missing";
+  depApplyFilterUi();
+  const visible = depVisibleItems();
+  const rowHtml = (it) => {
+    const i = DEP_SCAN.items.indexOf(it);
+    const pkgAttr = escapeAttribute(it.pkg);
+    const checkable = depRowActions(it).length > 0;
+    return `<div class="dep-scan-row dsx-row" data-dep-idx="${i}" data-dep-list="scan">
+      <input type="checkbox" class="dep-scan-check" data-dep-check="${pkgAttr}"${DEP_SCAN.checked.has(it.pkg) ? " checked" : ""}${checkable ? "" : " disabled"} aria-label="Select ${pkgAttr}" />
+      ${depCardHtml("scan", it)}
+      <span class="dsx-row-side">${["missing", "addon"].includes(depLocation(it)) ? "" : depLocationChip(it)}${depRowPrimary(it)}
+        <button type="button" class="dsx-more" data-dep-menu="${pkgAttr}" aria-label="More for ${pkgAttr}"><span class="material-symbols-outlined" aria-hidden="true">more_horiz</span></button></span>
+    </div>`;
+  };
+  let html = "";
+  if (DEP_SCAN.filter === "all") {
+    for (const [, label, test] of DEP_GROUPS) {
+      const group = visible.filter((it) => test(depLocation(it)));
+      if (group.length) html += `<div class="dsx-group">${escapeHtml(label)} · ${group.length}</div>${group.map(rowHtml).join("")}`;
+    }
+  } else {
+    html = visible.map(rowHtml).join("");
   }
+  const empty = { missing: "No missing dependencies.", elsewhere: "Every dependency on disk is in AddonPackages.", addon: "None is in AddonPackages." };
+  $("dep-scan-list").innerHTML =
+    html || (total || res ? `<div class="dep-scan-empty">${escapeHtml(empty[DEP_SCAN.filter] ?? "Nothing to show.")}</div>` : "");
+  depCardsActivate($("dep-scan-list"), "scan", DEP_SCAN.items);
+  depRenderVerdict();
   depBulkSync();
 }
 
@@ -25022,6 +25185,7 @@ function depBulkSync() {
     const action = btn.getAttribute("data-dep-bulk");
     const n = depCheckedFor(action).length;
     btn.disabled = DEP_SCAN.running || n === 0;
+    btn.classList.toggle("hidden", n === 0);
     btn.textContent = n ? `${labels[action]} (${n})` : labels[action];
   });
 }
@@ -25263,9 +25427,33 @@ function setupDepScanDialog() {
     depAnalyzeText().catch((e) => addLog(`Find Dependencies: ${String(e)}`));
   });
 
-  $("dep-scan-download-all")?.addEventListener("click", (event) => {
-    if (event.currentTarget.dataset.mode === "cancel") return depCancelDownloads();
-    depDownloadAllMissing().catch((e) => addLog(`Scan Dependencies: ${String(e)}`));
+  $("dep-scan-verdict")?.addEventListener("click", (event) => {
+    const act = event.target.closest?.("[data-dep-verdict]")?.getAttribute("data-dep-verdict");
+    if (!act || DEP_SCAN.running) return;
+    const log = (e) => addLog(`Scan Dependencies: ${String(e)}`);
+    if (act === "cancel") depCancelDownloads();
+    else if (act === "download") depDownloadAllMissing().catch(log);
+    else if (act === "move") {
+      const away = DEP_SCAN.items.filter((it) => ["offload", "other"].includes(depLocation(it)));
+      depMovePackages(depUniquePaths(away), true).catch(log);
+    }
+  });
+  $("dep-scan-filter")?.addEventListener("click", (event) => {
+    const btn = event.target.closest?.("[data-dep-filter]");
+    if (!btn) return;
+    DEP_SCAN.filter = btn.getAttribute("data-dep-filter") || "all";
+    depRenderList();
+  });
+  const depMenuAt = (it, x, y) => {
+    const items = depRowMenu(it);
+    if (items.length) showContextMenu(x, y, items);
+  };
+  $("dep-scan-list")?.addEventListener("contextmenu", (event) => {
+    const row = event.target.closest?.(".dep-scan-row[data-dep-idx]");
+    const it = row && DEP_SCAN.items[Number(row.getAttribute("data-dep-idx"))];
+    if (!it || DEP_SCAN.running) return;
+    event.preventDefault();
+    depMenuAt(it, event.clientX, event.clientY);
   });
 
   $("dep-scan-list")?.addEventListener("change", (event) => {
@@ -25341,29 +25529,22 @@ function setupDepScanDialog() {
     depScanClose();
   });
 
-  document.querySelectorAll("#dep-scan-filter [data-dep-filter]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      DEP_SCAN.filter = btn.getAttribute("data-dep-filter") || "all";
-      depApplyFilterUi();
-      depRenderList();
-    });
-  });
-
   // Delegated, because rows are re-rendered on every scan/download.
   $("dep-scan-list")?.addEventListener("click", (event) => {
+    const more = event.target.closest?.("[data-dep-menu]");
+    if (more) {
+      // The page-wide click handler closes menus: keep this click from it.
+      event.stopPropagation();
+      if (DEP_SCAN.running) return;
+      const it = DEP_SCAN.items.find((x) => x.pkg === more.getAttribute("data-dep-menu"));
+      const r = more.getBoundingClientRect();
+      if (it) depMenuAt(it, r.left, r.bottom + 4);
+      return;
+    }
     const add = event.target.closest?.("[data-dep-add-source]");
     if (add) {
       const it = DEP_SCAN.items.find((x) => x.pkg === add.getAttribute("data-dep-add-source"));
-      if (it) {
-        sourceOpen({
-          packageId: it.pkg,
-          // The row becomes downloadable straight away.
-          onSaved: (row) => {
-            Object.assign(it, { url: row.url, host: row.host, filename: row.filename, size: Number(row.size) || it.size });
-            depRenderList();
-          },
-        });
-      }
+      if (it) depAddSource(it);
       return;
     }
     const move = event.target.closest?.("[data-dep-move]");
@@ -25399,16 +25580,7 @@ function setupDepScanDialog() {
     }
     const details = event.target.closest?.("[data-dep-details]");
     if (details) {
-      if (DEP_SCAN.running) return;
-      const it = DEP_SCAN.items.find((x) => x.pkg === details.getAttribute("data-dep-details"));
-      if (!it?.localPath) return;
-      // Read both before closing — depScanClose clears DEP_SCAN.items.
-      const pkg = it.pkg;
-      const path = it.localPath;
-      // The backdrop is position:fixed inset:0: close it before opening the
-      // package, or the dialog would sit over the page.
-      depScanClose();
-      openCandidatePackage(pkg, path);
+      depOpenDetails(DEP_SCAN.items.find((x) => x.pkg === details.getAttribute("data-dep-details")));
     }
   });
 }
